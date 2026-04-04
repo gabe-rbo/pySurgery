@@ -40,21 +40,21 @@ If you wish to use the ultra-high performance Julia backend for sparse Smith Nor
 
 ## How to Learn `pysurgery`
 
-The `examples/` directory has been curated into a structured, step-by-step tutorial series designed to take you from basic Algebraic Topology to advanced Surgery Theory. We highly recommend running them in order:
+The `examples/` directory has been curated into a structured, step-by-step tutorial series of interactive Jupyter Notebooks designed to take you from basic Algebraic Topology to advanced Surgery Theory. We highly recommend running them in order:
 
-### 1. `01_basic_homology_and_cohomology.py`
+### 1. `01_basic_homology_and_cohomology.ipynb`
 Learn the basics of constructing a `CWComplex`, building `ChainComplex` objects, and utilizing our heavily optimized Smith Normal Form engine to extract Homology (Betti numbers + Torsion) and Cohomology bases.
 
-### 2. `02_intersection_forms.py`
+### 2. `02_intersection_forms.ipynb`
 Dive into 4-manifolds! Learn how to define `IntersectionForm` matrices, calculate signatures, identify parity (Type I vs Type II), and classify famous lattices like $S^2 \times S^2$, $\mathbb{CP}^2$, and $E_8$.
 
-### 3. `03_algebraic_surgery.py`
+### 3. `03_algebraic_surgery.ipynb`
 The core of Surgery Theory. Learn how to identify topological "impediments," find isotropic vectors, and use `perform_algebraic_surgery` to mathematically transform one manifold into another (e.g., surgering $S^2 \times S^2$ into the Sphere $S^4$).
 
 ### 4. `04_advanced_tda_and_surgery_theory.ipynb`
 An interactive Jupyter Notebook bridging Topological Data Analysis (TDA) with Surgery. It demonstrates the complete pipeline: `Discrete Point Cloud` -> `GUDHI Alpha Complex` -> `Cup Product` -> `Intersection Form` -> `Freedman's Homeomorphism Classification`.
 
-### 5. `05_omni_dimensional_homeomorphisms.py`
+### 5. `05_omni_dimensional_homeomorphisms.ipynb`
 Explore the generalized `pysurgery.analyze_homeomorphism_*` suite. See how the library shifts its mathematical logic depending on the dimension of the input data (2D surfaces vs 3D Thurston geometries vs 4D Freedman vs 5D+ s-Cobordism).
 
 ## Contributing
