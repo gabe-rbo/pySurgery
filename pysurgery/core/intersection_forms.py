@@ -110,13 +110,16 @@ class IntersectionForm(BaseModel):
         """
         x = np.asarray(x, dtype=int).flatten()
         if x.shape[0] != self.matrix.shape[0]:
-            raise DimensionError(f"Vector x must have size {self.matrix.shape[0]}")
+            raise DimensionError(f"Surgery class 'x' must be a vector in the H_2 basis. "
+                                 f"Expected size {self.matrix.shape[0]}, got {x.shape[0]}.")
             
         if np.dot(x, self.matrix @ x) != 0:
-            raise IsotropicError("Class x is not isotropic (self-intersection is not 0).")
+            raise IsotropicError(f"Surgery class 'x' must be isotropic (Q(x,x) = 0). Its self-intersection is {np.dot(x, self.matrix @ x)}. "
+                                 "Topological translation: The normal bundle of the embedded sphere twists (like a Möbius strip), physically blocking the attachment of the surgery handle $D^3 \\times S^1$.")
             
         if np.gcd.reduce(x) != 1:
-            raise NonPrimitiveError("Class x is not primitive.")
+            raise NonPrimitiveError("Surgery class 'x' is not primitive (GCD of coordinates > 1). "
+                                    "Topological translation: The class is a mathematical multiple of a basis element. Attempting surgery on it would create irremediable singularities in the resulting space.")
             
         x_TQ = x.T @ self.matrix
         
@@ -139,7 +142,8 @@ class IntersectionForm(BaseModel):
 
         g, y_list = ext_gcd_array(x_TQ.tolist())
         if g not in (1, -1):
-            raise UnimodularityError("Form is not unimodular; cannot find dual class y.")
+            raise UnimodularityError("Intersection form is not unimodular (determinant != +/-1). "
+                                     "Topological translation: The Extended Euclidean Algorithm failed to find a dual class 'y' where Q(x,y)=1. The space is not a closed manifold (Poincaré Duality has failed).")
         
         y = np.array(y_list, dtype=int) * g
         
@@ -147,7 +151,7 @@ class IntersectionForm(BaseModel):
         # Projects v onto H^perp = {x, y}^perp.
         q_yy = np.dot(y, self.matrix @ y)
         
-        # Form matrix P where rows are P(e_i)
+        # Form matrix P where columns are P(e_i)
         m = self.matrix.shape[0]
         P_cols = []
         for i in range(m):
@@ -158,18 +162,21 @@ class IntersectionForm(BaseModel):
             proj_v = v - (q_vy - q_yy * q_vx) * x - q_vx * y
             P_cols.append(proj_v)
             
-        # To get a Z-basis for the column space, we apply Hermite Normal Form
-        # to the rows (P_cols elements are rows here).
+        # P_cols is a list of column vectors. To use SymPy's column-style HNF,
+        # we put them as columns of a matrix.
+        # Actually, sp.Matrix(P_cols).T gives a matrix where columns are proj_v.
         from sympy.matrices.normalforms import hermite_normal_form
-        H = hermite_normal_form(sp.Matrix(P_cols))
+        A = sp.Matrix(P_cols).T
+        H = hermite_normal_form(A)
         
-        # The non-zero rows of H form a basis for H^perp.
-        basis_rows = []
-        for i in range(H.rows):
-            if not all(H[i, j] == 0 for j in range(H.cols)):
-                basis_rows.append([int(H[i, j]) for j in range(H.cols)])
+        # The non-zero columns of H form a basis for H^perp.
+        basis_vectors = []
+        for j in range(H.cols):
+            col = [int(H[i, j]) for i in range(H.rows)]
+            if any(x != 0 for x in col):
+                basis_vectors.append(col)
                 
-        basis_matrix = np.array(basis_rows, dtype=int)
+        basis_matrix = np.array(basis_vectors, dtype=int)
         
         if basis_matrix.shape[0] == 0:
             return self.__class__(matrix=np.zeros((0, 0), dtype=int), dimension=self.dimension)

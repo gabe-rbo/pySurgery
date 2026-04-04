@@ -54,7 +54,8 @@ class AlgebraicPoincareComplex(BaseModel):
         # In a concrete Algebraic Poincare Complex, psi_0: C^k -> C_{n-k} 
         # is the chain map inducing the Poincare duality isomorphism.
         if k not in self.psi:
-            raise DimensionError(f"Diagonal map psi_{k} not defined for dimension {k}.")
+            raise DimensionError(f"Diagonal map psi_{k} not defined for dimension {k}. "
+                                 "Topological translation: The Algebraic Poincaré Complex lacks the higher-order chain map psi_{k}: C^k -> C_{n-k} needed to induce Poincaré Duality.")
         
         # Apply the chain map psi_k to the cohomology class.
         return self.psi[k] @ cohomology_class

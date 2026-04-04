@@ -28,7 +28,8 @@ class QuadraticForm(IntersectionForm):
         """
         n = self.rank()
         if n % 2 != 0:
-            raise DimensionError("Arf invariant is strictly defined for even-rank symplectic spaces.")
+            raise DimensionError(f"The Arf invariant requires a symplectic basis (e_i, f_i), implying an even rank. "
+                                 f"The provided quadratic form has odd rank {n}.")
         
         # In a real implementation, we would first algorithmically construct a symplectic basis.
         # For simplicity, we assume the basis is already (e1, f1, e2, f2, ...).

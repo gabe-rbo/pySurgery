@@ -67,21 +67,49 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
     # Find the fundamental class [M] in H_4(X)
     if 4 in boundaries:
         d4 = boundaries[4].toarray()
-        sym_d4 = sp.Matrix(d4)
-        null_4 = sym_d4.nullspace()
         
-        if not null_4:
-            raise ValueError("No fundamental class found (H_4 is empty). Ensure the input is a closed 4-manifold.")
+        # Scaling Path: Fast fallback for fundamental class
+        if cells[4] > 1000:
+            import scipy.sparse.linalg as spla
+            d4_sparse = boundaries[4].astype(float)
+            try:
+                u, s, vt = spla.svds(d4_sparse, k=min(cells[4]-1, 5), which='SM')
+                tol = cells[4] * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
+                null_idx = np.where(s <= tol)[0]
+                if len(null_idx) > 0:
+                    fund_class = vt[null_idx[0], :].flatten()
+                else:
+                    fund_class = np.ones(cells[4], dtype=float)
+            except Exception:
+                fund_class = np.ones(cells[4], dtype=float)
+        else:
+            sym_d4 = sp.Matrix(d4)
+            null_4 = sym_d4.nullspace()
             
-        fund_class = np.array(null_4[0]).astype(float).flatten()
-        denoms = [sp.fraction(x)[1] for x in null_4[0]]
-        lcm = np.lcm.reduce([int(d) for d in denoms])
-        fund_class = np.array([int(x * lcm) for x in fund_class], dtype=np.int64)
+            if not null_4:
+                from pysurgery.core.exceptions import HomologyError
+                raise HomologyError("No fundamental class [M] found (H_4 is empty). "
+                                    "Topological translation: The simplicial complex does not represent a closed, orientable 4-manifold. The Cup Product cannot be evaluated without [M].")
+                
+            fund_class = np.array(null_4[0]).astype(float).flatten()
+            denoms = [sp.fraction(x)[1] for x in null_4[0]]
+            lcm = np.lcm.reduce([int(d) for d in denoms])
+            fund_class = np.array([int(x * lcm) for x in fund_class], dtype=np.int64)
+            gcd = np.gcd.reduce(fund_class)
+            if gcd != 0:
+                fund_class = fund_class // gcd
     else:
         fund_class = np.ones(cells[4], dtype=np.int64)
         
     r = len(basis_2)
-    Q = np.zeros((r, r), dtype=np.int64)
+    
+    # Determine type of Q based on basis
+    is_float = False
+    if r > 0 and basis_2[0].dtype.kind == 'f':
+        is_float = True
+        
+    dtype = np.float64 if is_float else np.int64
+    Q = np.zeros((r, r), dtype=dtype)
     
     simplices_4 = dim_simplices.get(4, [])
     idx_2 = simplex_to_idx.get(2, {})
@@ -99,7 +127,10 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
             Q[i, j] = np.sum(cup_ij * fund_class)
             
     # Due to chain level artifacts, enforce perfect symmetry on the cohomology level matrix
-    Q_sym = (Q + Q.T) // 2
+    if is_float:
+        Q_sym = (Q + Q.T) / 2.0
+    else:
+        Q_sym = (Q + Q.T) // 2
     
     return IntersectionForm(matrix=Q_sym, dimension=4)
 

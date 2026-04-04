@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysurgery"
-version = "0.1.0"
+version = "1.0.0"
 description = "A high-performance Python library for Computational Surgery Theory."
 dependencies = [
     "numpy>=1.22.0",
@@ -18,6 +18,12 @@ authors = [
     { name = "Gabriel Ribeiro", email = "gabriel.ribeiro@dcc.ufmg.br", github="gabe-rbo" }
 ]
 requires-python = ">=3.10"
+
+[project.optional-dependencies]
+tda = ["gudhi"]
+mesh = ["trimesh"]
+ml = ["jax", "jaxlib", "torch", "torch_geometric"]
+all = ["gudhi", "trimesh", "jax", "jaxlib", "torch", "torch_geometric"]
 
 [tool.setuptools.packages.find]
 where = ["."]

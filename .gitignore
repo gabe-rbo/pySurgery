@@ -7,6 +7,19 @@ __pycache__/
 
 # Virtual environments
 .venv/
+venv/
+env/
+
+# IDEs
+.idea/
+.vscode/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
 
 # Testing
 .pytest_cache/
+.coverage

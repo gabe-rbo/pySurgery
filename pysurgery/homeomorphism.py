@@ -123,7 +123,8 @@ def analyze_homeomorphism_4d(m1: IntersectionForm, m2: IntersectionForm, ks1: in
     reasoning : str
     """
     if m1.dimension != 4 or m2.dimension != 4:
-        raise DimensionError("This analysis is only valid for 4D manifolds.")
+        raise DimensionError(f"Freedman's Classification Theorem strictly governs simply-connected 4-manifolds via intersection forms. "
+                             f"Received manifolds of dimensions {m1.dimension} and {m2.dimension}. Hint: Use 2D, 3D, or high_dim analyzers instead.")
         
     # Impediment 1: Rank
     if m1.rank() != m2.rank():

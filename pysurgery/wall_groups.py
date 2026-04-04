@@ -22,12 +22,14 @@ class WallGroupL(BaseModel):
         if self.pi == "1":
             if n % 4 == 0:
                 if form is None:
-                    raise SurgeryObstructionError("Intersection form required for L_{4k}(1).")
+                    raise SurgeryObstructionError("Intersection form required to compute Wall group L_{4k}(1) obstruction. "
+                                                  "Hint: Provide an IntersectionForm instance derived from the manifold's H_{2k} basis.")
                 # L_{4k}(1) = Z, given by Signature / 8
                 return form.signature() // 8
             elif n % 4 == 2:
                 if form is None or not isinstance(form, QuadraticForm):
-                    raise SurgeryObstructionError("QuadraticForm with Z_2 refinements required for L_{4k+2}(1) Arf invariant.")
+                    raise SurgeryObstructionError("L_{4k+2}(1) obstruction requires the Arf Invariant. "
+                                                  "Hint: Symmetric bilinear forms are insufficient. Provide a QuadraticForm with explicit Z_2 quadratic refinement q: H -> Z_2.")
                 # L_{4k+2}(1) = Z_2, given by Arf invariant
                 return form.arf_invariant()
             else:

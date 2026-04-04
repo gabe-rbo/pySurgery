@@ -13,7 +13,7 @@ class GroupRingElement:
 
     def __add__(self, other: 'GroupRingElement') -> 'GroupRingElement':
         if self.group_order != other.group_order:
-            raise GroupRingError("Group orders must match.")
+            raise GroupRingError(f"Cannot add elements from different group rings. Group orders |G|={self.group_order} and |H|={other.group_order} do not match.")
         res = self.coeffs.copy()
         for g, c in other.coeffs.items():
             res[g] = res.get(g, 0) + c
@@ -25,7 +25,8 @@ class GroupRingElement:
         Used to define Hermitian forms over group rings.
         """
         if self.group_order is None:
-            raise GroupRingError("Involution implemented only for known cyclic groups (C_n) here.")
+            raise GroupRingError("Involution a -> a_bar requires the group order to establish the C_n mapping g -> g^-1. "
+                                 "This is mathematically mandatory for defining Hermitian forms over group rings.")
         
         result = {}
         for g, c in self.coeffs.items():
