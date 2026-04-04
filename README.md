@@ -33,7 +33,7 @@ If you wish to use the ultra-high performance Julia backend for sparse Smith Nor
 `pysurgery` mathematically bridges discrete geometry to advanced topological classification. Here is the mathematical engine running under the hood:
 
 ### 1. Homology & Cohomology via Smith Normal Form
-When computing the homology $H_n(X) = \ker(d_n) / \operatorname{im}(d_{n+1})$, basic floating-point linear algebra fails to capture **torsion** (topological twists like a Möbius strip). `pysurgery` implements the **Smith Normal Form (SNF)** over the integers $\mathbb{Z}$. It reduces boundary matrices via the Extended Euclidean Algorithm to exactly extract free ranks (Betti numbers) and specific torsion coefficients ($\mathbb{Z}_k$).
+When computing the homology $H_n(X) = \ker(d_n) /  \mathop{\mathrm{im}}(d_{n+1})$, basic floating-point linear algebra fails to capture **torsion** (topological twists like a Möbius strip). `pysurgery` implements the **Smith Normal Form (SNF)** over the integers $\mathbb{Z}$. It reduces boundary matrices via the Extended Euclidean Algorithm to exactly extract free ranks (Betti numbers) and specific torsion coefficients ($\mathbb{Z}_k$).
 Cohomology $H^n(X)$ is computed via the **Universal Coefficient Theorem**.
 
 ### 2. The Alexander-Whitney Cup Product
