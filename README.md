@@ -13,7 +13,7 @@ From topological data analysis (TDA) pipelines to complex classification theorem
 Ensure you have **Python 3.10+** installed.
 
 ```bash
-git clone https://github.com/your-username/pysurgery.git
+git clone https://github.com/gabe-rbo/pysurgery.git
 cd pysurgery
 pip install .
 ```
