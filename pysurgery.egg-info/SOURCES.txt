@@ -1,0 +1,14 @@
+pyproject.toml
+pysurgery/__init__.py
+pysurgery/algebraic_poincare.py
+pysurgery/wall_groups.py
+pysurgery.egg-info/PKG-INFO
+pysurgery.egg-info/SOURCES.txt
+pysurgery.egg-info/dependency_links.txt
+pysurgery.egg-info/requires.txt
+pysurgery.egg-info/top_level.txt
+pysurgery/core/__init__.py
+pysurgery/core/complexes.py
+pysurgery/core/intersection_forms.py
+pysurgery/core/math_core.py
+tests/test_intersection_forms.py

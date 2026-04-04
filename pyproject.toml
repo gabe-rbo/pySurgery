@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pysurgery"
+version = "0.1.0"
+description = "A high-performance Python library for Computational Surgery Theory."
+dependencies = [
+    "numpy>=1.22.0",
+    "scipy>=1.8.0",
+    "sympy>=1.10.0",
+    "numba>=0.55.0",
+    "pydantic>=2.0.0",
+    "hypothesis>=6.0.0"
+]
+authors = [
+    { name = "Gabriel", email = "gabriel@example.com" }
+]
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pysurgery*"]
