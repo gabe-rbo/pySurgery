@@ -1,7 +1,7 @@
-from typing import Tuple, Optional
+from typing import Tuple
 from .core.intersection_forms import IntersectionForm
 from .core.complexes import ChainComplex
-from .core.exceptions import DimensionError, SurgeryObstructionError
+from .core.exceptions import DimensionError
 import warnings
 
 def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, str]:

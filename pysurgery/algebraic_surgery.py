@@ -1,5 +1,4 @@
 from pydantic import BaseModel, ConfigDict
-from .core.complexes import ChainComplex
 from .algebraic_poincare import AlgebraicPoincareComplex
 from .wall_groups import WallGroupL
 from .core.k_theory import compute_whitehead_group

@@ -4,7 +4,7 @@ import sympy as sp
 from scipy.sparse import csr_matrix
 from typing import Dict, List, Tuple
 from pydantic import BaseModel, ConfigDict
-from .math_core import get_snf_diagonal, get_sparse_snf_diagonal
+from .math_core import get_sparse_snf_diagonal
 from ..bridge.julia_bridge import julia_engine
 
 class ChainComplex(BaseModel):
@@ -144,7 +144,6 @@ class ChainComplex(BaseModel):
         
         int_basis = []
         for v in basis_of_quotient:
-            arr = np.array(v).astype(float).flatten()
             denominators = [sp.fraction(x)[1] for x in v]
             if denominators:
                 lcm = np.lcm.reduce([int(d) for d in denominators])

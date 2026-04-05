@@ -1,6 +1,4 @@
-import numpy as np
-import scipy.sparse as sp
-from typing import Dict, List, Tuple
+from typing import List
 from pydantic import BaseModel, ConfigDict
 from .exceptions import FundamentalGroupError
 from .complexes import CWComplex
@@ -55,8 +53,10 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
             
         u, v = -1, -1
         for val, r in zip(col_data, col_row):
-            if val == -1: u = r
-            elif val == 1: v = r
+            if val == -1:
+                u = r
+            elif val == 1:
+                v = r
             
         if u != -1 and v != -1:
             adj[u].append((v, e, 1)) # 1 means forward traversal
@@ -108,7 +108,8 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
                 
             edge_endpoints = {}
             for val, e in edges_in_face:
-                if edge_list[e] is None: continue
+                if edge_list[e] is None:
+                    continue
                 u, v = edge_list[e]
                 # Directed edge is u -> v.
                 # If val == 1, path traverses u -> v. If -1, traverses v -> u.
@@ -119,7 +120,8 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
                     
             path = []
             curr_val, curr_e = edges_in_face[0]
-            if curr_e not in edge_endpoints: continue
+            if curr_e not in edge_endpoints:
+                continue
             
             curr_u, curr_v, curr_dir = edge_endpoints[curr_e]
             path.append((curr_e, curr_dir))
@@ -130,7 +132,8 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
             while len(path) < len(edges_in_face):
                 next_e_found = False
                 for val, e in edges_in_face:
-                    if e in used or e not in edge_endpoints: continue
+                    if e in used or e not in edge_endpoints:
+                        continue
                     u, v, d = edge_endpoints[e]
                     if u == target_node:
                         path.append((e, d))

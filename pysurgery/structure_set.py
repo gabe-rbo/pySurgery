@@ -1,9 +1,6 @@
-import numpy as np
 from pydantic import BaseModel, ConfigDict
-from typing import Optional
 from .core.complexes import ChainComplex
 from .core.exceptions import StructureSetError
-from .wall_groups import WallGroupL
 
 class StructureSet(BaseModel):
     """
@@ -67,9 +64,6 @@ class StructureSet(BaseModel):
         # pi_1 = 1.
         # L_n(1) is Z (n=0 mod 4), 0 (n=1 mod 4), Z_2 (n=2 mod 4), 0 (n=3 mod 4)
         
-        wall_n = WallGroupL(dimension=n, pi="1")
-        wall_n_plus_1 = WallGroupL(dimension=n+1, pi="1")
-        
         l_n_str = self._format_wall_group(n)
         l_n_plus_1_str = self._format_wall_group(n+1)
         
@@ -91,6 +85,8 @@ class StructureSet(BaseModel):
         return report
         
     def _format_wall_group(self, k: int) -> str:
-        if k % 4 == 0: return "Z"
-        if k % 4 == 2: return "Z_2"
+        if k % 4 == 0:
+            return "Z"
+        if k % 4 == 2:
+            return "Z_2"
         return "0"

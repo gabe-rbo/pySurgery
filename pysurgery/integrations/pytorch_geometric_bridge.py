@@ -1,12 +1,9 @@
 import numpy as np
 import scipy.sparse as sp
-from pysurgery.core.complexes import ChainComplex, CWComplex
+from pysurgery.core.complexes import CWComplex
+import importlib.util
 
-try:
-    import torch
-    HAS_TORCH = True
-except ImportError:
-    HAS_TORCH = False
+HAS_TORCH = importlib.util.find_spec("torch") is not None
 
 def pyg_to_cw_complex(data) -> CWComplex:
     """

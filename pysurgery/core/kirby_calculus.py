@@ -1,5 +1,4 @@
 import numpy as np
-from typing import List, Tuple
 from pydantic import BaseModel, ConfigDict
 from .intersection_forms import IntersectionForm
 from .exceptions import KirbyMoveError

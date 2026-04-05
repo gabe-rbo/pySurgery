@@ -1,6 +1,5 @@
 import numpy as np
 import numba
-from typing import Tuple
 
 @numba.njit
 def swap_rows(A, i, j):
@@ -136,6 +135,10 @@ def get_sparse_snf_diagonal(A_sparse) -> np.ndarray:
     Always uses the high-performance exact Julia Sparse SNF backend if available.
     If Julia is not installed, it seamlessly estimates the free rank using sparse iterative SVD.
     """
+    from ..bridge.julia_bridge import julia_engine
+    import warnings
+    import scipy.sparse.linalg as spla
+    
     m, n = A_sparse.shape
     
     if julia_engine.available:

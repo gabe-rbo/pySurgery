@@ -1,5 +1,4 @@
-import sympy as sp
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 from .exceptions import GroupRingError
 from ..bridge.julia_bridge import julia_engine
 

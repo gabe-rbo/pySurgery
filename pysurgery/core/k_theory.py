@@ -44,7 +44,7 @@ def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
                 total_rank += max(0, rank_n)
                 
         if total_rank == 0:
-            return WhiteheadGroup(rank=0, description=f"Wh(pi_1) evaluates to rank 0. No free s-Cobordism obstruction.")
+            return WhiteheadGroup(rank=0, description="Wh(pi_1) evaluates to rank 0. No free s-Cobordism obstruction.")
         else:
             return WhiteheadGroup(rank=total_rank, description=f"Wh(pi_1) contains free abelian parts of rank >= {total_rank}. Torsion obstruction definitively exists for s-Cobordism.")
             

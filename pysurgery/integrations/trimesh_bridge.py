@@ -1,7 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
-from pysurgery.core.complexes import ChainComplex, CWComplex
-from pysurgery.core.exceptions import DimensionError
+from pysurgery.core.complexes import CWComplex
 
 try:
     import trimesh

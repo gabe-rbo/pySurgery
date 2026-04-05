@@ -1,9 +1,8 @@
-import numpy as np
-from typing import Dict, List, Optional, Union
+from typing import Optional, Union
 from pydantic import BaseModel
 from .core.intersection_forms import IntersectionForm
 from .core.quadratic_forms import QuadraticForm
-from .core.exceptions import SurgeryObstructionError, DimensionError
+from .core.exceptions import SurgeryObstructionError
 from .bridge.julia_bridge import julia_engine
 
 class WallGroupL(BaseModel):
@@ -39,10 +38,14 @@ class WallGroupL(BaseModel):
             # For pi = Z, we use Shaneson splitting: L_n(Z) = L_n(1) + L_{n-1}(1)
             # Evaluating this completely depends on the specific geometric normal map inputs.
             # As an algebraic return, we identify the exact dimensions.
-            if n % 4 == 0: return form.signature() // 8 if form else 0
-            if n % 4 == 1: return f"Obstruction in Z + Z (signature and Arf invariant sum)"
-            if n % 4 == 2: return form.arf_invariant() if form and isinstance(form, QuadraticForm) else "Requires Arf invariant"
-            if n % 4 == 3: return "Obstruction in Z_2 (Arf invariant of codimension 1)"
+            if n % 4 == 0:
+                return form.signature() // 8 if form else 0
+            if n % 4 == 1:
+                return "Obstruction in Z + Z (signature and Arf invariant sum)"
+            if n % 4 == 2:
+                return form.arf_invariant() if form and isinstance(form, QuadraticForm) else "Requires Arf invariant"
+            if n % 4 == 3:
+                return "Obstruction in Z_2 (Arf invariant of codimension 1)"
         elif self.pi.startswith("Z_"):
             p = int(self.pi.split("_")[1])
             if n % 4 == 0:
@@ -61,13 +64,19 @@ def l_group_symbol(n: int, pi: str = "1") -> str:
     Returns the mathematical symbol/structure of L_n(pi).
     """
     if pi == "1":
-        if n % 4 == 0: return "Z"
-        if n % 4 == 2: return "Z_2"
+        if n % 4 == 0:
+            return "Z"
+        if n % 4 == 2:
+            return "Z_2"
         return "0"
     elif pi == "Z":
         # By Shaneson splitting: L_n(Z) = L_n(1) + L_{n-1}(1)
-        if n % 4 == 0: return "Z"
-        if n % 4 == 1: return "Z + Z"
-        if n % 4 == 2: return "Z_2"
-        if n % 4 == 3: return "Z_2"
+        if n % 4 == 0:
+            return "Z"
+        if n % 4 == 1:
+            return "Z + Z"
+        if n % 4 == 2:
+            return "Z_2"
+        if n % 4 == 3:
+            return "Z_2"
     return f"L_{n}({pi})"

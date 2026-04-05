@@ -1,8 +1,8 @@
 import numpy as np
 from scipy.linalg import eigvalsh
-from typing import Tuple, List, Optional
 from pydantic import BaseModel, ConfigDict
 import sympy as sp
+from sympy.matrices.normalforms import hermite_normal_form
 
 from .exceptions import (
     NonSymmetricError,
@@ -125,7 +125,8 @@ class IntersectionForm(BaseModel):
         
         # We need y such that x_TQ @ y = 1.
         def ext_gcd(a, b):
-            if b == 0: return a, 1, 0
+            if b == 0:
+                return a, 1, 0
             x0, x1, y0, y1 = 1, 0, 0, 1
             while b != 0:
                 q, a, b = a // b, b, a % b

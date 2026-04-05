@@ -1,5 +1,4 @@
 import numpy as np
-from typing import Dict, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict
 from .core.complexes import ChainComplex
 from .core.exceptions import DimensionError

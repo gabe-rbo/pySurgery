@@ -1,13 +1,5 @@
 import numpy as np
-import scipy.sparse as sp
 from typing import Dict, List, Tuple
-
-# Try importing numba for extreme performance on cup products
-try:
-    import numba
-    HAS_NUMBA = True
-except ImportError:
-    HAS_NUMBA = False
 
 def _numpy_alexander_whitney_cup(
     alpha: np.ndarray, 

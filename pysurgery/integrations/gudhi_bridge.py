@@ -1,14 +1,13 @@
-import copy
 import warnings
 import numpy as np
 import scipy.sparse as sp
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 import sympy as sympy_module
 import scipy.sparse.linalg as spla
 
 from pysurgery.core.intersection_forms import IntersectionForm
 from pysurgery.core.cup_product import alexander_whitney_cup
-from pysurgery.core.complexes import ChainComplex, CWComplex
+from pysurgery.core.complexes import ChainComplex
 from pysurgery.core.exceptions import HomologyError
 from pysurgery.bridge.julia_bridge import julia_engine
 
@@ -238,7 +237,7 @@ def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
         try:
             q_form = simplex_tree_to_intersection_form(st_sub)
             signatures.append((val, q_form.signature()))
-        except Exception as e:
+        except Exception:
             # At early filtration steps, the complex may not form a closed 4-manifold.
             # Thus, the fundamental class [M] might not exist or the Alexander-Whitney 
             # evaluation might fail. In such cases, the mathematical signature is strictly 0.

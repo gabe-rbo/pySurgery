@@ -69,7 +69,7 @@ def check_spin_structure(q: IntersectionForm) -> str:
     w2 = extract_stiefel_whitney_w2(q)
     
     if np.all(w2 == 0):
-        return f"w_2 = 0. The manifold admits a Spin structure. (Notice that Q is Even/Type II)."
+        return "w_2 = 0. The manifold admits a Spin structure. (Notice that Q is Even/Type II)."
     else:
         # Format the non-zero coefficients
         basis_elements = [f"e_{i}" for i, val in enumerate(w2) if val == 1]

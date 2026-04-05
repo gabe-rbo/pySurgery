@@ -1,6 +1,6 @@
 import numpy as np
-from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from pydantic import ConfigDict
+from typing import List
 from .intersection_forms import IntersectionForm
 from .exceptions import DimensionError
 
@@ -49,7 +49,8 @@ class QuadraticForm(IntersectionForm):
                         e_idx, f_idx = i, j
                         found = True
                         break
-                if found: break
+                if found:
+                    break
             
             if not found:
                 break # Radical is non-empty
@@ -62,8 +63,8 @@ class QuadraticForm(IntersectionForm):
                 lin = np.sum(vec * q_vals)
                 cross = 0
                 for k in range(n):
-                    for l in range(k+1, n):
-                        cross += vec[k] * vec[l] * M[k, l]
+                    for m_idx in range(k+1, n):
+                        cross += vec[k] * vec[m_idx] * M[k, m_idx]
                 return (lin + cross) % 2
                 
             qe = eval_q(e)
@@ -73,7 +74,8 @@ class QuadraticForm(IntersectionForm):
             # Orthogonalize remaining basis
             new_active = []
             for k in active_indices:
-                if k == e_idx or k == f_idx: continue
+                if k == e_idx or k == f_idx:
+                    continue
                 v = basis[k]
                 v_dot_f = (v @ M @ f) % 2
                 v_dot_e = (v @ M @ e) % 2

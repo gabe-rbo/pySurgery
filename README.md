@@ -9,7 +9,7 @@ If you’ve ever felt “persistent homology is informative, but not decisive,�
 
 ---
 
-## Why this exists (30-second version)
+## Why this exists
 
 Most numerical linear-algebra approaches over $\mathbb{R}$ lose information that lives over $\mathbb{Z}$ (especially torsion). pySurgery focuses on *exact* and *structure-aware* invariants:
 
