@@ -2,6 +2,7 @@ from typing import Tuple, Optional
 from .core.intersection_forms import IntersectionForm
 from .core.complexes import ChainComplex
 from .core.exceptions import DimensionError, SurgeryObstructionError
+import warnings
 
 def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, str]:
     """
@@ -20,7 +21,8 @@ def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, 
     try:
         r2_1, t2_1 = c1.homology(2)
         r2_2, t2_2 = c2.homology(2)
-    except Exception:
+    except Exception as e:
+        warnings.warn(f"Topological Hint: H_2 homology extraction failed ({e}). Assuming non-orientable (Rank 0) to prevent pipeline crash.")
         r2_1, r2_2 = 0, 0
         
     orientable_1 = (r2_1 == 1)
@@ -32,7 +34,8 @@ def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, 
     try:
         r1_1, t1_1 = c1.homology(1)
         r1_2, t1_2 = c2.homology(1)
-    except Exception:
+    except Exception as e:
+        warnings.warn(f"Topological Hint: H_1 homology extraction failed ({e}). Assuming genus 0.")
         r1_1, r1_2 = 0, 0
         
     if r1_1 != r1_2:
@@ -57,7 +60,8 @@ def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, 
         try:
             r_1, t_1 = c1.homology(n)
             r_2, t_2 = c2.homology(n)
-        except Exception:
+        except Exception as e:
+            warnings.warn(f"Topological Hint: Homology extraction failed at dimension {n} ({e}). Assuming empty homology to proceed with partial evaluation.")
             r_1, r_2, t_1, t_2 = 0, 0, [], []
             
         if r_1 != r_2 or t_1 != t_2:
@@ -67,8 +71,8 @@ def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, 
     try:
         if c1.homology(1) == (0, []) and c1.homology(2) == (0, []) and c1.homology(3) == (1, []):
             return False, "INCONCLUSIVE: Both are Homology Spheres. By Perelman's resolution of the Poincare Conjecture, if they are simply-connected (pi_1 = 1), they are homeomorphic to S^3. However, pi_1 computation is required to distinguish from exotic homology spheres (like the Poincare dodecahedral space)."
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.warn(f"Topological Hint: Sphere validation check failed ({e}).")
         
     return False, "INCONCLUSIVE: Manifolds are Homology Equivalent. In 3D, true homeomorphism requires evaluating the fundamental group (pi_1) or geometric Ricci flow, which lies outside pure algebraic homology."
 
@@ -78,14 +82,15 @@ def analyze_homeomorphism_high_dim(c1: ChainComplex, c2: ChainComplex, dim: int)
     and Smale's Generalized Poincare Conjecture (1961).
     """
     if dim < 5:
-        raise DimensionError("This function is strictly for dimensions 5 and higher.")
+        raise DimensionError(f"Function called on {dim}D. The s-Cobordism theorem and Wall's high-dimensional surgery framework strictly apply to n >= 5, where the 'Whitney Trick' guarantees enough room to untangle handles.")
         
     # Check Homology Equivalence
     for n in range(dim + 1):
         try:
             r_1, t_1 = c1.homology(n)
             r_2, t_2 = c2.homology(n)
-        except Exception:
+        except Exception as e:
+            warnings.warn(f"Topological Hint: Homology extraction failed at dimension {n} ({e}). Assuming empty homology.")
             r_1, r_2, t_1, t_2 = 0, 0, [], []
             
         if r_1 != r_2 or t_1 != t_2:
@@ -100,8 +105,8 @@ def analyze_homeomorphism_high_dim(c1: ChainComplex, c2: ChainComplex, dim: int)
             if r != 0 or t:
                 is_sphere = False
                 break
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.warn(f"Topological Hint: Sphere validation iteration failed at dim {n} ({e}).")
             
     if is_sphere:
         return True, f"SUCCESS: Both manifolds are homology spheres. Assuming they are simply-connected (pi_1 = 1), Smale's Generalized Poincare Conjecture (1961) guarantees they are homeomorphic to S^{dim}. Note: They may still be exotic spheres (non-diffeomorphic) under Milnor's classification."

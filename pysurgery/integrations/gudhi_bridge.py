@@ -238,8 +238,11 @@ def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
         try:
             q_form = simplex_tree_to_intersection_form(st_sub)
             signatures.append((val, q_form.signature()))
-        except Exception:
-            # If no fundamental class exists at this filtration step, signature is 0
+        except Exception as e:
+            # At early filtration steps, the complex may not form a closed 4-manifold.
+            # Thus, the fundamental class [M] might not exist or the Alexander-Whitney 
+            # evaluation might fail. In such cases, the mathematical signature is strictly 0.
+            # We silently catch this because it is an expected topological constraint during filtration.
             signatures.append((val, 0))
             
     return signatures

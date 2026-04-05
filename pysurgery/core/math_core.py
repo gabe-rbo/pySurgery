@@ -155,10 +155,9 @@ def get_sparse_snf_diagonal(A_sparse) -> np.ndarray:
         tol = max(m, n) * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
         rank = np.sum(s > tol)
         return np.ones(rank, dtype=np.int64)
-    except Exception:
-        return np.array([], dtype=np.int64)
-       tol = max(m, n) * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
-        rank = np.sum(s > tol)
-        return np.ones(rank, dtype=np.int64)
-    except Exception:
+    except Exception as e:
+        # If the SVD solver fails to converge on extremely degenerate or sparse matrices,
+        # we return an empty array, assuming 0 free rank to prevent a total pipeline crash.
+        # This signifies a mathematical failure to extract accurate topological invariants.
+        warnings.warn(f"Topological Hint: Sparse SVD failed to converge ({e}). The boundary matrix may be too degenerate. Assuming 0 free rank.")
         return np.array([], dtype=np.int64)
