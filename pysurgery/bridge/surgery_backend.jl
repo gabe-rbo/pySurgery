@@ -17,10 +17,26 @@ end
 
 function exact_snf_sparse(rows, cols, vals, m, n)
     A = sparse(Vector{Int}(rows), Vector{Int}(cols), Vector{Int}(vals), m, n)
-    dense_A = Matrix{Float64}(A)
-    U, S, V = svd(dense_A)
-    factors = round.(Int64, S[S .> 1e-10])
-    return sort(factors)
+    
+    try
+        import AbstractAlgebra
+        ZZ = AbstractAlgebra.ZZ
+        A_aa = AbstractAlgebra.matrix(ZZ, Matrix(A))
+        S_aa = AbstractAlgebra.snf(A_aa)
+        factors = Int64[]
+        for i in 1:min(m, n)
+            val = Int64(S_aa[i, i])
+            if val != 0
+                push!(factors, abs(val))
+            end
+        end
+        return sort(factors)
+    catch e
+        dense_A = Matrix{Float64}(A)
+        U, S, V = svd(dense_A)
+        factors = round.(Int64, S[S .> 1e-10])
+        return sort(factors)
+    end
 end
 
 function exact_sparse_cohomology_basis(
@@ -28,12 +44,38 @@ function exact_sparse_cohomology_basis(
     d_n_rows, d_n_cols, d_n_vals, d_n_m, d_n_n
 )
     coboundary_mat = sparse(d_np1_cols, d_np1_rows, d_np1_vals, d_np1_n, d_np1_m)
-    dense_M = Matrix{Float64}(coboundary_mat)
-    F = svd(dense_M)
-    tol = maximum(size(dense_M)) * eps(Float64) * F.S[1]
-    null_indices = findall(x -> x <= tol, F.S)
-    nullity = length(null_indices)
-    return [round.(Int64, F.V[:, i] .* 1000) for i in (size(F.V, 2) - nullity + 1):size(F.V, 2)]
+    
+    try
+        import AbstractAlgebra
+        QQ = AbstractAlgebra.QQ
+        M_qq = AbstractAlgebra.matrix(QQ, Matrix(coboundary_mat))
+        nullity, nullspace_mat = AbstractAlgebra.nullspace(M_qq)
+        
+        basis = Vector{Vector{Int64}}()
+        for j in 1:nullity
+            col = nullspace_mat[:, j]
+            denoms = [AbstractAlgebra.denominator(x) for x in col]
+            lcm_val = 1
+            for d in denoms
+                lcm_val = lcm(lcm_val, d)
+            end
+            
+            int_vec = Int64[]
+            for i in 1:d_np1_m
+                val = AbstractAlgebra.numerator(col[i] * lcm_val)
+                push!(int_vec, val)
+            end
+            push!(basis, int_vec)
+        end
+        return basis
+    catch e
+        dense_M = Matrix{Float64}(coboundary_mat)
+        F = svd(dense_M)
+        tol = maximum(size(dense_M)) * eps(Float64) * F.S[1]
+        null_indices = findall(x -> x <= tol, F.S)
+        nullity = length(null_indices)
+        return [round.(Int64, F.V[:, i] .* 1000) for i in (size(F.V, 2) - nullity + 1):size(F.V, 2)]
+    end
 end
 
 function group_ring_multiply(k1::Vector{String}, v1::Vector{Int}, k2::Vector{String}, v2::Vector{Int}, group_order::Int)
