@@ -81,7 +81,7 @@ pySurgery bridges discrete geometry to topological classification using several 
 
 ### 1) Homology & cohomology via Smith Normal Form (over $\mathbb{Z}$)
 
-When computing homology,
+When computing homology,\
 $$
 H_n(X)=\ker(d_n) / \operatorname{im}(d_{n+1}),
 $$
@@ -96,7 +96,7 @@ Cohomology is computed via the **Universal Coefficient Theorem**.
 
 To classify 4-manifolds, surfaces intersect—cup products encode that intersection.
 
-Given cocycles $\alpha, \beta$:
+Given cocycles $\alpha, \beta$:\
 $$
 (\alpha \smile \beta)([v_0,\dots,v_4])=\alpha([v_0,v_1,v_2])\cdot\beta([v_2,v_3,v_4]).
 $$
