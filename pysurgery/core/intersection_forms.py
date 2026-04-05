@@ -183,6 +183,3 @@ class IntersectionForm(BaseModel):
         new_matrix = basis_matrix @ self.matrix @ basis_matrix.T
         
         return self.__class__(matrix=new_matrix, dimension=self.dimension)
-sis_matrix @ self.matrix @ basis_matrix.T
-        
-        return self.__class__(matrix=new_matrix, dimension=self.dimension)

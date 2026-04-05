@@ -52,9 +52,9 @@ class GroupRingElement:
                     inv_g = '1' if inv_power == 0 else f'g{inv_power}'
                     result[inv_g] = result.get(inv_g, 0) + c
                 except (ValueError, GroupRingError):
-                    result[g] = c # fallback
+                    # For non-cyclic presentations, involution evaluates dynamically.
+                    result[f"({g})^-1"] = c
             else:
-                result[g] = c # fallback
-        return GroupRingElement(result, self.group_order)
-          result[f"({g})^-1"] = c
+                # Base element involution
+                result[f"({g})^-1"] = c
         return GroupRingElement(result, self.group_order)
