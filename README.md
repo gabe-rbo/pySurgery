@@ -24,9 +24,17 @@ Most numerical linear-algebra approaches over $\mathbb{R}$ lose information that
 
 ### Install
 
-Requires **Python 3.10+**.
+Requires **Python >= 3.10+**.
 
-Clone + editable install:
+#### Install from PyPI (recommended)
+
+```bash
+pip install pysurgery
+```
+
+PyPI package: https://pypi.org/project/pysurgery/
+
+#### Install from source (development)
 
 ```bash
 git clone https://github.com/gabe-rbo/pySurgery.git
@@ -38,17 +46,18 @@ Optional dependency groups:
 
 ```bash
 # Topological Data Analysis integration
-pip install -e ".[tda]"
+pip install "pysurgery[tda]"
 
 # Mesh integration
-pip install -e ".[mesh]"
+pip install "pysurgery[mesh]"
 
 # ML-oriented integrations
-pip install -e ".[ml]"
+pip install "pysurgery[ml]"
 
 # Everything optional
-pip install -e ".[all]"
+pip install "pysurgery[all]"
 ```
+
 
 ### Julia backend (optional, for large-scale exact integer computations)
 

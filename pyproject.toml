@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysurgery"
-version = "1.0.0"
+version = "1.0.1"
 description = "A high-performance Python library for Computational Surgery Theory."
 dependencies = [
     "numpy>=1.22.0",
@@ -18,6 +18,7 @@ authors = [
   { name = "Gabriel Ribeiro", email = "gabriel.ribeiro@dcc.ufmg.br" }
 ]
 requires-python = ">=3.10"
+readme = "README.md"
 
 [project.optional-dependencies]
 tda = ["gudhi"]
