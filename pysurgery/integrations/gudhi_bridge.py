@@ -1,9 +1,22 @@
+import copy
+import warnings
 import numpy as np
-from pysurgery.core.complexes import ChainComplex, CWComplex
-
 import scipy.sparse as sp
+from typing import Dict, List, Tuple
+import sympy as sympy_module
+import scipy.sparse.linalg as spla
+
 from pysurgery.core.intersection_forms import IntersectionForm
 from pysurgery.core.cup_product import alexander_whitney_cup
+from pysurgery.core.complexes import ChainComplex, CWComplex
+from pysurgery.core.exceptions import HomologyError
+from pysurgery.bridge.julia_bridge import julia_engine
+
+try:
+    import gudhi
+    HAS_GUDHI = True
+except ImportError:
+    HAS_GUDHI = False
 
 def extract_complex_data(simplex_tree):
     """
@@ -54,8 +67,6 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
     It extracts the 2-cohomology basis, evaluates the Alexander-Whitney Cup Product,
     and applies it to the fundamental class [M].
     """
-    import sympy as sp
-    
     boundaries, cells, dim_simplices, simplex_to_idx = extract_complex_data(simplex_tree)
     complex_c = ChainComplex(boundaries=boundaries, dimensions=list(cells.keys()))
     
@@ -66,11 +77,39 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
         
     # Find the fundamental class [M] in H_4(X)
     if 4 in boundaries:
-        d4 = boundaries[4].toarray()
+        fund_class_found = False
         
-        # Scaling Path: Fast fallback for fundamental class
-        if cells[4] > 1000:
-            import scipy.sparse.linalg as spla
+        if julia_engine.available:
+            try:
+                # We need the nullspace of d4. compute_sparse_cohomology_basis computes nullspace of d_np1.T
+                # So we pass d4.T to find ker(d4).
+                basis_4 = julia_engine.compute_sparse_cohomology_basis(boundaries[4].T, None)
+                if len(basis_4) > 0:
+                    fund_class = basis_4[0].flatten()
+                    fund_class_found = True
+            except Exception as e:
+                warnings.warn(f"Topological Hint: Julia bridge failed to extract [M] ({e}). Falling back to SymPy exact nullspace.")
+                
+        if not fund_class_found:
+            # Attempt SymPy exact nullspace for small/medium matrices
+            try:
+                sym_d4 = sympy_module.Matrix(boundaries[4].toarray())
+                null_4 = sym_d4.nullspace()
+                
+                if null_4:
+                    fund_class = np.array(null_4[0]).astype(float).flatten()
+                    denoms = [sympy_module.fraction(x)[1] for x in null_4[0]]
+                    lcm = np.lcm.reduce([int(d) for d in denoms])
+                    fund_class = np.array([int(x * lcm) for x in fund_class], dtype=np.int64)
+                    gcd = np.gcd.reduce(fund_class)
+                    if gcd != 0:
+                        fund_class = fund_class // gcd
+                    fund_class_found = True
+            except Exception as e:
+                warnings.warn(f"Topological Hint: SymPy exact nullspace failed ({e}). This dataset is too massive for exact integer algebra. Falling back to floating-point SVD to approximate [M] over R.")
+                
+        if not fund_class_found:
+            # Fallback to Sparse SVD for massive datasets when Julia is unavailable
             d4_sparse = boundaries[4].astype(float)
             try:
                 u, s, vt = spla.svds(d4_sparse, k=min(cells[4]-1, 5), which='SM')
@@ -78,26 +117,13 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
                 null_idx = np.where(s <= tol)[0]
                 if len(null_idx) > 0:
                     fund_class = vt[null_idx[0], :].flatten()
-                else:
-                    fund_class = np.ones(cells[4], dtype=float)
-            except Exception:
-                fund_class = np.ones(cells[4], dtype=float)
-        else:
-            sym_d4 = sp.Matrix(d4)
-            null_4 = sym_d4.nullspace()
-            
-            if not null_4:
-                from pysurgery.core.exceptions import HomologyError
-                raise HomologyError("No fundamental class [M] found (H_4 is empty). "
-                                    "Topological translation: The simplicial complex does not represent a closed, orientable 4-manifold. The Cup Product cannot be evaluated without [M].")
-                
-            fund_class = np.array(null_4[0]).astype(float).flatten()
-            denoms = [sp.fraction(x)[1] for x in null_4[0]]
-            lcm = np.lcm.reduce([int(d) for d in denoms])
-            fund_class = np.array([int(x * lcm) for x in fund_class], dtype=np.int64)
-            gcd = np.gcd.reduce(fund_class)
-            if gcd != 0:
-                fund_class = fund_class // gcd
+                    fund_class_found = True
+            except Exception as e:
+                warnings.warn(f"Topological Hint: Sparse SVD failed to converge for [M] ({e}). The simplicial complex may be too topologically degenerate.")
+
+        if not fund_class_found:
+            raise HomologyError("No fundamental class [M] found (H_4 is empty or computation failed). "
+                                "Topological translation: The simplicial complex does not represent a closed, orientable 4-manifold. The Cup Product cannot be evaluated without [M].")
     else:
         fund_class = np.ones(cells[4], dtype=np.int64)
         
@@ -152,9 +178,7 @@ def extract_persistence_to_surgery(simplex_tree, min_persistence=0.5):
     list
         A list of dimensions where surgery might be required.
     """
-    try:
-        import gudhi
-    except ImportError:
+    if not HAS_GUDHI:
         raise ImportError("GUDHI is required. Install via 'pip install gudhi'.")
         
     simplex_tree.compute_persistence()
@@ -194,8 +218,9 @@ def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
     List[Tuple[float, int]]
         The sequence of (filtration_value, signature) over the filtration.
     """
-    import copy
-    
+    if not HAS_GUDHI:
+        raise ImportError("GUDHI is required. Install via 'pip install gudhi'.")
+        
     signatures = []
     # Get all unique filtration values where new simplices appear
     filtration_values = sorted(list(set([s[1] for s in simplex_tree.get_filtration()])))
@@ -203,7 +228,6 @@ def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
     # We incrementally track the signature at each step.
     # To optimize this, we query the SimplexTree up to each threshold
     for val in filtration_values:
-        import gudhi
         st_sub = gudhi.SimplexTree()
         # Reconstruct the subcomplex up to the current filtration value
         for s, f_val in simplex_tree.get_filtration():

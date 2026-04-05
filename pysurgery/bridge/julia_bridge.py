@@ -1,6 +1,12 @@
 import os
 import numpy as np
 
+try:
+    from juliacall import Main as jl
+    HAS_JULIACALL = True
+except ImportError:
+    HAS_JULIACALL = False
+
 class JuliaBridge:
     """
     Zero-Copy Bridge to execute high-performance Julia algebraic topology operations.
@@ -16,17 +22,16 @@ class JuliaBridge:
 
     def _initialize(self):
         self.available = False
+        if not HAS_JULIACALL:
+            self.error = "juliacall is not installed. Install via `pip install juliacall`."
+            return
+            
         try:
-            # We attempt to import juliacall. 
-            # If missing, it raises an ImportError, but we provide graceful structural fallback.
-            from juliacall import Main as jl
             self.jl = jl
             backend_script = os.path.join(os.path.dirname(__file__), "surgery_backend.jl")
             self.jl.include(backend_script)
             self.backend = self.jl.SurgeryBackend
             self.available = True
-        except ImportError:
-            self.error = "juliacall is not installed. Install via `pip install juliacall`."
         except Exception as e:
             self.error = f"Failed to initialize Julia backend: {e}"
 

@@ -1,5 +1,13 @@
 import numpy as np
 
+try:
+    import jax
+    import jax.numpy as jnp
+    from jax.numpy.linalg import eigh
+    HAS_JAX = True
+except ImportError:
+    HAS_JAX = False
+
 def _approximate_signature(matrix: np.ndarray, temp: float = 10.0):
     """
     A differentiable approximation of the signature of a symmetric matrix.
@@ -17,10 +25,7 @@ def _approximate_signature(matrix: np.ndarray, temp: float = 10.0):
     float
         The approximated signature.
     """
-    try:
-        import jax.numpy as jnp
-        from jax.numpy.linalg import eigh
-    except ImportError:
+    if not HAS_JAX:
         raise ImportError("JAX is required for differentiable topology. Install via 'pip install jax jaxlib'.")
 
     # Eigenvalues of a symmetric matrix are real
@@ -38,10 +43,7 @@ def build_signature_loss_function(target_signature: int, temp: float = 10.0):
     Constructs a JAX-jittable loss function that penalizes a neural network 
     if its output intersection form deviates from the target Wall obstruction.
     """
-    try:
-        import jax
-        import jax.numpy as jnp
-    except ImportError:
+    if not HAS_JAX:
         raise ImportError("JAX is required.")
         
     @jax.jit

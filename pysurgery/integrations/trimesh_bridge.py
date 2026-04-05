@@ -3,6 +3,12 @@ import scipy.sparse as sp
 from pysurgery.core.complexes import ChainComplex, CWComplex
 from pysurgery.core.exceptions import DimensionError
 
+try:
+    import trimesh
+    HAS_TRIMESH = True
+except ImportError:
+    HAS_TRIMESH = False
+
 def trimesh_to_cw_complex(mesh) -> CWComplex:
     """
     Converts a Trimesh object (3D geometric mesh) into a topological CW Complex.
@@ -19,9 +25,7 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
     CWComplex
         The abstract topological representation of the mesh.
     """
-    try:
-        import trimesh
-    except ImportError:
+    if not HAS_TRIMESH:
         raise ImportError("The 'trimesh' library is required. Install via 'pip install trimesh'.")
 
     if not isinstance(mesh, trimesh.Trimesh):

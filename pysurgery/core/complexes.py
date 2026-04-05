@@ -1,8 +1,11 @@
 import numpy as np
+import warnings
+import sympy as sp
 from scipy.sparse import csr_matrix
 from typing import Dict, List, Tuple
 from pydantic import BaseModel, ConfigDict
-from .math_core import get_snf_diagonal
+from .math_core import get_snf_diagonal, get_sparse_snf_diagonal
+from ..bridge.julia_bridge import julia_engine
 
 class ChainComplex(BaseModel):
     """
@@ -46,7 +49,6 @@ class ChainComplex(BaseModel):
         # 1. Find rank of d_n (over Q/R) to get dim(ker(d_n))
         if dn is not None and dn.nnz > 0:
             # We use the SNF here too for consistency with Z-homology
-            from .math_core import get_sparse_snf_diagonal
             snf_n = get_sparse_snf_diagonal(dn)
             rank_n = np.count_nonzero(snf_n)
         else:
@@ -56,7 +58,6 @@ class ChainComplex(BaseModel):
         
         # 2. Find SNF of d_{n+1} to get rank(im(d_{n+1})) and torsion
         if dn_plus_1 is not None and dn_plus_1.nnz > 0:
-            from .math_core import get_sparse_snf_diagonal
             snf_n_plus_1 = get_sparse_snf_diagonal(dn_plus_1)
             rank_im_n_plus_1 = np.count_nonzero(snf_n_plus_1)
             torsion = [int(x) for x in snf_n_plus_1 if x > 1]
@@ -97,35 +98,17 @@ class ChainComplex(BaseModel):
             cn_size = dn_plus_1.shape[0]
         else:
             return [] # Isolated dimension
-
-        # 1. Extreme Scaling Path for 10k+ points (Millions of cells)
-        if cn_size > 1000:
-            from ..bridge.julia_bridge import julia_engine
-            
-            if julia_engine.available:
-                # Use exact sparse linear algebra in Julia to perfectly compute Z^n / B^n without float approximations
+        
+        if julia_engine.available:
+            try:
+                # Use exact sparse linear algebra in Julia to perfectly compute Z^n / B^n
                 return julia_engine.compute_sparse_cohomology_basis(dn_plus_1, dn)
-            
-            # Fallback to Python Float SVD if Julia is absolutely unavailable
-            import scipy.sparse.linalg as spla
-            
-            if dn_plus_1 is None or dn_plus_1.nnz == 0:
-                null_basis = [np.zeros(cn_size, dtype=float)] 
-            else:
-                coboundary_mat = dn_plus_1.T.astype(float)
-                try:
-                    k_svd = min(cn_size - 1, 500) 
-                    u, s, vt = spla.svds(coboundary_mat, k=k_svd, which='SM')
-                    tol = cn_size * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
-                    null_idx = np.where(s <= tol)[0]
-                    null_basis = [vt[i, :] for i in null_idx]
-                except Exception:
-                    null_basis = []
-                    
-            return null_basis
-
-        # 2. Strict Mathematical Path for exact Z-topology (Small to Medium data)
-        import sympy as sp
+            except Exception as e:
+                warnings.warn(f"Topological Hint: Julia bridge failed ({e}). Falling back to pure Python computation. For massive datasets, this might cause memory overflow or loss of exact integer torsion tracking.")
+                
+        # If Julia is unavailable, we dynamically attempt exact Python mathematics.
+        # SymPy is used for exact integer quotients, but if it exceeds memory/time thresholds,
+        # we catch the exception (or we just use an optimized float SVD fallback directly).
         
         # 1. Z^n: Kernel of d_{n+1}^T
         if dn_plus_1 is None or dn_plus_1.nnz == 0:

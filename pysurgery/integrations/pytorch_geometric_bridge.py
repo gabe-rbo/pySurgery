@@ -2,6 +2,12 @@ import numpy as np
 import scipy.sparse as sp
 from pysurgery.core.complexes import ChainComplex, CWComplex
 
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+
 def pyg_to_cw_complex(data) -> CWComplex:
     """
     Converts a PyTorch Geometric (PyG) Graph Data object into a 1-dimensional CW Complex.
@@ -18,9 +24,7 @@ def pyg_to_cw_complex(data) -> CWComplex:
     CWComplex
         The 1-dimensional CW complex representation.
     """
-    try:
-        import torch
-    except ImportError:
+    if not HAS_TORCH:
         raise ImportError("PyTorch is required. Install via 'pip install torch'.")
 
     if not hasattr(data, 'edge_index'):

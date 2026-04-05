@@ -165,7 +165,6 @@ class IntersectionForm(BaseModel):
         # P_cols is a list of column vectors. To use SymPy's column-style HNF,
         # we put them as columns of a matrix.
         # Actually, sp.Matrix(P_cols).T gives a matrix where columns are proj_v.
-        from sympy.matrices.normalforms import hermite_normal_form
         A = sp.Matrix(P_cols).T
         H = hermite_normal_form(A)
         
@@ -182,5 +181,8 @@ class IntersectionForm(BaseModel):
             return self.__class__(matrix=np.zeros((0, 0), dtype=int), dimension=self.dimension)
             
         new_matrix = basis_matrix @ self.matrix @ basis_matrix.T
+        
+        return self.__class__(matrix=new_matrix, dimension=self.dimension)
+sis_matrix @ self.matrix @ basis_matrix.T
         
         return self.__class__(matrix=new_matrix, dimension=self.dimension)
