@@ -84,7 +84,7 @@ pySurgery bridges discrete geometry to topological classification using several 
 When computing homology,
 
 $$
-H_n(X)=\ker(d_n) / \operatorname{im}(d_{n+1}),
+H_n(X)=\ker(d_n)/\mathrm{im}(d_{n+1})
 $$
 
 floating-point linear algebra misses **torsion**. pySurgery implements **Smith Normal Form** over $\mathbb{Z}$ to recover:
