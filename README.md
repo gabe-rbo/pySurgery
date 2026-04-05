@@ -1,5 +1,8 @@
 # pySurgery
 
+[![Tests](https://github.com/gabe-rbo/pysurgery/actions/workflows/tests.yml/badge.svg)](https://github.com/gabe-rbo/pysurgery/actions/workflows/tests.yml)
+[![Lint](https://github.com/gabe-rbo/pysurgery/actions/workflows/lint.yml/badge.svg)](https://github.com/gabe-rbo/pysurgery/actions/workflows/lint.yml)
+
 **pySurgery** is a Python library for *computational algebraic topology* and *computational surgery theory*: it turns discrete data (CW/simplicial complexes, meshes, TDA pipelines) into **integer** invariants strong enough to go beyond Betti numbers—e.g. **torsion**, **cup products**, **intersection forms**, and (in key cases) **homeomorphism classification signals**.
 
 If you’ve ever felt “persistent homology is informative, but not decisive,” pySurgery is aimed at the next layer of structure.

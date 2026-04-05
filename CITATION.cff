@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "Ribeiro"
+    given-names: "Gabriel"
+    email: "gabriel.ribeiro@dcc.ufmg.br"
+title: "pysurgery: Computational Surgery Theory in Python"
+version: 1.0.0
+date-released: 2026-04-05
+url: "https://github.com/gabe-rbo/pysurgery"
+repository-code: "https://github.com/gabe-rbo/pysurgery"
+keywords:
+  - mathematics
+  - topology
+  - algebraic-topology
+  - surgery-theory
+  - computational-topology
+license: "MIT"
