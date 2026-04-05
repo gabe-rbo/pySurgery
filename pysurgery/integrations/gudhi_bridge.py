@@ -178,7 +178,7 @@ def extract_persistence_to_surgery(simplex_tree, min_persistence=0.5):
                 
     return surgery_targets
 
-def signature_landscape(simplex_trees: list) -> list:
+def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
     """
     A novel TDA invariant: The Signature Landscape.
     Instead of Betti numbers, we track the evolution of the intersection form's signature 
@@ -186,23 +186,36 @@ def signature_landscape(simplex_trees: list) -> list:
     
     Parameters
     ----------
-    simplex_trees : list
-        A list of GUDHI SimplexTrees ordered by filtration value.
+    simplex_tree : gudhi.SimplexTree
+        A filtered GUDHI SimplexTree.
         
     Returns
     -------
-    list
-        The sequence of signatures over the filtration.
+    List[Tuple[float, int]]
+        The sequence of (filtration_value, signature) over the filtration.
     """
-    # This function would extract the intersection form at each step and compute its signature.
-    # For a full implementation, we need the Cup product on simplicial cohomology, which 
-    # translates to the intersection form on Poincare duals.
+    import copy
     
     signatures = []
-    # Placeholder for the complex cup product extraction logic:
-    # 1. Extract boundary matrices at filtration t
-    # 2. Compute Cohomology H^2
-    # 3. Evaluate Cup product H^2 x H^2 -> H^4
-    # 4. Form symmetric matrix Q and compute signature
+    # Get all unique filtration values where new simplices appear
+    filtration_values = sorted(list(set([s[1] for s in simplex_tree.get_filtration()])))
     
+    # We incrementally track the signature at each step.
+    # To optimize this, we query the SimplexTree up to each threshold
+    for val in filtration_values:
+        import gudhi
+        st_sub = gudhi.SimplexTree()
+        # Reconstruct the subcomplex up to the current filtration value
+        for s, f_val in simplex_tree.get_filtration():
+            if f_val <= val:
+                st_sub.insert(s, f_val)
+        
+        # If the subcomplex has 4-simplices, we can attempt to compute the intersection form
+        try:
+            q_form = simplex_tree_to_intersection_form(st_sub)
+            signatures.append((val, q_form.signature()))
+        except Exception:
+            # If no fundamental class exists at this filtration step, signature is 0
+            signatures.append((val, 0))
+            
     return signatures

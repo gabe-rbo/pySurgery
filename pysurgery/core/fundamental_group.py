@@ -100,24 +100,62 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
             col_data = d2_csc.data[col_start:col_end]
             col_row = d2_csc.indices[col_start:col_end]
             
-            # Form the relation word by traversing the boundary
-            # A true path-lifting requires orienting the boundary correctly, 
-            # which is complex for arbitrary sparse matrices without combinatorial cycle ordering.
-            # Here we present a simplified Abelianization-style approximation for the 
-            # exact algebraic string presentation.
+            # Rigorous path-lifting to orient the boundary correctly.
+            # We trace the edges head-to-tail to form the exact algebraic string presentation.
+            edges_in_face = list(zip(col_data, col_row))
+            if len(edges_in_face) < 3: 
+                continue
+                
+            edge_endpoints = {}
+            for val, e in edges_in_face:
+                if edge_list[e] is None: continue
+                u, v = edge_list[e]
+                # Directed edge is u -> v.
+                # If val == 1, path traverses u -> v. If -1, traverses v -> u.
+                if val == 1:
+                    edge_endpoints[e] = (u, v, 1)
+                else:
+                    edge_endpoints[e] = (v, u, -1)
+                    
+            path = []
+            curr_val, curr_e = edges_in_face[0]
+            if curr_e not in edge_endpoints: continue
             
+            curr_u, curr_v, curr_dir = edge_endpoints[curr_e]
+            path.append((curr_e, curr_dir))
+            used = {curr_e}
+            target_node = curr_v
+            
+            # Trace the boundary
+            while len(path) < len(edges_in_face):
+                next_e_found = False
+                for val, e in edges_in_face:
+                    if e in used or e not in edge_endpoints: continue
+                    u, v, d = edge_endpoints[e]
+                    if u == target_node:
+                        path.append((e, d))
+                        target_node = v
+                        used.add(e)
+                        next_e_found = True
+                        break
+                if not next_e_found:
+                    raise FundamentalGroupError("Topological Path Lifting Failed. "
+                                                "The 2-cell boundary edges do not form a connected, simple geometric cycle. "
+                                                "This indicates the CW Complex attaching maps contain self-intersections or higher-degree singularities that prevent exact non-abelian path tracing.")
+            
+            # If path tracing was perfectly successful, build the exact word
             relation = []
-            for val, e in zip(col_data, col_row):
+            for e, d in path:
                 if e in gen_map:
                     gen_str = gen_map[e]
-                    if val > 0:
-                        relation.extend([gen_str] * val)
-                    elif val < 0:
-                        relation.extend([gen_str + "^-1"] * abs(val))
+                    if d == 1:
+                        relation.append(gen_str)
+                    else:
+                        relation.append(f"{gen_str}^-1")
                         
             if relation:
                 relations.append(relation)
                 
-    # If relations exist, we could technically run Tietze transformations to simplify the group,
-    # but the raw presentation is mathematically complete.
+    # Raw presentation is mathematically complete.
+    # We pass it to Julia for exact Tietze/Abelianization reductions when needed in K-Theory.
     return FundamentalGroup(generators=generators, relations=relations)

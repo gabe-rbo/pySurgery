@@ -31,10 +31,54 @@ class QuadraticForm(IntersectionForm):
             raise DimensionError(f"The Arf invariant requires a symplectic basis (e_i, f_i), implying an even rank. "
                                  f"The provided quadratic form has odd rank {n}.")
         
-        # In a real implementation, we would first algorithmically construct a symplectic basis.
-        # For simplicity, we assume the basis is already (e1, f1, e2, f2, ...).
-        arf = 0
-        for i in range(0, n, 2):
-            arf += self.q_refinement[i] * self.q_refinement[i+1]
+        # Algorithmic Symplectic Gram-Schmidt over GF(2)
+        M = self.matrix % 2
+        q_vals = np.array(self.q_refinement) % 2
         
-        return arf % 2
+        basis = np.eye(n, dtype=int)
+        active_indices = list(range(n))
+        arf = 0
+        
+        while len(active_indices) >= 2:
+            # Find a hyperbolic pair
+            found = False
+            for i_idx, i in enumerate(active_indices):
+                for j_idx, j in enumerate(active_indices[i_idx+1:], start=i_idx+1):
+                    val = (basis[i] @ M @ basis[j]) % 2
+                    if val == 1:
+                        e_idx, f_idx = i, j
+                        found = True
+                        break
+                if found: break
+            
+            if not found:
+                break # Radical is non-empty
+                
+            e = basis[e_idx]
+            f = basis[f_idx]
+            
+            # Evaluate q on the basis vectors
+            def eval_q(vec):
+                lin = np.sum(vec * q_vals)
+                cross = 0
+                for k in range(n):
+                    for l in range(k+1, n):
+                        cross += vec[k] * vec[l] * M[k, l]
+                return (lin + cross) % 2
+                
+            qe = eval_q(e)
+            qf = eval_q(f)
+            arf = (arf + qe * qf) % 2
+            
+            # Orthogonalize remaining basis
+            new_active = []
+            for k in active_indices:
+                if k == e_idx or k == f_idx: continue
+                v = basis[k]
+                v_dot_f = (v @ M @ f) % 2
+                v_dot_e = (v @ M @ e) % 2
+                basis[k] = (v - v_dot_f * e - v_dot_e * f) % 2
+                new_active.append(k)
+            active_indices = new_active
+            
+        return int(arf)

@@ -58,7 +58,7 @@ class StructureSet(BaseModel):
         n = self.dimension
         
         if self.fundamental_group != "1":
-            raise StructureSetError(f"The structure set for non-simply connected groups (pi_1 = {self.fundamental_group}) requires exact evaluating of twisted Wall groups L_n(Z[pi_1]), which necessitates the SageMath integration.")
+            raise StructureSetError(f"The structure set for non-simply connected groups (pi_1 = {self.fundamental_group}) relies on evaluating exact twisted Wall groups L_n(Z[pi_1]), which necessitates the Julia bridge for representation theory computation.")
             
         if n < 5:
             raise StructureSetError("The Surgery Exact Sequence strictly applies to dimensions n >= 5. In 4D, Freedman's classification completely replaces the exact sequence.")

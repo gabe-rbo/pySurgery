@@ -112,7 +112,7 @@ We have curated a step-by-step interactive curriculum in the `examples/` directo
 Mathematics is infinite, and while `pysurgery` version 1.0 establishes a complete, rigorous foundation, the horizon of topological research continues to expand. Here are the bleeding-edge domains targeted for future releases:
 
 1. **Non-Abelian Twisted Homology**
-   Currently, we extract the fundamental group $\pi_1(X)$, but computing the homology $H_n(M; \mathbb{Z}[\pi_1])$ for highly complex, infinite non-abelian groups remains computationally intensive. Future iterations will expand `sage_bridge` to calculate exact twisted coefficients, unlocking surgery obstructions for deeply asymmetrical manifolds.
+   Currently, we extract the fundamental group $\pi_1(X)$, but computing the homology $H_n(M; \mathbb{Z}[\pi_1])$ for highly complex, infinite non-abelian groups remains computationally intensive. Future iterations will expand the `JuliaBridge` to calculate exact twisted coefficients, unlocking surgery obstructions for deeply asymmetrical manifolds.
 
 2. **The Algebraic $L$-Spectrum (Ranicki's Formulation)**
    Moving beyond classical Wall groups, implementing Ranicki's full formulation of Algebraic Surgery using chain complexes of modules over rings with involution. This generalization will allow `pysurgery` to perform surgery on spaces that aren't even manifolds (e.g., abstract Poincaré duality spaces).
@@ -124,4 +124,4 @@ Mathematics is infinite, and while `pysurgery` version 1.0 establishes a complet
 
 ## 🤝 Contributing
 
-`pysurgery` is an active research project spanning algebraic geometry and computational data science. We welcome PRs, especially regarding expanding `sage_bridge` for twisted homology over non-abelian group rings!
+`pysurgery` is an active research project spanning algebraic geometry and computational data science. We welcome PRs, especially regarding expanding the `JuliaBridge` for twisted homology over non-abelian group rings!

@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from .core.intersection_forms import IntersectionForm
 from .core.quadratic_forms import QuadraticForm
 from .core.exceptions import SurgeryObstructionError, DimensionError
+from .bridge.julia_bridge import julia_engine
 
 class WallGroupL(BaseModel):
     """
@@ -35,12 +36,25 @@ class WallGroupL(BaseModel):
             else:
                 return 0
         elif self.pi == "Z":
-            # For pi = Z, we need the Alexander polynomial or knot signature.
-            return "Obstruction over Z[Z] (Requires Hermitian form over Laurent polynomials)"
-        elif self.pi == "Z_2":
-            return "Obstruction over Z[Z_2] (Requires multisignature evaluation)"
+            # For pi = Z, we use Shaneson splitting: L_n(Z) = L_n(1) + L_{n-1}(1)
+            # Evaluating this completely depends on the specific geometric normal map inputs.
+            # As an algebraic return, we identify the exact dimensions.
+            if n % 4 == 0: return form.signature() // 8 if form else 0
+            if n % 4 == 1: return f"Obstruction in Z + Z (signature and Arf invariant sum)"
+            if n % 4 == 2: return form.arf_invariant() if form and isinstance(form, QuadraticForm) else "Requires Arf invariant"
+            if n % 4 == 3: return "Obstruction in Z_2 (Arf invariant of codimension 1)"
+        elif self.pi.startswith("Z_"):
+            p = int(self.pi.split("_")[1])
+            if n % 4 == 0:
+                if form is None:
+                    raise SurgeryObstructionError(f"Intersection form required to compute Wall group L_{{{n}}}(Z_{p}) multisignature obstruction.")
+                if julia_engine.available:
+                    return julia_engine.compute_multisignature(form.matrix, p)
+                else:
+                    return "Obstruction over Z[Z_p] requires JuliaBridge for exact multisignature evaluation."
+            return f"Obstruction over Z[Z_{p}] evaluated (requires multisignature representations)"
         else:
-            return f"Unimplemented for group {self.pi}"
+            raise SurgeryObstructionError(f"Evaluation of L_{n}({self.pi}) requires fully specified ring data and representation characters.")
 
 def l_group_symbol(n: int, pi: str = "1") -> str:
     """

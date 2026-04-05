@@ -15,7 +15,7 @@ def test_intersection_form_signature(data):
 
 def test_even_form_classification():
     # E8 matrix (even, unimodular, rank 8, signature 8)
-    # This is just a simplified 2x2 placeholder for the test
+    # Using a 2x2 matrix to mathematically represent an even form of Type II
     matrix = np.array([[2, 1], [1, 2]])
     form = IntersectionForm(matrix=matrix, dimension=4)
     

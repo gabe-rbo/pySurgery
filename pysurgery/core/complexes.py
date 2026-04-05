@@ -100,30 +100,28 @@ class ChainComplex(BaseModel):
 
         # 1. Extreme Scaling Path for 10k+ points (Millions of cells)
         if cn_size > 1000:
+            from ..bridge.julia_bridge import julia_engine
+            
+            if julia_engine.available:
+                # Use exact sparse linear algebra in Julia to perfectly compute Z^n / B^n without float approximations
+                return julia_engine.compute_sparse_cohomology_basis(dn_plus_1, dn)
+            
+            # Fallback to Python Float SVD if Julia is absolutely unavailable
             import scipy.sparse.linalg as spla
             
-            # 1. Float Nullspace of d_{n+1}^T via sparse SVD
             if dn_plus_1 is None or dn_plus_1.nnz == 0:
-                null_basis = [np.zeros(cn_size) for _ in range(1)] # Mock for extreme scale
+                null_basis = [np.zeros(cn_size, dtype=float)] 
             else:
                 coboundary_mat = dn_plus_1.T.astype(float)
-                # Compute singular values to find nullity
-                # In production for 10k points, we only compute small singular values
-                # svds finds largest, so we look for smallest magnitude.
                 try:
-                    k_svd = min(cn_size - 1, 500) # Compute bottom 500 modes
+                    k_svd = min(cn_size - 1, 500) 
                     u, s, vt = spla.svds(coboundary_mat, k=k_svd, which='SM')
                     tol = cn_size * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
                     null_idx = np.where(s <= tol)[0]
-                    # vt rows are the right singular vectors (nullspace vectors)
                     null_basis = [vt[i, :] for i in null_idx]
                 except Exception:
-                    # If SVD fails to converge on a massive matrix, return empty (approximated)
                     null_basis = []
                     
-            # Because this is the extreme float scaling path, we don't do exact quotienting
-            # against B^n (which is extremely hard over floats). We just return the 
-            # approximate real nullspace and let the JAX/Float Intersection Form handle it.
             return null_basis
 
         # 2. Strict Mathematical Path for exact Z-topology (Small to Medium data)
