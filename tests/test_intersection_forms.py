@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 from hypothesis import given, strategies as st
 from pysurgery.core.intersection_forms import IntersectionForm
 from pysurgery.core.complexes import ChainComplex

@@ -52,8 +52,8 @@ class GroupRingElement:
                     result[inv_g] = result.get(inv_g, 0) + c
                 except (ValueError, GroupRingError):
                     # For non-cyclic presentations, involution evaluates dynamically.
-                    result[f"({g})^-1"] = c
+                    result[f"{g}^-1"] = c
             else:
                 # Base element involution
-                result[f"({g})^-1"] = c
+                result[f"{g}^-1"] = c
         return GroupRingElement(result, self.group_order)

@@ -152,7 +152,7 @@ def analyze_homeomorphism_4d(m1: IntersectionForm, m2: IntersectionForm, ks1: in
         return True, "SUCCESS: Homeomorphism established via Freedman's Theorem for indefinite forms."
         
     # Case: Definite forms (require lattice isomorphism)
-    return True, "SUCCESS: Homeomorphism established (assuming lattice isomorphism for these definite forms)."
+    return False, "INCONCLUSIVE: Homeomorphism established (assuming lattice isomorphism for these definite forms)."
 
 def surgery_to_remove_impediments(m: IntersectionForm, target_sig: int) -> Tuple[bool, str]:
     """

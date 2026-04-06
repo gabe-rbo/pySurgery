@@ -47,8 +47,9 @@ class IntersectionForm(BaseModel):
         # For a symmetric matrix over R, we use eigenvalues to find the signature.
         # This is valid for non-singular forms on M.
         eigenvalues = eigvalsh(self.matrix)
-        pos = np.sum(eigenvalues > 1e-10)
-        neg = np.sum(eigenvalues < -1e-10)
+        tol = max(self.matrix.shape) * np.finfo(float).eps * max(abs(eigenvalues)) if len(eigenvalues) > 0 else 1e-10
+        pos = np.sum(eigenvalues > tol)
+        neg = np.sum(eigenvalues < -tol)
         return int(pos - neg)
 
     def is_even(self) -> bool:

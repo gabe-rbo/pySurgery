@@ -15,7 +15,7 @@ class AlgebraicSurgeryComplex(BaseModel):
     codomain: AlgebraicPoincareComplex
     degree: int = 1
 
-    def assembly_map(self, pi_1_group: str = "1") -> WallGroupL:
+    def assembly_map(self, pi_1_group: str = "1"):
         """
         Evaluates the Algebraic Assembly Map A: H_n(X; L_0) -> L_n(pi_1(X)).
         This evaluates the surgery obstruction of the normal map underlying this complex
@@ -25,7 +25,7 @@ class AlgebraicSurgeryComplex(BaseModel):
         # The assembly map systematically routes the signature/arf invariants of the domain
         # into the correct representation group.
         # This replaces the simplified placeholder with dynamic routing.
-        return WallGroupL(dimension=self.domain.dimension, pi=pi_1_group)
+        return WallGroupL(dimension=self.domain.dimension, pi=pi_1_group).compute_obstruction(self.domain.chain_complex)
 
     def s_cobordism_torsion(self, cw_complex) -> str:
         """

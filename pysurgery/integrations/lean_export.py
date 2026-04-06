@@ -39,10 +39,10 @@ def P : Matrix (Fin {n}) (Fin {n}) ℤ :=
 
 theorem {theorem_name}_valid : Pᵀ * Q1 * P = Q2 := by
   -- The proof is by strict matrix evaluation (decide)
-  decide
+  norm_num
 
 theorem {theorem_name}_unimodular : (P.det = 1) ∨ (P.det = -1) := by
   -- Evaluate determinant
-  decide
+  norm_num
 """
     return lean_code

@@ -2,7 +2,7 @@ import numpy as np
 import warnings
 import sympy as sp
 from scipy.sparse import csr_matrix
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 from .math_core import get_sparse_snf_diagonal
 from ..bridge.julia_bridge import julia_engine
@@ -67,7 +67,7 @@ class ChainComplex(BaseModel):
         else:
             rank_im_n_plus_1 = 0
             torsion = []
-        betti_n = dim_ker_n - rank_im_n_plus_1
+        betti_n = max(0, dim_ker_n - rank_im_n_plus_1)
         return int(betti_n), torsion
 
     def cohomology(self, n: int) -> Tuple[int, List[int]]:
@@ -95,7 +95,10 @@ class ChainComplex(BaseModel):
         dn_plus_1 = self.boundaries.get(n + 1)
         dn = self.boundaries.get(n)
         
-        if dn is not None:
+        # Number of n-cells (columns of d_n or rows of d_{n+1})
+        if n in self.cells:
+            cn_size = self.cells[n]
+        elif dn is not None:
             cn_size = dn.shape[1]
         elif dn_plus_1 is not None:
             cn_size = dn_plus_1.shape[0]
@@ -113,13 +116,21 @@ class ChainComplex(BaseModel):
         # SymPy is used for exact integer quotients, but if it exceeds memory/time thresholds,
         # we catch the exception (or we just use an optimized float SVD fallback directly).
         
-        # 1. Z^n: Kernel of d_{n+1}^T
+        # 1. Z^n: Kernel of d_{n+1}^T (Z-basis via Hermite Normal Form)
         if dn_plus_1 is None or dn_plus_1.nnz == 0:
             null_basis = [sp.Matrix([1 if i == j else 0 for j in range(cn_size)]) for i in range(cn_size)]
         else:
             coboundary_mat = dn_plus_1.T.toarray()
-            sym_mat = sp.Matrix(coboundary_mat)
-            null_basis = sym_mat.nullspace()
+            m, n = coboundary_mat.shape
+            aug = np.hstack((coboundary_mat.T, np.eye(n, dtype=int)))
+            sym_aug = sp.Matrix(aug.astype(int))
+            from sympy.matrices.normalforms import hermite_normal_form
+            hnf_aug = hermite_normal_form(sym_aug)
+            null_basis = []
+            for i in range(n):
+                if all(hnf_aug[i, j] == 0 for j in range(m)):
+                    vec = hnf_aug[i, m:].T
+                    null_basis.append(vec)
 
         # 2. B^n: Image of d_n^T
         if dn is None or dn.nnz == 0:

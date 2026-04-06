@@ -70,11 +70,12 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
     
     # Simple BFS starting from vertex 0
     if n_vertices > 0:
-        queue = [0]
+        import collections
+        queue = collections.deque([0])
         visited[0] = True
         
         while queue:
-            curr = queue.pop(0)
+            curr = queue.popleft()
             for neighbor, edge_idx, direction in adj[curr]:
                 if not visited[neighbor]:
                     visited[neighbor] = True

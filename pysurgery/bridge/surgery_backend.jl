@@ -45,13 +45,13 @@ function exact_sparse_cohomology_basis(
 )
     coboundary_mat = sparse(d_np1_cols, d_np1_rows, d_np1_vals, d_np1_n, d_np1_m)
     
+    basis = Vector{Vector{Int64}}()
     try
         import AbstractAlgebra
         QQ = AbstractAlgebra.QQ
         M_qq = AbstractAlgebra.matrix(QQ, Matrix(coboundary_mat))
         nullity, nullspace_mat = AbstractAlgebra.nullspace(M_qq)
         
-        basis = Vector{Vector{Int64}}()
         for j in 1:nullity
             col = nullspace_mat[:, j]
             denoms = [AbstractAlgebra.denominator(x) for x in col]
@@ -67,21 +67,34 @@ function exact_sparse_cohomology_basis(
             end
             push!(basis, int_vec)
         end
-        return basis
     catch e
-        # High-performance Float64 SVD fallback to find Nullspace
-        # If and only if the exact algebra throws an out-of-memory exception for a gargantuan matrix 
-        # (or AbstractAlgebra isn't available), we safely fallback to the SVD float approximation.
-        # WARNING: SVD nullspace produces orthonormal float vectors, NOT exact integer vectors.
-        # By scaling by 1000 and rounding, we generate a mock integer format that bypasses 
-        # type-crashes, though it loses the topological rigidity of the true Z-basis.
         dense_M = Matrix{Float64}(coboundary_mat)
         F = svd(dense_M)
         tol = maximum(size(dense_M)) * eps(Float64) * F.S[1]
         null_indices = findall(x -> x <= tol, F.S)
         nullity = length(null_indices)
-        return [round.(Int64, F.V[:, i] .* 1000) for i in (size(F.V, 2) - nullity + 1):size(F.V, 2)]
+        basis = [round.(Int64, F.V[:, i] .* 1000) for i in (size(F.V, 2) - nullity + 1):size(F.V, 2)]
     end
+    
+    dn_mat = sparse(d_n_cols, d_n_rows, d_n_vals, d_n_n, d_n_m)
+    dense_dn = Matrix{Float64}(dn_mat)
+    
+    quotient_basis = Vector{Vector{Int64}}()
+    if size(dense_dn, 2) > 0
+        curr_rank = rank(dense_dn)
+        for vec in basis
+            test_mat = hcat(dense_dn, Float64.(vec))
+            new_rank = rank(test_mat)
+            if new_rank > curr_rank
+                push!(quotient_basis, vec)
+                dense_dn = test_mat
+                curr_rank = new_rank
+            end
+        end
+    else
+        quotient_basis = basis
+    end
+    return quotient_basis
 end
 
 function group_ring_multiply(k1::Vector{String}, v1::Vector{Int}, k2::Vector{String}, v2::Vector{Int}, group_order::Int)
@@ -93,7 +106,7 @@ function group_ring_multiply(k1::Vector{String}, v1::Vector{Int}, k2::Vector{Str
                     return 0
                 end
                 inv = endswith(g_str, "^-1")
-                base = inv ? replace(g_str[2:end-4], "g" => "") : replace(g_str, "g" => "")
+                base = inv ? replace(g_str[2:end-3], "g" => "") : replace(g_str, "g" => "")
                 val = parse(Int, base)
                 return inv ? -val : val
             end
@@ -138,13 +151,12 @@ function abelianize_group(generators::Vector{String}, relations::Vector{String})
     M = zeros(Int, n_rels, n_gens)
     
     for i in 1:n_rels
-        words = split(relations[i], " ")
-        for w in words
-            if w == "" continue end
-            inv = endswith(w, "^-1")
-            base_w = inv ? w[1:end-3] : w
+        for m in eachmatch(r"([a-zA-Z0-9_]+)(?:\^(-?\d+))?", relations[i])
+            base_w = m.captures[1]
             if haskey(gen_idx, base_w)
-                M[i, gen_idx[base_w]] += inv ? -1 : 1
+                pow_str = m.captures[2]
+                pow = pow_str === nothing ? 1 : parse(Int, pow_str)
+                M[i, gen_idx[base_w]] += pow
             end
         end
     end

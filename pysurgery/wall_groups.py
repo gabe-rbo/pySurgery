@@ -41,7 +41,7 @@ class WallGroupL(BaseModel):
             if n % 4 == 0:
                 return form.signature() // 8 if form else 0
             if n % 4 == 1:
-                return "Obstruction in Z + Z (signature and Arf invariant sum)"
+                return "Z"
             if n % 4 == 2:
                 return form.arf_invariant() if form and isinstance(form, QuadraticForm) else "Requires Arf invariant"
             if n % 4 == 3:

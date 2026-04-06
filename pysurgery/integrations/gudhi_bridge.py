@@ -124,7 +124,7 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
             raise HomologyError("No fundamental class [M] found (H_4 is empty or computation failed). "
                                 "Topological translation: The simplicial complex does not represent a closed, orientable 4-manifold. The Cup Product cannot be evaluated without [M].")
     else:
-        fund_class = np.ones(cells[4], dtype=np.int64)
+        raise HomologyError("Fundamental class requires topological boundary data. Cannot default to vector of ones.")
         
     r = len(basis_2)
     
@@ -209,12 +209,12 @@ def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
     A novel TDA invariant: The Signature Landscape.
     Instead of Betti numbers, we track the evolution of the intersection form's signature 
     across a sequence of filtered simplicial complexes (representing a filtration).
-    
+
     Parameters
     ----------
     simplex_tree : gudhi.SimplexTree
         A filtered GUDHI SimplexTree.
-        
+
     Returns
     -------
     List[Tuple[float, int]]
@@ -222,29 +222,26 @@ def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
     """
     if not HAS_GUDHI:
         raise ImportError("GUDHI is required. Install via 'pip install gudhi'.")
-        
+
     signatures = []
-    # Get all unique filtration values where new simplices appear
-    filtration_values = sorted(list(set([s[1] for s in simplex_tree.get_filtration()])))
-    
-    # We incrementally track the signature at each step.
-    # To optimize this, we query the SimplexTree up to each threshold
+    if simplex_tree.dimension() != 4:
+        import warnings
+        warnings.warn("signature_landscape currently hard-codes dimension 4. Other dimensions will return signature 0.")
+
+    st_sub = gudhi.SimplexTree()
+    filtration = sorted(simplex_tree.get_filtration(), key=lambda x: x[1])
+    filtration_values = sorted(list(set([s[1] for s in filtration])))
+
+    idx = 0
     for val in filtration_values:
-        st_sub = gudhi.SimplexTree()
-        # Reconstruct the subcomplex up to the current filtration value
-        for s, f_val in simplex_tree.get_filtration():
-            if f_val <= val:
-                st_sub.insert(s, f_val)
-        
-        # If the subcomplex has 4-simplices, we can attempt to compute the intersection form
+        while idx < len(filtration) and filtration[idx][1] <= val:
+            st_sub.insert(filtration[idx][0], filtration[idx][1])
+            idx += 1
+
         try:
             q_form = simplex_tree_to_intersection_form(st_sub)
             signatures.append((val, q_form.signature()))
         except Exception:
-            # At early filtration steps, the complex may not form a closed 4-manifold.
-            # Thus, the fundamental class [M] might not exist or the Alexander-Whitney 
-            # evaluation might fail. In such cases, the mathematical signature is strictly 0.
-            # We silently catch this because it is an expected topological constraint during filtration.
             signatures.append((val, 0))
-            
+
     return signatures

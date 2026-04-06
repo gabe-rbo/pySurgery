@@ -77,10 +77,9 @@ def alexander_whitney_cup(
         return np.zeros(0, dtype=np.int64)
         
     # Standardize input for fast memory layout
-    simplices_arr = np.array(simplices_p_plus_q, dtype=np.int32)
-    
-    return _numpy_alexander_whitney_cup(
-        alpha, beta, p, q, 
+    simplices_arr = np.array(simplices_p_plus_q, dtype=np.int64)
+
+    return _numpy_alexander_whitney_cup(        alpha, beta, p, q, 
         simplices_arr, 
         simplex_to_idx_p, 
         simplex_to_idx_q
