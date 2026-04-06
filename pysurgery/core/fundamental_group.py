@@ -1,3 +1,4 @@
+from collections import deque
 from typing import List
 from pydantic import BaseModel, ConfigDict
 from .exceptions import FundamentalGroupError
@@ -70,11 +71,11 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
     
     # Simple BFS starting from vertex 0
     if n_vertices > 0:
-        queue = [0]
+        queue = deque([0])
         visited[0] = True
         
         while queue:
-            curr = queue.pop(0)
+            curr = queue.popleft()
             for neighbor, edge_idx, direction in adj[curr]:
                 if not visited[neighbor]:
                     visited[neighbor] = True
@@ -145,6 +146,13 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
                     raise FundamentalGroupError("Topological Path Lifting Failed. "
                                                 "The 2-cell boundary edges do not form a connected, simple geometric cycle. "
                                                 "This indicates the CW Complex attaching maps contain self-intersections or higher-degree singularities that prevent exact non-abelian path tracing.")
+
+            # Verify the path forms a closed loop: the endpoint must return to curr_u.
+            if target_node != curr_u:
+                raise FundamentalGroupError(
+                    f"Boundary of 2-cell {f} forms an open path (ends at vertex {target_node}, "
+                    f"started at vertex {curr_u}). The CW complex has inconsistent attaching maps."
+                )
             
             # If path tracing was perfectly successful, build the exact word
             relation = []

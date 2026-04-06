@@ -38,11 +38,13 @@ def P : Matrix (Fin {n}) (Fin {n}) ℤ :=
   {matrix_to_lean(P)}
 
 theorem {theorem_name}_valid : Pᵀ * Q1 * P = Q2 := by
-  -- The proof is by strict matrix evaluation (decide)
-  decide
+  -- native_decide compiles the check to native code, which is faster than `decide`
+  -- for small matrices.  For larger matrices (n > ~4), consider replacing this
+  -- with explicit norm_num or ring-based tactics for better scalability.
+  native_decide
 
 theorem {theorem_name}_unimodular : (P.det = 1) ∨ (P.det = -1) := by
   -- Evaluate determinant
-  decide
+  native_decide
 """
     return lean_code

@@ -18,6 +18,14 @@ class QuadraticForm(IntersectionForm):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     q_refinement: List[int]
 
+    def _check_dimension(self):
+        """QuadraticForm is valid for both 4k (L_{4k}) and 4k+2 (L_{4k+2}) manifolds."""
+        if self.dimension % 4 not in (0, 2):
+            raise DimensionError(
+                "QuadraticForm is defined for 4k or 4k+2-dimensional manifolds "
+                "(surgery obstructions in L_{4k}(1) and L_{4k+2}(1))."
+            )
+
     def arf_invariant(self) -> int:
         """
         Compute the Arf invariant of the quadratic form.

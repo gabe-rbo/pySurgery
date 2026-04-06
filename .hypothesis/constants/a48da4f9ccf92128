@@ -1,0 +1,4 @@
+# file: /usr/lib/python3/dist-packages/colorama/winterm.py
+# hypothesis_version: 6.151.11
+
+[128, "This isn't windows!"]

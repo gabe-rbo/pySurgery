@@ -41,7 +41,8 @@ class WallGroupL(BaseModel):
             if n % 4 == 0:
                 return form.signature() // 8 if form else 0
             if n % 4 == 1:
-                return "Obstruction in Z + Z (signature and Arf invariant sum)"
+                # L_1(Z[Z]) ≅ L_0(1) = Z by Shaneson splitting; obstruction lives in Z.
+                return "Obstruction in Z (Shaneson L_0(1) component from π=Z splitting)"
             if n % 4 == 2:
                 return form.arf_invariant() if form and isinstance(form, QuadraticForm) else "Requires Arf invariant"
             if n % 4 == 3:

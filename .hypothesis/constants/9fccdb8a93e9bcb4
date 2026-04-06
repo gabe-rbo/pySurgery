@@ -1,0 +1,4 @@
+# file: /home/runner/work/pySurgery/pySurgery/pysurgery/core/intersection_forms.py
+# hypothesis_version: 6.151.11
+
+[1.0, 'I', 'II', 'IntersectionForm', 'even', 'rank', 'signature', 'type']

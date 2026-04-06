@@ -76,8 +76,9 @@ def alexander_whitney_cup(
     if len(simplices_p_plus_q) == 0:
         return np.zeros(0, dtype=np.int64)
         
-    # Standardize input for fast memory layout
-    simplices_arr = np.array(simplices_p_plus_q, dtype=np.int32)
+    # Use int64 for consistency with the rest of the pipeline and to avoid
+    # overflow on complexes with more than ~2.1 billion vertices.
+    simplices_arr = np.array(simplices_p_plus_q, dtype=np.int64)
     
     return _numpy_alexander_whitney_cup(
         alpha, beta, p, q, 

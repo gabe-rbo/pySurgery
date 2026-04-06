@@ -1,0 +1,4 @@
+# file: /usr/lib/python3/dist-packages/colorama/win32.py
+# hypothesis_version: 6.151.11
+
+['dwCursorPosition', 'dwMaximumWindowSize', 'dwSize', 'srWindow', 'wAttributes']

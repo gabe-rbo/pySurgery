@@ -32,6 +32,10 @@ class IntersectionForm(BaseModel):
         super().__init__(**data)
         if not np.allclose(self.matrix, self.matrix.T):
             raise NonSymmetricError("Intersection form matrix must be symmetric.")
+        self._check_dimension()
+
+    def _check_dimension(self):
+        """Validate that the manifold dimension is appropriate for this form type."""
         if self.dimension % 4 != 0:
             raise DimensionError("Intersection forms on H_{2k}(M) are usually defined for 4k-dimensional manifolds.")
 
@@ -47,8 +51,10 @@ class IntersectionForm(BaseModel):
         # For a symmetric matrix over R, we use eigenvalues to find the signature.
         # This is valid for non-singular forms on M.
         eigenvalues = eigvalsh(self.matrix)
-        pos = np.sum(eigenvalues > 1e-10)
-        neg = np.sum(eigenvalues < -1e-10)
+        max_abs = float(np.max(np.abs(eigenvalues))) if len(eigenvalues) > 0 else 1.0
+        tol = max(self.matrix.shape) * np.finfo(float).eps * max(max_abs, 1.0)
+        pos = np.sum(eigenvalues > tol)
+        neg = np.sum(eigenvalues < -tol)
         return int(pos - neg)
 
     def is_even(self) -> bool:

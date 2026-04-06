@@ -17,10 +17,14 @@ class AlgebraicSurgeryComplex(BaseModel):
 
     def assembly_map(self, pi_1_group: str = "1") -> WallGroupL:
         """
-        Evaluates the Algebraic Assembly Map A: H_n(X; L_0) -> L_n(pi_1(X)).
-        This evaluates the surgery obstruction of the normal map underlying this complex
-        by projecting local geometric data (the intersection forms of the sub-manifolds) 
-        directly to the global fundamental group ring Z[pi_1].
+        Returns an unevaluated WallGroupL object configured for this complex's dimension
+        and the given fundamental group.
+
+        To obtain the actual surgery obstruction value, call
+        ``compute_obstruction(form)`` on the returned object, supplying the
+        relevant intersection or quadratic form.  This two-step design mirrors
+        the algebraic assembly map A: H_n(X; L_0) → L_n(π_1(X)), where the
+        map itself is constructed here and evaluated separately with geometric data.
         """
         # The assembly map systematically routes the signature/arf invariants of the domain
         # into the correct representation group.

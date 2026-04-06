@@ -1,3 +1,4 @@
+import copy
 import warnings
 import numpy as np
 import scipy.sparse as sp
@@ -124,7 +125,18 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
             raise HomologyError("No fundamental class [M] found (H_4 is empty or computation failed). "
                                 "Topological translation: The simplicial complex does not represent a closed, orientable 4-manifold. The Cup Product cannot be evaluated without [M].")
     else:
-        fund_class = np.ones(cells[4], dtype=np.int64)
+        # d4 is not in the boundary dict even though 4-simplices exist.
+        # This means the chain complex is incomplete; we cannot recover [M] safely.
+        if cells[4] == 1:
+            # Special case: exactly one 4-simplex → the all-ones vector is correct.
+            fund_class = np.ones(1, dtype=np.int64)
+            fund_class_found = True
+        else:
+            raise HomologyError(
+                f"Cannot determine fundamental class [M]: {cells[4]} 4-simplices found but "
+                "the boundary map d4 is absent from the chain complex. "
+                "Provide a complete chain complex with all boundary operators."
+            )
         
     r = len(basis_2)
     
@@ -209,7 +221,12 @@ def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
     A novel TDA invariant: The Signature Landscape.
     Instead of Betti numbers, we track the evolution of the intersection form's signature 
     across a sequence of filtered simplicial complexes (representing a filtration).
-    
+
+    Note: complexity is O(N·C) where N is the number of unique filtration values and C is
+    the cost of one ``simplex_tree_to_intersection_form`` call.  For large filtrations, this
+    can be expensive.  Only 4-dimensional subcomplexes yield non-zero signatures; a warning
+    is emitted if the complex has no 4-simplices.
+
     Parameters
     ----------
     simplex_tree : gudhi.SimplexTree
@@ -222,29 +239,30 @@ def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
     """
     if not HAS_GUDHI:
         raise ImportError("GUDHI is required. Install via 'pip install gudhi'.")
-        
+
+    max_dim = simplex_tree.dimension()
+    if max_dim < 4:
+        warnings.warn(
+            f"Topological Hint: signature_landscape computes intersection forms on 4-simplices. "
+            f"This complex has dimension {max_dim}. All signature values will be 0."
+        )
+
     signatures = []
-    # Get all unique filtration values where new simplices appear
-    filtration_values = sorted(list(set([s[1] for s in simplex_tree.get_filtration()])))
-    
-    # We incrementally track the signature at each step.
-    # To optimize this, we query the SimplexTree up to each threshold
+    # Get all unique filtration values where new simplices appear.
+    filtration_values = sorted(set(f_val for _, f_val in simplex_tree.get_filtration()))
+
     for val in filtration_values:
-        st_sub = gudhi.SimplexTree()
-        # Reconstruct the subcomplex up to the current filtration value
-        for s, f_val in simplex_tree.get_filtration():
-            if f_val <= val:
-                st_sub.insert(s, f_val)
-        
-        # If the subcomplex has 4-simplices, we can attempt to compute the intersection form
+        # Build the subcomplex up to this filtration value using deepcopy + prune,
+        # avoiding a full quadratic reconstruction from scratch.
+        st_sub = copy.deepcopy(simplex_tree)
+        st_sub.prune_above_filtration(val)
+
         try:
             q_form = simplex_tree_to_intersection_form(st_sub)
             signatures.append((val, q_form.signature()))
         except Exception:
-            # At early filtration steps, the complex may not form a closed 4-manifold.
-            # Thus, the fundamental class [M] might not exist or the Alexander-Whitney 
-            # evaluation might fail. In such cases, the mathematical signature is strictly 0.
-            # We silently catch this because it is an expected topological constraint during filtration.
+            # At early filtration steps the subcomplex may not form a closed 4-manifold,
+            # so the fundamental class or intersection form may not exist.
             signatures.append((val, 0))
-            
+
     return signatures

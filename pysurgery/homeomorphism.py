@@ -151,8 +151,13 @@ def analyze_homeomorphism_4d(m1: IntersectionForm, m2: IntersectionForm, ks1: in
     if m1.is_indefinite():
         return True, "SUCCESS: Homeomorphism established via Freedman's Theorem for indefinite forms."
         
-    # Case: Definite forms (require lattice isomorphism)
-    return True, "SUCCESS: Homeomorphism established (assuming lattice isomorphism for these definite forms)."
+    # Case: Definite forms require full lattice isomorphism — computationally hard in general.
+    # Non-isomorphic definite even unimodular forms exist at rank ≥ 16 (e.g., E8⊕E8 vs Γ_{16}).
+    return False, (
+        "INCONCLUSIVE: Both forms are definite with matching rank, signature, and parity. "
+        "Classification of definite unimodular forms over Z requires a full lattice isomorphism "
+        "check, which is computationally hard and not implemented here."
+    )
 
 def surgery_to_remove_impediments(m: IntersectionForm, target_sig: int) -> Tuple[bool, str]:
     """

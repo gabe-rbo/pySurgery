@@ -68,6 +68,13 @@ class ChainComplex(BaseModel):
             rank_im_n_plus_1 = 0
             torsion = []
         betti_n = dim_ker_n - rank_im_n_plus_1
+        if betti_n < 0:
+            warnings.warn(
+                f"Topological Hint: Computed negative Betti number b_{n} = {betti_n}. "
+                "This indicates the boundary matrices violate ∂²=0, or rank estimation is "
+                "inaccurate (e.g., from floating-point SVD). Clamping to 0."
+            )
+            betti_n = 0
         return int(betti_n), torsion
 
     def cohomology(self, n: int) -> Tuple[int, List[int]]:
@@ -99,8 +106,11 @@ class ChainComplex(BaseModel):
             cn_size = dn.shape[1]
         elif dn_plus_1 is not None:
             cn_size = dn_plus_1.shape[0]
+        elif n in self.cells:
+            # Isolated dimension: no boundary maps but cell count is known explicitly.
+            cn_size = self.cells[n]
         else:
-            return [] # Isolated dimension
+            return []  # Truly unknown dimension
         
         if julia_engine.available:
             try:
@@ -110,8 +120,9 @@ class ChainComplex(BaseModel):
                 warnings.warn(f"Topological Hint: Julia bridge failed ({e}). Falling back to pure Python computation. For massive datasets, this might cause memory overflow or loss of exact integer torsion tracking.")
                 
         # If Julia is unavailable, we dynamically attempt exact Python mathematics.
-        # SymPy is used for exact integer quotients, but if it exceeds memory/time thresholds,
-        # we catch the exception (or we just use an optimized float SVD fallback directly).
+        # Note: the SymPy fallback below computes a Q-basis (over the rationals) and scales
+        # to integers via LCM.  This may NOT yield a minimal Z-generating set (Smith Normal
+        # Form basis).  For exact integer cohomology bases, enable the Julia backend.
         
         # 1. Z^n: Kernel of d_{n+1}^T
         if dn_plus_1 is None or dn_plus_1.nnz == 0:
