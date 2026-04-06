@@ -69,8 +69,9 @@ function exact_sparse_cohomology_basis(
         else
             # H^n = Z^n / B^n: keep only cocycles independent from the image B^n.
             # Start from the image columns and greedily add independent nullspace vectors.
-            coboundary_prev = Matrix(sparse(d_n_cols, d_n_rows, d_n_vals, d_n_n, d_n_m))
-            accumulated = AbstractAlgebra.matrix(QQ, coboundary_prev)
+            # image_mat holds the generators of B^n = im(δ^{n-1})
+            image_mat = Matrix(sparse(d_n_cols, d_n_rows, d_n_vals, d_n_n, d_n_m))
+            accumulated = AbstractAlgebra.matrix(QQ, image_mat)
             accumulated_rank = AbstractAlgebra.rank(accumulated)
             for j in 1:nullity
                 col_data = [nullspace_mat[k, j] for k in 1:d_np1_m]
@@ -95,7 +96,8 @@ function exact_sparse_cohomology_basis(
         # This fallback also does NOT subtract the coboundary image B^n.
         dense_M = Matrix{Float64}(coboundary_mat)
         F = svd(dense_M; full=true)
-        tol = maximum(size(dense_M)) * eps(Float64) * (isempty(F.S) ? 1.0 : F.S[1])
+        largest_sv = isempty(F.S) ? 1.0 : max(F.S[1], 1.0)
+        tol = maximum(size(dense_M)) * eps(Float64) * largest_sv
         rank_M = count(x -> x > tol, F.S)
         nullity_svd = size(F.V, 2) - rank_M
         return [round.(Int64, F.V[:, rank_M + i] .* 1000) for i in 1:nullity_svd]
