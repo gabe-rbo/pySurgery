@@ -158,15 +158,26 @@ Discrete topology can blow up combinatorially (e.g., large point clouds). pySurg
 ```text
 pysurgery/
 ├── core/
+│   ├── cup_product.py
 │   ├── complexes.py
+│   ├── characteristic_clases.py
+│   ├── exceptions.py
+│   ├── fundamental_group.py
+│   ├── group_rings.py
 │   ├── intersection_forms.py
-│   └── math_core.py
-├── homeomorphism/
+│   ├── k_theory.py
+│   ├── kirby_forms.py
+|   ├── math_core.py
+│   └── quadratic_forms.py
+├── bridge/
+│   ├── julia_bridge.py
+│   ├── surgery_backend.jl
 ├── integrations/
 │   ├── gudhi_bridge.py
 │   ├── trimesh_bridge.py
 │   ├── pytorch_geometric_bridge.py
-│   └── jax_bridge.py
+│   ├── jax_bridge.py
+│   └── lean_export.py
 ```
 
 Key modules:
