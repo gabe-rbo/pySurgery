@@ -20,10 +20,10 @@ def extract_stiefel_whitney_w2(q: IntersectionForm) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        The Z_2 coefficient vector representing the w_2 class in the H_2 basis.
+        The Z_2 coefficient vector representing the w_2 class in the H_{k} basis.
     """
-    if q.dimension != 4:
-        raise CharacteristicClassError(f"w_2 via the intersection form Wu class is defined here specifically for 4-manifolds. "
+    if q.dimension % 2 != 0:
+        raise CharacteristicClassError(f"w_2 via the intersection form Wu class is defined here specifically for even-dimensional manifolds. "
                                        f"Received dimension {q.dimension}.")
         
     # We are looking for a vector w in {0, 1}^n such that:

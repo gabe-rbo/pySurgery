@@ -152,10 +152,13 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
             Q[i, j] = np.sum(cup_ij * fund_class)
             
     # Due to chain level artifacts, enforce perfect symmetry on the cohomology level matrix
+    if not np.array_equal(Q, Q.T):
+        warnings.warn("Topological Hint: Cup product matrix is not strictly symmetric. Forcing symmetry may corrupt the intersection form.")
+        
     if is_float:
         Q_sym = (Q + Q.T) / 2.0
     else:
-        Q_sym = (Q + Q.T) // 2
+        Q_sym = np.round((Q + Q.T) / 2.0).astype(np.int64)
     
     return IntersectionForm(matrix=Q_sym, dimension=4)
 

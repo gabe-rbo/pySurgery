@@ -74,7 +74,7 @@ def l_group_symbol(n: int, pi: str = "1") -> str:
         if n % 4 == 0:
             return "Z"
         if n % 4 == 1:
-            return "Z + Z"
+            return "Z"
         if n % 4 == 2:
             return "Z_2"
         if n % 4 == 3:

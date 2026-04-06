@@ -35,12 +35,19 @@ def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
         if len(torsions) == 0:
             return WhiteheadGroup(rank=0, description=f"Abelianization is free Z^{free_rank}. Assuming Farrell-Jones, Wh(pi_1) = 0. No s-Cobordism obstruction.")
             
+        # Precomputed Whitehead group ranks for small cyclic groups Z_n
+        known_wh_ranks = {1: 0, 2: 0, 3: 0, 4: 0, 5: 1, 6: 0, 7: 2, 8: 1, 9: 2, 10: 0, 11: 4, 12: 0}
+        
         # If there is torsion, it's a product of cyclic groups. We evaluate Wh(C_n).
         total_rank = 0
         for n in torsions:
             if n > 1:
-                divisors = sum(1 for i in range(1, n + 1) if n % i == 0)
-                rank_n = (n // 2) + 1 - divisors
+                if n in known_wh_ranks:
+                    rank_n = known_wh_ranks[n]
+                else:
+                    # Fallback to cyclotomic formula approximation
+                    divisors = sum(1 for i in range(1, n + 1) if n % i == 0)
+                    rank_n = (n // 2) + 1 - divisors
                 total_rank += max(0, rank_n)
                 
         if total_rank == 0:

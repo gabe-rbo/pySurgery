@@ -84,6 +84,11 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
                 
     d2 = sp.csr_matrix((d2_data, (d2_rows, d2_cols)), shape=(n_edges, n_faces), dtype=np.int64)
     
+    boundary_check = d1 @ d2
+    if boundary_check.nnz > 0 and np.any(boundary_check.data != 0):
+        from pysurgery.core.exceptions import DimensionError
+        raise DimensionError("Invalid mesh topology: boundary operator d_1 o d_2 != 0. The mesh faces are not consistently oriented or the mesh contains non-manifold geometry.")
+    
     attaching_maps = {1: d1, 2: d2}
     
     return CWComplex(cells=cells, attaching_maps=attaching_maps)

@@ -2,8 +2,8 @@ import numpy as np
 import warnings
 import sympy as sp
 from scipy.sparse import csr_matrix
-from typing import Dict, List, Tuple
-from pydantic import BaseModel, ConfigDict
+from typing import Dict, List, Tuple, Any
+from pydantic import BaseModel, ConfigDict, Field
 from .math_core import get_sparse_snf_diagonal
 from ..bridge.julia_bridge import julia_engine
 
@@ -15,6 +15,7 @@ class ChainComplex(BaseModel):
     
     boundaries: Dict[int, csr_matrix]
     dimensions: List[int]
+    cells: Dict[int, int] = Field(default_factory=dict)
 
     def homology(self, n: int) -> Tuple[int, List[int]]:
         """
@@ -38,12 +39,14 @@ class ChainComplex(BaseModel):
             return 0, []
 
         # Number of n-cells (columns of d_n or rows of d_{n+1})
-        if dn is not None:
+        if n in self.cells:
+            c_n_size = self.cells[n]
+        elif dn is not None:
             c_n_size = dn.shape[1]
         elif dn_plus_1 is not None:
             c_n_size = dn_plus_1.shape[0]
         else:
-            # Isolated dimension with no boundaries
+            # Isolated dimension with no boundaries and no explicit cell count
             return 0, []
 
         # 1. Find rank of d_n (over Q/R) to get dim(ker(d_n))
@@ -167,5 +170,6 @@ class CWComplex(BaseModel):
     def cellular_chain_complex(self) -> ChainComplex:
         return ChainComplex(
             boundaries=self.attaching_maps, 
-            dimensions=sorted(self.cells.keys())
+            dimensions=sorted(self.cells.keys()),
+            cells=self.cells
         )

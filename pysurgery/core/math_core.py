@@ -36,7 +36,7 @@ def smith_normal_form(A_in: np.ndarray) -> np.ndarray:
     Returns the diagonal matrix S such that S = UAV for unimodular U, V.
     (This implementation returns only S for homology/torsion purposes).
     """
-    A = A_in.copy()
+    A = A_in.astype(np.int64).copy()
     rows, cols = A.shape
     curr_diag = 0
     

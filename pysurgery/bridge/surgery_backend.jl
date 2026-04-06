@@ -88,10 +88,22 @@ function group_ring_multiply(k1::Vector{String}, v1::Vector{Int}, k2::Vector{Str
     res_dict = Dict{String, Int}()
     for i in 1:length(k1)
         for j in 1:length(k2)
-            # Parse g^N
-            p1 = k1[i] == "e" || k1[i] == "1" ? 0 : parse(Int, replace(k1[i], "g" => ""))
-            p2 = k2[j] == "e" || k2[j] == "1" ? 0 : parse(Int, replace(k2[j], "g" => ""))
+            function parse_gen(g_str)
+                if g_str == "e" || g_str == "1"
+                    return 0
+                end
+                inv = endswith(g_str, "^-1")
+                base = inv ? replace(g_str[2:end-4], "g" => "") : replace(g_str, "g" => "")
+                val = parse(Int, base)
+                return inv ? -val : val
+            end
+            
+            p1 = parse_gen(k1[i])
+            p2 = parse_gen(k2[j])
             p_res = (p1 + p2) % group_order
+            if p_res < 0
+                p_res += group_order
+            end
             g_str = p_res == 0 ? "1" : "g$(p_res)"
             
             coeff = v1[i] * v2[j]
@@ -112,11 +124,7 @@ function group_ring_multiply(k1::Vector{String}, v1::Vector{Int}, k2::Vector{Str
 end
 
 function multisignature(matrix, p::Int)
-    # Represents L_4k(Z_p). The multisignature evaluates the signature of the lifted form
-    # acting on the group ring Z[Z_p]. Over C, it splits into p signatures.
-    # For automated un-twisted Z_p, we return the primary signature modulo p.
-    mat = Matrix{Float64}(matrix)
-    return hermitian_signature(mat) % p
+    error("True multisignature computation over character eigenspaces is mathematically complex and currently unsupported. Signature modulo p is incorrect.")
 end
 
 function abelianize_group(generators::Vector{String}, relations::Vector{String})
@@ -148,6 +156,15 @@ function abelianize_group(generators::Vector{String}, relations::Vector{String})
     
     rank = n_gens - length(s_vals)
     return rank, torsion
+end
+
+end
+s = round.(Int, S[S .> tol])
+        torsion = sort(s_vals[s_vals .> 1])
+        
+        rank = n_gens - length(s_vals)
+        return rank, torsion
+    end
 end
 
 end

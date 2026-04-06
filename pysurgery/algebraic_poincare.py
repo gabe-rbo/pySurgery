@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Dict
 from pydantic import BaseModel, ConfigDict
 from .core.complexes import ChainComplex
 from .core.exceptions import DimensionError
@@ -22,6 +23,7 @@ class AlgebraicPoincareComplex(BaseModel):
     chain_complex: ChainComplex
     fundamental_class: np.ndarray
     dimension: int
+    psi: Dict[int, np.ndarray] = {}
 
     def dual_complex(self) -> ChainComplex:
         """

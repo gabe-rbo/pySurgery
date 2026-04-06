@@ -1,0 +1,4 @@
+# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/core/__init__.py
+# hypothesis_version: 6.151.10
+
+['CWComplex', 'ChainComplex', 'FundamentalGroup', 'GroupRingElement', 'IntersectionForm', 'KirbyDiagram', 'QuadraticForm', 'WhiteheadGroup', 'check_spin_structure', 'extract_pi_1', 'get_snf_diagonal']
