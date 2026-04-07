@@ -30,9 +30,10 @@ class AlgebraicPoincareComplex(BaseModel):
         Compute the dual chain complex C^* = Hom(C, Z).
         """
         # Transpose the boundary operators to get coboundary operators.
-        coboundaries = {n: self.chain_complex.boundaries[n+1].T.tocsr()
+        # Store δ^n at key n+1 so that boundaries[k] means "map going into degree k-1"
+        coboundaries = {n + 1: self.chain_complex.boundaries[n + 1].T.tocsr()
                         for n in self.chain_complex.dimensions
-                        if (n+1) in self.chain_complex.boundaries}
+                        if (n + 1) in self.chain_complex.boundaries}
         return ChainComplex(boundaries=coboundaries, dimensions=self.chain_complex.dimensions)
 
     def cap_product(self, cohomology_class: np.ndarray, k: int) -> np.ndarray:

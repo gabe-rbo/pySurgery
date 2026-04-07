@@ -64,6 +64,12 @@ class ChainComplex(BaseModel):
             snf_n_plus_1 = get_sparse_snf_diagonal(dn_plus_1)
             rank_im_n_plus_1 = np.count_nonzero(snf_n_plus_1)
             torsion = [int(x) for x in snf_n_plus_1 if x > 1]
+            if not torsion and any(x == 1 for x in snf_n_plus_1):
+                warnings.warn(
+                    "Torsion in homology may be non-trivial but cannot be computed without "
+                    "exact integer arithmetic (Julia bridge unavailable). Install Julia for "
+                    "exact Z-torsion computation."
+                )
         else:
             rank_im_n_plus_1 = 0
             torsion = []

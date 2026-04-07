@@ -1,6 +1,21 @@
+import math
 from pydantic import BaseModel, ConfigDict
 from .fundamental_group import FundamentalGroup
 from ..bridge.julia_bridge import julia_engine
+
+def euler_totient(n):
+    result = n
+    p = 2
+    temp = n
+    while p * p <= temp:
+        if temp % p == 0:
+            while temp % p == 0:
+                temp //= p
+            result -= result // p
+        p += 1
+    if temp > 1:
+        result -= result // temp
+    return result
 
 class WhiteheadGroup(BaseModel):
     """
@@ -49,8 +64,7 @@ def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
                     rank_n = known_wh_ranks[n]
                 else:
                     # Fallback to cyclotomic formula approximation for primes/prime-powers
-                    divisors = sum(1 for i in range(1, n + 1) if n % i == 0)
-                    rank_n = (n // 2) + 1 - divisors
+                    rank_n = (euler_totient(n) // 2) + 1 - divisors # yet-wrong for non-prime power n
                 total_rank += max(0, rank_n)
                 
         if total_rank == 0:

@@ -47,7 +47,7 @@ def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, 
         
     return True, "SUCCESS: Homeomorphism established via the Classification Theorem of Closed Surfaces. Both manifolds share the same orientability and genus."
 
-def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, str]:
+def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool | None, str]:
     """
     Analyzes the potential for homeomorphism between two 3-dimensional manifolds.
     
@@ -70,7 +70,7 @@ def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, 
     # If they are homology spheres
     try:
         if c1.homology(1) == (0, []) and c1.homology(2) == (0, []) and c1.homology(3) == (1, []):
-            return False, "INCONCLUSIVE: Both are Homology Spheres. By Perelman's resolution of the Poincare Conjecture, if they are simply-connected (pi_1 = 1), they are homeomorphic to S^3. However, pi_1 computation is required to distinguish from exotic homology spheres (like the Poincare dodecahedral space)."
+            return None, "INCONCLUSIVE: Both are Homology Spheres. By Perelman's resolution of the Poincare Conjecture, if they are simply-connected (pi_1 = 1), they are homeomorphic to S^3. However, pi_1 computation is required to distinguish from exotic homology spheres (like the Poincare dodecahedral space)."
     except Exception as e:
         warnings.warn(f"Topological Hint: Sphere validation check failed ({e}).")
         
@@ -159,8 +159,14 @@ def surgery_to_remove_impediments(m: IntersectionForm, target_sig: int) -> Tuple
     Analyzes if surgery can be used to remove the 'impediment' to a target signature.
     """
     sig_diff = m.signature() - target_sig
-    
-    if sig_diff % 8 != 0:
-        return False, f"IMPEDIMENT: The signature difference {sig_diff} is not divisible by 8. This is a primary surgery obstruction in L_4(1)."
-    
-    return True, f"PLAN: Performing surgery on {sig_diff // 8} pairs of classes could theoretically bridge the gap, assuming the presence of enough hyperbolic planes."
+    if sig_diff == 0:
+        return True, "Signatures already match. No surgery required."
+    # Blow-up with CP^2 or -CP^2 changes signature by ±1 and rank by 1
+    n_blowups = abs(sig_diff)
+    blowup_type = "CP²" if sig_diff < 0 else "(-CP²)"
+    return True, (
+        f"PLAN: Connected sum with {n_blowups} copies of {blowup_type} "
+        f"changes signature by {-sig_diff}. "
+        f"Alternatively, the L_4(1) surgery obstruction is {m.signature() // 8}; "
+        f"vanishing requires signature divisible by 8."
+    )

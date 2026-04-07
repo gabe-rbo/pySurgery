@@ -1,4 +1,0 @@
-# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/core/intersection_forms.py
-# hypothesis_version: 6.151.10
-
-[-1e-10, 1e-10, 'I', 'II', 'IntersectionForm', 'even', 'rank', 'signature', 'type']

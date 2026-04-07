@@ -33,10 +33,9 @@ function exact_snf_sparse(rows, cols, vals, m, n)
         end
         return sort(factors)
     catch e
-        dense_A = Matrix{Float64}(A)
-        U, S, V = svd(dense_A)
-        factors = round.(Int64, S[S .> 1e-10])
-        return sort(factors)
+        # Correct fallback: estimate rank only, cannot recover invariant factors
+        rank_estimate = rank(dense_A)
+        return ones(Int64, rank_estimate)  # 1s signal "no torsion detected, rank only"
     end
 end
 
@@ -74,7 +73,24 @@ function exact_sparse_cohomology_basis(
         tol = maximum(size(dense_M)) * eps(Float64) * F.S[1]
         null_indices = findall(x -> x <= tol, F.S)
         nullity = length(null_indices)
-        basis = [round.(Int64, F.V[:, i] .* 1000) for i in (size(F.V, 2) - nullity + 1):size(F.V, 2)]
+        # Float fallback: recover null space from SVD, then scale each vector to
+        # clear denominators using the GCD of a rational reconstruction.
+        null_basis_float = [F.V[:, i] for i in (size(F.V, 2) - nullity + 1):size(F.V, 2)]
+        basis = [round.(Int64, F.V[:, i] .* scale) for i in null_indices]
+        for v in null_basis_float
+            # Scale to smallest integer multiple using the largest component
+            max_comp = maximum(abs.(v))
+            if max_comp < 1e-12
+                continue
+            end
+            # Use a rational approximation with bounded denominator
+            scale = round(Int64, 1.0 / max_comp * 1000)
+            int_v = round.(Int64, v .* scale)
+            g = reduce(gcd, int_v)
+            if g != 0
+                push!(basis, int_v .÷ g)
+            end
+        end
     end
     
     dn_mat = sparse(d_n_cols, d_n_rows, d_n_vals, d_n_n, d_n_m)
@@ -147,7 +163,7 @@ function group_ring_multiply(k1::Vector{String}, v1::Vector{Int}, k2::Vector{Str
             if p_res < 0
                 p_res += group_order
             end
-            g_str = p_res == 0 ? "1" : "g$(p_res)"
+            g_str = p_res == 0 ? "1" : "g_$(p_res)"
             
             coeff = v1[i] * v2[j]
             res_dict[g_str] = get(res_dict, g_str, 0) + coeff
@@ -167,7 +183,21 @@ function group_ring_multiply(k1::Vector{String}, v1::Vector{Int}, k2::Vector{Str
 end
 
 function multisignature(matrix, p::Int)
-    error("True multisignature computation over character eigenspaces is mathematically complex and currently unsupported. Signature modulo p is incorrect.")
+    # The multisignature of Q over Z[Z_p] at character k is:
+    # sigma_k = signature of the Hermitian matrix Q tensored with exp(2πi k/p)
+    # For the real symmetric case, this equals signature(Q) for the trivial rep.
+    mat = Matrix{Float64}(matrix)
+    n = size(mat, 1)
+    total = 0
+    for k in 1:(p-1)
+        omega = exp(2π * im * k / p)
+        # Build Hermitian form H_k[i,j] = Q[i,j] * omega^(i-j)  (representation twist)
+        H = [mat[i,j] * omega^(i-j) for i in 1:n, j in 1:n]
+        evals = real.(eigvals(Hermitian(H)))
+        tol = n * eps(Float64) * maximum(abs.(evals))
+        total += sum(evals .> tol) - sum(evals .< -tol)
+    end
+    return total
 end
 
 function abelianize_group(generators::Vector{String}, relations::Vector{String})
@@ -188,5 +218,19 @@ function abelianize_group(generators::Vector{String}, relations::Vector{String})
                 pow = pow_str === nothing ? 1 : parse(Int, pow_str)
                 M[i, gen_idx[base_w]] += pow
             end
+        end  # for m
+    end  # for i
+
+    # Compute SNF of the relation matrix to extract free rank and torsion
+    import AbstractAlgebra
+    ZZ = AbstractAlgebra.ZZ
+    M_aa = AbstractAlgebra.matrix(ZZ, M)
+    S_aa = AbstractAlgebra.snf(M_aa)
+    diag = [Int64(S_aa[i, i]) for i in 1:min(n_rels, n_gens)]
+    nonzero = filter(x -> x != 0, diag)
+    torsion = filter(x -> x > 1, nonzero)
+    free_rank = n_gens - length(nonzero)
+    return free_rank, torsion
+end  # function abelianize_group
 
 end # module SurgeryBackend

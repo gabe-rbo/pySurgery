@@ -47,10 +47,15 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
         col_end = d1_csc.indptr[e+1]
         col_data = d1_csc.data[col_start:col_end]
         col_row = d1_csc.indices[col_start:col_end]
-        
+
         if len(col_row) == 0:
+            # Zero-boundary: a genuine loop. Treat it as a self-loop at vertex 0
+            # (the basepoint). In a 1-vertex complex this is exact; in multi-vertex
+            # complexes the attaching vertex should be recovered from the CW structure.
             edge_list.append((0, 0))
-            adj[0].append((0, e, 1))
+            # Do NOT add to adjacency: a self-loop does not help BFS tree growth.
+            # It is always a non-tree edge and becomes a generator.
+            continue
             continue
         elif len(col_row) != 2:
             edge_list.append(None)

@@ -104,7 +104,8 @@ def smith_normal_form(A_in: np.ndarray) -> np.ndarray:
         div_violation = False
         for i in range(curr_diag + 1, rows):
             for j in range(curr_diag + 1, cols):
-                if A[i, j] % A[curr_diag, curr_diag] != 0:
+                d = A[curr_diag, curr_diag]
+                if d != 0 and A[i, j] % d != 0:
                     # Add row i to row curr_diag and restart reduction
                     for k in range(cols):
                         A[curr_diag, k] += A[i, k]

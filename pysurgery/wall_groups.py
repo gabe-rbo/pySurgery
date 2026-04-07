@@ -41,6 +41,9 @@ class WallGroupL(BaseModel):
             if n % 4 == 0:
                 return form.signature() // 8 if form else 0
             if n % 4 == 1:
+                # L_1(Z) = L_1(1) ⊕ L_0(1) = 0 ⊕ Z = Z
+                # The only contribution is from L_0(1) of the boundary.
+                # 'form' should be the intersection form of the (n-1)-dimensional boundary.
                 return form.signature() // 8 if form else 0
             if n % 4 == 2:
                 return form.arf_invariant() if form and isinstance(form, QuadraticForm) else "Requires Arf invariant"

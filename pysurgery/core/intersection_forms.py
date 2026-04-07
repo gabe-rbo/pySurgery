@@ -72,10 +72,10 @@ class IntersectionForm(BaseModel):
         return "II" if self.is_even() else "I"
 
     def rank(self) -> int:
-        """
-        Compute the rank of the form.
-        """
-        return self.matrix.shape[0]
+        """Linear rank of the bilinear form (number of non-zero eigenvalues)."""
+        eigenvalues = eigvalsh(self.matrix)
+        tol = max(self.matrix.shape) * np.finfo(float).eps * max(abs(eigenvalues)) if len(eigenvalues) > 0 else 1e-10
+        return int(np.sum(np.abs(eigenvalues) > tol))
 
     def is_indefinite(self) -> bool:
         """
@@ -174,7 +174,7 @@ class IntersectionForm(BaseModel):
         basis_vectors = []
         for j in range(H.cols):
             col = [int(H[i, j]) for i in range(H.rows)]
-            if any(x != 0 for x in col):
+            if any(c != 0 for c in col):
                 basis_vectors.append(col)
                 
         basis_matrix = np.array(basis_vectors, dtype=int)
