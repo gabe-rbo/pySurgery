@@ -32,8 +32,8 @@ class IntersectionForm(BaseModel):
         super().__init__(**data)
         if not np.allclose(self.matrix, self.matrix.T):
             raise NonSymmetricError("Intersection form matrix must be symmetric.")
-        if self.dimension % 4 != 0:
-            raise DimensionError("Intersection forms on H_{2k}(M) are usually defined for 4k-dimensional manifolds.")
+        if self.dimension % 2 != 0:
+            raise DimensionError("Intersection forms on H_{2k}(M) are usually defined for even-dimensional manifolds.")
 
     def signature(self) -> int:
         """

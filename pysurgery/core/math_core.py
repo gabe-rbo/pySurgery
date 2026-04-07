@@ -150,8 +150,13 @@ def get_sparse_snf_diagonal(A_sparse) -> np.ndarray:
             
     A_float = A_sparse.astype(float)
     k_svd = min(m - 1, n - 1, 500)
+    
     if k_svd <= 0:
-        return np.array([], dtype=np.int64)
+        import scipy.linalg as la
+        s = la.svdvals(A_float.toarray())
+        tol = max(m, n) * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
+        rank = np.sum(s > tol)
+        return np.ones(rank, dtype=np.int64)
         
     try:
         u, s, vt = spla.svds(A_float, k=k_svd, which='LM')

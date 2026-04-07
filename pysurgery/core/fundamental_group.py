@@ -29,12 +29,14 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
     d1 = cw.attaching_maps.get(1)
     d2 = cw.attaching_maps.get(2)
     
-    if d1 is None or d1.nnz == 0:
+    if d1 is None:
         return FundamentalGroup(generators=[], relations=[])
-        
+
     n_vertices = d1.shape[0]
     n_edges = d1.shape[1]
-    
+
+    if n_edges == 0:
+        return FundamentalGroup(generators=[], relations=[])    
     # 1. Build a spanning tree in the 1-skeleton (using BFS)
     # We represent the graph as an adjacency list
     adj = {i: [] for i in range(n_vertices)}
@@ -47,7 +49,11 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
         col_data = d1_csc.data[col_start:col_end]
         col_row = d1_csc.indices[col_start:col_end]
         
-        if len(col_row) != 2:
+        if len(col_row) == 0:
+            edge_list.append((0, 0))
+            adj[0].append((0, e, 1))
+            continue
+        elif len(col_row) != 2:
             edge_list.append(None)
             continue
             
