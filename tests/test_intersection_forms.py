@@ -92,3 +92,28 @@ def test_wall_group_symbols():
     assert l_group_symbol(2, "Z") == "Z_2"
     assert l_group_symbol(3, "Z") == "Z_2"
     assert l_group_symbol(4, "Z") == "Z"
+
+def test_algebraic_surgery():
+    # Start with S^2 x S^2, Q = [[0, 1], [1, 0]]
+    Q = np.array([[0, 1], [1, 0]])
+    form = IntersectionForm(matrix=Q, dimension=4)
+    
+    # Isotropic class x = [1, 0]
+    x = np.array([1, 0])
+    
+    new_form = form.perform_algebraic_surgery(x)
+    # The rank should drop by 2 (from 2 to 0) since we surgered out a hyperbolic plane
+    assert new_form.rank() == 0
+    assert new_form.signature() == 0
+
+def test_algebraic_surgery_invalid_isotropic():
+    # Try to surgery a non-isotropic class
+    Q = np.array([[1, 0], [0, -1]])
+    form = IntersectionForm(matrix=Q, dimension=4)
+    
+    x = np.array([1, 0]) # Q(x,x) = 1, not 0
+    
+    from pysurgery.core.exceptions import IsotropicError
+    import pytest
+    with pytest.raises(IsotropicError):
+        form.perform_algebraic_surgery(x)

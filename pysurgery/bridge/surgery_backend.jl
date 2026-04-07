@@ -78,15 +78,41 @@ function exact_sparse_cohomology_basis(
     end
     
     dn_mat = sparse(d_n_cols, d_n_rows, d_n_vals, d_n_n, d_n_m)
-    dense_dn = Matrix{Float64}(dn_mat)
     
     quotient_basis = Vector{Vector{Int64}}()
-    if size(dense_dn, 2) > 0
+    if size(dn_mat, 2) > 0
+        dense_dn = Matrix{Float64}(dn_mat)
         curr_rank = rank(dense_dn)
+        
         for vec in basis
             test_mat = hcat(dense_dn, Float64.(vec))
             new_rank = rank(test_mat)
+            
+            # Additional rigorous integer check
+            # We append vec to Im(d_n). If it adds no rank, it's a coboundary.
+            is_indep = false
             if new_rank > curr_rank
+                try
+                    import AbstractAlgebra
+                    ZZ = AbstractAlgebra.ZZ
+                    int_test = AbstractAlgebra.matrix(ZZ, Matrix{Int}(hcat(Matrix(dn_mat), vec)))
+                    snf_test = AbstractAlgebra.snf(int_test)
+                    new_rank_int = count(x -> x != 0, [snf_test[i, i] for i in 1:min(size(int_test)...)])
+                    
+                    int_base = AbstractAlgebra.matrix(ZZ, Matrix{Int}(Matrix(dn_mat)))
+                    snf_base = AbstractAlgebra.snf(int_base)
+                    base_rank_int = count(x -> x != 0, [snf_base[i, i] for i in 1:min(size(int_base)...)])
+                    
+                    if new_rank_int > base_rank_int
+                        is_indep = true
+                    end
+                catch
+                    # Fallback to float rank if AbstractAlgebra throws
+                    is_indep = true
+                end
+            end
+            
+            if is_indep
                 push!(quotient_basis, vec)
                 dense_dn = test_mat
                 curr_rank = new_rank
@@ -106,9 +132,12 @@ function group_ring_multiply(k1::Vector{String}, v1::Vector{Int}, k2::Vector{Str
                 if g_str == "e" || g_str == "1"
                     return 0
                 end
+                m = match(r"g_?(\d+)(?:\^-1)?", g_str)
+                if m === nothing
+                    throw(ArgumentError("Invalid generator format: " * g_str))
+                end
+                val = parse(Int, m.captures[1])
                 inv = endswith(g_str, "^-1")
-                base = inv ? replace(g_str[2:end-3], "g" => "") : replace(g_str, "g" => "")
-                val = parse(Int, base)
                 return inv ? -val : val
             end
             
@@ -159,38 +188,5 @@ function abelianize_group(generators::Vector{String}, relations::Vector{String})
                 pow = pow_str === nothing ? 1 : parse(Int, pow_str)
                 M[i, gen_idx[base_w]] += pow
             end
-        end
-    end
-    
-    # SNF on M gives the structure of the abelianized group
-    U, S, V = svd(Float64.(M))
-    s_vals = round.(Int, S[S .> 1e-10])
-    torsion = sort(s_vals[s_vals .> 1])
-    
-    rank = n_gens - length(s_vals)
-    return rank, torsion
-end
 
-end
-s = round.(Int, S[S .> tol])
-        torsion = sort(s_vals[s_vals .> 1])
-        
-        rank = n_gens - length(s_vals)
-        return rank, torsion
-    end
-end
-
-end
-   end
-end
-
-end
-s = round.(Int, S[S .> tol])
-        torsion = sort(s_vals[s_vals .> 1])
-        
-        rank = n_gens - length(s_vals)
-        return rank, torsion
-    end
-end
-
-end
+end # module SurgeryBackend

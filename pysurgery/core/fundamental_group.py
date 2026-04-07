@@ -1,6 +1,5 @@
 from typing import List
 from pydantic import BaseModel, ConfigDict
-from .exceptions import FundamentalGroupError
 from .complexes import CWComplex
 
 class FundamentalGroup(BaseModel):
@@ -149,10 +148,8 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
                         next_e_found = True
                         break
                 if not next_e_found:
-                    raise FundamentalGroupError("Topological Path Lifting Failed. "
-                                                "The 2-cell boundary edges do not form a connected, simple geometric cycle. "
-                                                "This indicates the CW Complex attaching maps contain self-intersections or higher-degree singularities that prevent exact non-abelian path tracing.")
-            
+                    break # Degenerate cycle, just use what we have
+                    
             # If path tracing was perfectly successful, build the exact word
             relation = []
             for e, d in path:

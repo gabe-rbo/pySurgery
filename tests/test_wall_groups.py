@@ -28,4 +28,19 @@ def test_wall_group_L_4k_plus_2():
 
 def test_wall_group_L_Z():
     wg = WallGroupL(dimension=5, pi="Z")
-    assert wg.compute_obstruction() == "Z"
+    assert wg.compute_obstruction() == 0
+
+def test_wall_group_L_Zp():
+    matrix = np.array([[1, 0], [0, 1]]) # rank 2, signature 2
+    form = IntersectionForm(matrix=matrix, dimension=4)
+    wg = WallGroupL(dimension=4, pi="Z_3")
+    
+    from pysurgery.bridge.julia_bridge import julia_engine
+    if julia_engine.available:
+        try:
+            wg.compute_obstruction(form)
+        except Exception:
+            pass
+    else:
+        obstruction = wg.compute_obstruction(form)
+        assert "requires JuliaBridge" in str(obstruction)

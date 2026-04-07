@@ -152,13 +152,13 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
             Q[i, j] = np.sum(cup_ij * fund_class)
             
     # Due to chain level artifacts, enforce perfect symmetry on the cohomology level matrix
-    if not np.array_equal(Q, Q.T):
-        raise HomologyError("Intersection form derived from cup product is not symmetric. This indicates a topological error upstream.")
+    if not np.allclose(Q, Q.T, atol=1e-8):
+        raise HomologyError("Cup product matrix is not symmetric — indicates a basis computation failure. Forcing symmetry may corrupt the intersection form.")
 
     if is_float:
-        Q_sym = Q
+        Q_sym = np.round((Q + Q.T) / 2.0)
     else:
-        Q_sym = Q.astype(np.int64)
+        Q_sym = np.round((Q + Q.T) / 2.0).astype(np.int64)
 
     return IntersectionForm(matrix=Q_sym, dimension=4)
 def extract_persistence_to_surgery(simplex_tree, min_persistence=0.5):

@@ -35,17 +35,17 @@ class WallGroupL(BaseModel):
             else:
                 return 0
         elif self.pi == "Z":
-            # For pi = Z, we use Shaneson splitting: L_n(Z) = L_n(1) + L_{n-1}(1)
+            # By Shaneson splitting: L_n(Z) = L_n(1) + L_{n-1}(1)
             # Evaluating this completely depends on the specific geometric normal map inputs.
             # As an algebraic return, we identify the exact dimensions.
             if n % 4 == 0:
                 return form.signature() // 8 if form else 0
             if n % 4 == 1:
-                return "Z"
+                return form.signature() // 8 if form else 0
             if n % 4 == 2:
                 return form.arf_invariant() if form and isinstance(form, QuadraticForm) else "Requires Arf invariant"
             if n % 4 == 3:
-                return "Obstruction in Z_2 (Arf invariant of codimension 1)"
+                return form.arf_invariant() if form and isinstance(form, QuadraticForm) else "Requires Arf invariant"
         elif self.pi.startswith("Z_"):
             p = int(self.pi.split("_")[1])
             if n % 4 == 0:

@@ -121,15 +121,15 @@ class ChainComplex(BaseModel):
             null_basis = [sp.Matrix([1 if i == j else 0 for j in range(cn_size)]) for i in range(cn_size)]
         else:
             coboundary_mat = dn_plus_1.T.toarray()
-            m, n = coboundary_mat.shape
-            aug = np.hstack((coboundary_mat.T, np.eye(n, dtype=int)))
+            m_dim, n_cells = coboundary_mat.shape
+            aug = np.hstack((coboundary_mat.T, np.eye(n_cells, dtype=int)))
             sym_aug = sp.Matrix(aug.astype(int))
             from sympy.matrices.normalforms import hermite_normal_form
             hnf_aug = hermite_normal_form(sym_aug)
             null_basis = []
-            for i in range(n):
-                if all(hnf_aug[i, j] == 0 for j in range(m)):
-                    vec = hnf_aug[i, m:].T
+            for i in range(n_cells):
+                if all(hnf_aug[i, j] == 0 for j in range(m_dim)):
+                    vec = hnf_aug[i, m_dim:].T
                     null_basis.append(vec)
 
         # 2. B^n: Image of d_n^T

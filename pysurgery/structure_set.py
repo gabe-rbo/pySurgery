@@ -35,12 +35,10 @@ class StructureSet(BaseModel):
                 rank_Z += r
             elif k % 4 == 2:
                 # Add rank of H^{4i-2}(M; Z_2)
-                # Rank over Z_2 = free_rank(H_k) + |even torsion in H_k| + |even torsion in H_{k-1}|
+                # Rank over Z_2 = free_rank(H_k) + |even torsion in H_k|
                 r_k, t_k = chain.homology(k)
-                r_k1, t_k1 = chain.homology(k-1)
                 z2_k = sum(1 for t in t_k if t % 2 == 0)
-                z2_k1 = sum(1 for t in t_k1 if t % 2 == 0)
-                rank_Z2 += (r_k + z2_k + z2_k1)
+                rank_Z2 += (r_k + z2_k)
                 
         report = f"--- NORMAL INVARIANTS [M, G/TOP] FOR {n}D MANIFOLD ---\n"
         report += f"Rank over Z: {rank_Z}\n"
