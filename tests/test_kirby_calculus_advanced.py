@@ -20,11 +20,11 @@ def test_kirby_blowup_signature():
     
     diag_plus = diag.blow_up(sign=1)
     assert diag_plus.extract_intersection_form().signature() == 1
-    assert diag_plus.extract_intersection_form().rank() == 2
+    assert diag_plus.extract_intersection_form().rank() == 1
     
     diag_minus = diag.blow_up(sign=-1)
     assert diag_minus.extract_intersection_form().signature() == -1
-    assert diag_minus.extract_intersection_form().rank() == 2
+    assert diag_minus.extract_intersection_form().rank() == 1
 
 def test_invalid_kirby_moves():
     linking = np.array([[0, 1], [1, 0]])

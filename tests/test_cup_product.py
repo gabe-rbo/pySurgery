@@ -1,4 +1,9 @@
 import numpy as np
+import pytest
+try:
+    from tests.discrete_surface_data import build_torus, to_complex
+except ImportError:
+    pass
 from pysurgery.core.cup_product import alexander_whitney_cup
 
 def test_alexander_whitney_cup():
@@ -27,3 +32,12 @@ def test_alexander_whitney_cup_empty():
         simplex_to_idx_q={}
     )
     assert len(cup) == 0
+
+
+def test_cup_product_torus():
+    try:
+        c1 = to_complex(build_torus())
+        assert c1.homology(1)[0] == 2
+    except NameError:
+        pytest.skip("GUDHI not available")
+

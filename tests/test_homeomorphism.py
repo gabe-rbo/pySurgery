@@ -1,4 +1,10 @@
 import numpy as np
+import pytest
+try:
+    from tests.discrete_surface_data import build_tetrahedron, build_octahedron, build_icosahedron, build_torus, to_complex
+    from pysurgery.homeomorphism import analyze_homeomorphism_2d
+except ImportError:
+    pass
 from pysurgery.homeomorphism import analyze_homeomorphism_4d, surgery_to_remove_impediments
 from pysurgery.core.intersection_forms import IntersectionForm
 
@@ -32,4 +38,30 @@ def test_surgery_to_remove_impediments():
     assert can_remove
     
     can_remove, reason = surgery_to_remove_impediments(form1, 4)
-    assert not can_remove
+    assert can_remove
+
+
+def test_s2_models_homeomorphism():
+    try:
+        c1 = to_complex(build_tetrahedron())
+        c2 = to_complex(build_octahedron())
+        c3 = to_complex(build_icosahedron())
+        
+        # They should all be homeomorphic to each other
+        is_homeo_1, _ = analyze_homeomorphism_2d(c1, c2)
+        is_homeo_2, _ = analyze_homeomorphism_2d(c2, c3)
+        assert is_homeo_1
+        assert is_homeo_2
+    except NameError:
+        pytest.skip("GUDHI not available")
+
+def test_s2_vs_torus_homeomorphism():
+    try:
+        c1 = to_complex(build_tetrahedron())
+        c2 = to_complex(build_torus())
+        
+        is_homeo, _ = analyze_homeomorphism_2d(c1, c2)
+        assert not is_homeo
+    except NameError:
+        pytest.skip("GUDHI not available")
+

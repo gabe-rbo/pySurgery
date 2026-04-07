@@ -1,5 +1,10 @@
 import numpy as np
 import scipy.sparse as sp
+import pytest
+try:
+    from tests.discrete_surface_data import get_surfaces, get_3_manifolds, to_complex
+except ImportError:
+    pass
 from pysurgery.core.complexes import ChainComplex
 
 def test_sphere_homology():
@@ -53,3 +58,28 @@ def test_cohomology_basis():
 
     basis2 = complex_c.cohomology_basis(2)
     assert len(basis2) == 0
+
+
+@pytest.mark.parametrize("name, builder, bettis, torsion, euler", get_surfaces() if 'get_surfaces' in globals() else [])
+def test_discrete_surface_homology(name, builder, bettis, torsion, euler):
+    st = builder()
+    complex_c = to_complex(st)
+    from pysurgery.bridge.julia_bridge import julia_engine
+    for dim in range(3):
+        h_rank, h_torsion = complex_c.homology(dim)
+        assert h_rank == bettis.get(dim, 0)
+        if julia_engine.available:
+            assert set(h_torsion) == set(torsion.get(dim, []))
+        
+    chi = sum((-1)**dim * complex_c.cells.get(dim, 0) for dim in complex_c.cells)
+    assert chi == euler
+
+@pytest.mark.parametrize("name, builder, bettis, torsion, euler", get_3_manifolds() if 'get_3_manifolds' in globals() else [])
+def test_discrete_3_manifold_homology(name, builder, bettis, torsion, euler):
+    st = builder()
+    complex_c = to_complex(st)
+    for dim in range(4):
+        h_rank, h_torsion = complex_c.homology(dim)
+        assert h_rank == bettis.get(dim, 0)
+        assert set(h_torsion) == set(torsion.get(dim, []))
+

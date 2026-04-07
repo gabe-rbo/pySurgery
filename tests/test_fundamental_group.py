@@ -1,5 +1,10 @@
 import numpy as np
 import scipy.sparse as sp
+import pytest
+try:
+    from tests.discrete_surface_data import get_surfaces, get_3_manifolds, to_complex
+except ImportError:
+    pass
 from pysurgery.core.fundamental_group import extract_pi_1
 from pysurgery.core.complexes import CWComplex
 
@@ -40,3 +45,27 @@ def test_extract_pi_1_disc():
     assert len(pi_1.relations) == 1
     # Relation should be g_0
     assert pi_1.relations[0] == ["g_0"]
+
+
+@pytest.mark.parametrize("name, builder, bettis, torsion, euler", get_surfaces() if 'get_surfaces' in globals() else [])
+def test_discrete_surface_fundamental_group(name, builder, bettis, torsion, euler):
+    st = builder()
+    complex_c = to_complex(st)
+    h_rank, h_torsion = complex_c.homology(1)
+    
+    assert h_rank == bettis.get(1, 0)
+    from pysurgery.bridge.julia_bridge import julia_engine
+    if julia_engine.available:
+        assert set(h_torsion) == set(torsion.get(1, []))
+
+@pytest.mark.parametrize("name, builder, bettis, torsion, euler", get_3_manifolds() if 'get_3_manifolds' in globals() else [])
+def test_discrete_3_manifold_fundamental_group(name, builder, bettis, torsion, euler):
+    st = builder()
+    complex_c = to_complex(st)
+    h_rank, h_torsion = complex_c.homology(1)
+    
+    assert h_rank == bettis.get(1, 0)
+    from pysurgery.bridge.julia_bridge import julia_engine
+    if julia_engine.available:
+        assert set(h_torsion) == set(torsion.get(1, []))
+

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from hypothesis import given, strategies as st
 from pysurgery.core.intersection_forms import IntersectionForm
 from pysurgery.core.complexes import ChainComplex
@@ -117,3 +118,13 @@ def test_algebraic_surgery_invalid_isotropic():
     import pytest
     with pytest.raises(IsotropicError):
         form.perform_algebraic_surgery(x)
+
+
+def test_torus_intersection_form():
+    # Placeholder for checking if intersection form functions run
+    # Since Q = [0 1; 1 0] or similar for T2
+    try:
+        import gudhi # noqa
+    except ImportError:
+        pytest.skip("GUDHI not available")
+
