@@ -104,7 +104,7 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
             # Rigorous path-lifting to orient the boundary correctly.
             # We trace the edges head-to-tail to form the exact algebraic string presentation.
             edges_in_face = list(zip(col_data, col_row))
-            if len(edges_in_face) < 3: 
+            if len(edges_in_face) < 1: 
                 continue
                 
             edge_endpoints = {}

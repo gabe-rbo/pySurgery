@@ -153,15 +153,14 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
             
     # Due to chain level artifacts, enforce perfect symmetry on the cohomology level matrix
     if not np.array_equal(Q, Q.T):
-        warnings.warn("Topological Hint: Cup product matrix is not strictly symmetric. Forcing symmetry may corrupt the intersection form.")
-        
-    if is_float:
-        Q_sym = (Q + Q.T) / 2.0
-    else:
-        Q_sym = np.round((Q + Q.T) / 2.0).astype(np.int64)
-    
-    return IntersectionForm(matrix=Q_sym, dimension=4)
+        raise HomologyError("Intersection form derived from cup product is not symmetric. This indicates a topological error upstream.")
 
+    if is_float:
+        Q_sym = Q
+    else:
+        Q_sym = Q.astype(np.int64)
+
+    return IntersectionForm(matrix=Q_sym, dimension=4)
 def extract_persistence_to_surgery(simplex_tree, min_persistence=0.5):
     """
     Analyzes a GUDHI SimplexTree's persistence diagram.

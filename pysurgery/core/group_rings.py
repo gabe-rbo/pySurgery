@@ -46,11 +46,11 @@ class GroupRingElement:
                 result[g] = c
             elif g.startswith('g'):
                 try:
-                    power = int(g[1:])
+                    power = int(g.split('_')[1] if '_' in g else g[1:])
                     inv_power = (self.group_order - power) % self.group_order
-                    inv_g = '1' if inv_power == 0 else f'g{inv_power}'
+                    inv_g = '1' if inv_power == 0 else (f'g_{inv_power}' if '_' in g else f'g{inv_power}')
                     result[inv_g] = result.get(inv_g, 0) + c
-                except (ValueError, GroupRingError):
+                except (ValueError, IndexError, GroupRingError):
                     # For non-cyclic presentations, involution evaluates dynamically.
                     result[f"{g}^-1"] = c
             else:

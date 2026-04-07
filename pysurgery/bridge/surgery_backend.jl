@@ -10,8 +10,9 @@ function hermitian_signature(matrix)
     # Convert to Julia Matrix
     mat = Matrix{Float64}(matrix)
     eigenvalues = eigvals(Hermitian(mat))
-    pos = count(x -> x > 1e-10, eigenvalues)
-    neg = count(x -> x < -1e-10, eigenvalues)
+    tol = length(eigenvalues) > 0 ? maximum(size(mat)) * eps(Float64) * maximum(abs.(eigenvalues)) : 1e-10
+    pos = count(x -> x > tol, eigenvalues)
+    neg = count(x -> x < -tol, eigenvalues)
     return pos - neg
 end
 
@@ -168,6 +169,19 @@ function abelianize_group(generators::Vector{String}, relations::Vector{String})
     
     rank = n_gens - length(s_vals)
     return rank, torsion
+end
+
+end
+s = round.(Int, S[S .> tol])
+        torsion = sort(s_vals[s_vals .> 1])
+        
+        rank = n_gens - length(s_vals)
+        return rank, torsion
+    end
+end
+
+end
+   end
 end
 
 end
