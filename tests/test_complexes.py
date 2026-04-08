@@ -5,7 +5,7 @@ try:
     from tests.discrete_surface_data import get_surfaces, get_3_manifolds, to_complex
 except ImportError:
     pass
-from pysurgery.core.complexes import ChainComplex
+from pysurgery.core.complexes import ChainComplex, CWComplex
 
 def test_sphere_homology():
     # S^2: 1 cell of dim 0, 1 cell of dim 2, trivial boundaries
@@ -35,13 +35,7 @@ def test_projective_plane_homology():
     d2 = sp.csr_matrix(np.array([[2]], dtype=np.int64))
     complex_c = ChainComplex(boundaries={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1})
     assert complex_c.homology(0) == (1, [])
-    
-    from pysurgery.bridge.julia_bridge import julia_engine
-    if julia_engine.available:
-        assert complex_c.homology(1) == (0, [2])
-    else:
-        assert complex_c.homology(1)[0] == 0
-        
+    assert complex_c.homology(1) == (0, [2])
     assert complex_c.homology(2) == (0, [])
 
 def test_cohomology_basis():
@@ -58,6 +52,47 @@ def test_cohomology_basis():
 
     basis2 = complex_c.cohomology_basis(2)
     assert len(basis2) == 0
+
+
+def test_homology_uses_cells_even_if_dimension_list_missing_degree():
+    complex_c = ChainComplex(boundaries={}, dimensions=[], cells={0: 1})
+    assert complex_c.homology(0) == (1, [])
+
+
+def test_homology_over_q_uses_field_rank():
+    d1 = sp.csr_matrix(np.array([[2]], dtype=np.int64))
+    c = ChainComplex(boundaries={1: d1}, dimensions=[0, 1], cells={0: 1, 1: 1}, coefficient_ring="Q")
+    # Over Q, multiplication by 2 is invertible as map Q->Q: H_0 = 0, H_1 = 0.
+    assert c.homology(0) == (0, [])
+    assert c.homology(1) == (0, [])
+
+
+def test_homology_over_z2_detects_mod2_kernel():
+    d1 = sp.csr_matrix(np.array([[2]], dtype=np.int64))
+    c = ChainComplex(boundaries={1: d1}, dimensions=[0, 1], cells={0: 1, 1: 1}, coefficient_ring="Z/2Z")
+    # Over Z/2, d1=0, so H_0 has rank 1 and H_1 has rank 1.
+    assert c.homology(0) == (1, [])
+    assert c.homology(1) == (1, [])
+
+
+def test_cohomology_basis_over_z2():
+    d1 = sp.csr_matrix(np.array([[2]], dtype=np.int64))
+    c = ChainComplex(boundaries={1: d1}, dimensions=[0, 1], cells={0: 1, 1: 1}, coefficient_ring="Z/2Z")
+    b1 = c.cohomology_basis(1)
+    assert len(b1) == 1
+    assert int(b1[0][0]) in {0, 1}
+
+
+def test_cwcomplex_propagates_coefficient_ring():
+    cw = CWComplex(cells={0: 1}, attaching_maps={}, coefficient_ring="Q")
+    cc = cw.cellular_chain_complex()
+    assert cc.coefficient_ring == "Q"
+
+
+def test_zmod_requires_prime_modulus():
+    c = ChainComplex(boundaries={}, dimensions=[0], cells={0: 1}, coefficient_ring="Z/4Z")
+    with pytest.raises(ValueError):
+        c.homology(0)
 
 
 @pytest.mark.parametrize("name, builder, bettis, torsion, euler", get_surfaces() if 'get_surfaces' in globals() else [])

@@ -6,6 +6,7 @@ from pysurgery.core.complexes import ChainComplex
 from pysurgery.core.quadratic_forms import QuadraticForm
 from pysurgery.core.kirby_calculus import KirbyDiagram
 from pysurgery.wall_groups import l_group_symbol
+from pysurgery.core.fundamental_group import GroupPresentation
 import scipy.sparse as sp
 
 @given(st.lists(st.integers(min_value=-10, max_value=10), min_size=4, max_size=4))
@@ -66,6 +67,18 @@ def test_intersection_form_sanity():
     assert form.signature() == 0
     assert form.is_even()
 
+
+def test_intersection_form_requires_square_matrix():
+    from pysurgery.core.exceptions import DimensionError
+    with pytest.raises(DimensionError):
+        IntersectionForm(matrix=np.array([[1, 2, 3]]), dimension=4)
+
+
+def test_zero_matrix_signature_rank_are_stable():
+    form = IntersectionForm(matrix=np.zeros((3, 3), dtype=int), dimension=4)
+    assert form.signature() == 0
+    assert form.rank() == 0
+
 def test_arf_invariant():
     matrix = np.array([[0, 1], [1, 0]])
     q_form = QuadraticForm(matrix=matrix, dimension=4, q_refinement=[1, 1])
@@ -93,6 +106,11 @@ def test_wall_group_symbols():
     assert l_group_symbol(2, "Z") == "Z_2"
     assert l_group_symbol(3, "Z") == "Z_2"
     assert l_group_symbol(4, "Z") == "Z"
+
+
+def test_wall_group_symbol_product_group_presentation():
+    gp = GroupPresentation(kind="product", factors=["Z", "Z_2"])
+    assert "product-group decomposition required" in l_group_symbol(8, gp)
 
 def test_algebraic_surgery():
     # Start with S^2 x S^2, Q = [[0, 1], [1, 0]]

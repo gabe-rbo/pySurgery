@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict
 from .algebraic_poincare import AlgebraicPoincareComplex
-from .wall_groups import WallGroupL
+from .wall_groups import WallGroupL, ObstructionResult
+from .structure_set import StructureSet, SurgeryExactSequenceResult
 from .core.k_theory import compute_whitehead_group
 from .core.fundamental_group import extract_pi_1
 
@@ -15,6 +16,10 @@ class AlgebraicSurgeryComplex(BaseModel):
     codomain: AlgebraicPoincareComplex
     degree: int = 1
 
+    def assembly_map_result(self, pi_1_group: str = "1", form=None) -> ObstructionResult:
+        """Typed assembly-map obstruction result."""
+        return WallGroupL(dimension=self.domain.dimension, pi=pi_1_group).compute_obstruction_result(form)
+
     def assembly_map(self, pi_1_group: str = "1", form=None):
         """
         Evaluates the Algebraic Assembly Map A: H_n(X; L_0) -> L_n(pi_1(X)).
@@ -22,10 +27,17 @@ class AlgebraicSurgeryComplex(BaseModel):
         by projecting local geometric data (the intersection forms of the sub-manifolds) 
         directly to the global fundamental group ring Z[pi_1].
         """
-        # The assembly map systematically routes the signature/arf invariants of the domain
-        # into the correct representation group.
-        # This replaces the simplified placeholder with dynamic routing.
-        return WallGroupL(dimension=self.domain.dimension, pi=pi_1_group).compute_obstruction(form)
+        return self.assembly_map_result(pi_1_group=pi_1_group, form=form).legacy_output()
+
+    def evaluate_structure_set(
+        self,
+        chain_complex,
+        fundamental_group: str = "1",
+    ) -> SurgeryExactSequenceResult:
+        """Typed structure-set exact-sequence evaluation for this surgery context."""
+        ss = StructureSet(dimension=self.domain.dimension, fundamental_group=fundamental_group)
+        normal = ss.compute_normal_invariants_result(chain_complex)
+        return ss.evaluate_exact_sequence_result(normal_invariants=normal)
 
     def s_cobordism_torsion(self, cw_complex) -> str:
         """
@@ -37,4 +49,4 @@ class AlgebraicSurgeryComplex(BaseModel):
             wh_group = compute_whitehead_group(pi_1)
             return f"Whitehead Torsion Evaluation: {wh_group.description}"
         except Exception as e:
-            return f"Torsion computation failed: {e}. Unable to clear s-cobordism obstruction."
+            return f"Torsion computation failed: {e!r}. Unable to clear s-cobordism obstruction."

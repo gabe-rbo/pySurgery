@@ -2,7 +2,6 @@ import numpy as np
 from scipy.linalg import eigvalsh
 from pydantic import BaseModel, ConfigDict
 import sympy as sp
-from sympy.matrices.normalforms import hermite_normal_form
 
 from .exceptions import (
     NonSymmetricError,
@@ -30,10 +29,18 @@ class IntersectionForm(BaseModel):
 
     def __init__(self, **data):
         super().__init__(**data)
+        if self.matrix.ndim != 2 or self.matrix.shape[0] != self.matrix.shape[1]:
+            raise DimensionError("Intersection form matrix must be square.")
         if not np.allclose(self.matrix, self.matrix.T):
             raise NonSymmetricError("Intersection form matrix must be symmetric.")
         if self.dimension % 2 != 0:
             raise DimensionError("Intersection forms on H_{2k}(M) are usually defined for even-dimensional manifolds.")
+
+    def _eigen_tol(self, eigenvalues: np.ndarray) -> float:
+        if len(eigenvalues) == 0:
+            return 1e-10
+        scale = float(max(1.0, np.max(np.abs(eigenvalues))))
+        return max(self.matrix.shape) * np.finfo(float).eps * scale
 
     def signature(self) -> int:
         """
@@ -47,7 +54,7 @@ class IntersectionForm(BaseModel):
         # For a symmetric matrix over R, we use eigenvalues to find the signature.
         # This is valid for non-singular forms on M.
         eigenvalues = eigvalsh(self.matrix)
-        tol = max(self.matrix.shape) * np.finfo(float).eps * max(abs(eigenvalues)) if len(eigenvalues) > 0 else 1e-10
+        tol = self._eigen_tol(eigenvalues)
         pos = np.sum(eigenvalues > tol)
         neg = np.sum(eigenvalues < -tol)
         return int(pos - neg)
@@ -74,7 +81,7 @@ class IntersectionForm(BaseModel):
     def rank(self) -> int:
         """Linear rank of the bilinear form (number of non-zero eigenvalues)."""
         eigenvalues = eigvalsh(self.matrix)
-        tol = max(self.matrix.shape) * np.finfo(float).eps * max(abs(eigenvalues)) if len(eigenvalues) > 0 else 1e-10
+        tol = self._eigen_tol(eigenvalues)
         return int(np.sum(np.abs(eigenvalues) > tol))
 
     def is_indefinite(self) -> bool:
@@ -149,39 +156,44 @@ class IntersectionForm(BaseModel):
         
         y = np.array(y_list, dtype=int) * g
         
-        # Now P(v) = v - [Q(v, y) - Q(y, y) Q(v, x)] x - Q(v, x) y
-        # Projects v onto H^perp = {x, y}^perp.
-        q_yy = np.dot(y, self.matrix @ y)
-        
-        # Form matrix P where columns are P(e_i)
         m = self.matrix.shape[0]
-        P_cols = []
-        for i in range(m):
-            v = np.zeros(m, dtype=int)
-            v[i] = 1
-            q_vy = np.dot(v, self.matrix @ y)
-            q_vx = np.dot(v, self.matrix @ x)
-            proj_v = v - (q_vy - q_yy * q_vx) * x - q_vx * y
-            P_cols.append(proj_v)
-            
-        # P_cols is a list of column vectors. To use SymPy's column-style HNF,
-        # we put them as columns of a matrix.
-        # Actually, sp.Matrix(P_cols).T gives a matrix where columns are proj_v.
-        A = sp.Matrix(P_cols).T
-        H = hermite_normal_form(A)
-        
-        # The non-zero columns of H form a basis for H^perp.
+        y_TQ = y.T @ self.matrix
+        constraints = sp.Matrix(np.vstack([x_TQ, y_TQ]))
+        null_vecs = constraints.nullspace()
+
         basis_vectors = []
-        for j in range(H.cols):
-            col = [int(H[i, j]) for i in range(H.rows)]
-            if any(c != 0 for c in col):
-                basis_vectors.append(col)
-                
+        for v in null_vecs:
+            denoms = [sp.fraction(val)[1] for val in v]
+            lcm_val = 1
+            for d in denoms:
+                lcm_val = int(np.lcm(lcm_val, int(d)))
+            int_vec = np.array([int(sp.Integer(val * lcm_val)) for val in v], dtype=int)
+            gcd_val = 0
+            for a in int_vec.tolist():
+                gcd_val = int(np.gcd(gcd_val, abs(a)))
+            gcd_val = max(gcd_val, 1)
+            basis_vectors.append((int_vec // gcd_val).tolist())
+
         basis_matrix = np.array(basis_vectors, dtype=int)
         
         if basis_matrix.shape[0] == 0:
             return self.__class__(matrix=np.zeros((0, 0), dtype=int), dimension=self.dimension)
-            
+
+        expected_rank = max(0, m - 2)
+        if basis_matrix.shape[0] != expected_rank:
+            # Keep only an independent set of the expected rank.
+            reduced = []
+            current = sp.Matrix.zeros(m, 0)
+            for row in basis_matrix:
+                v = sp.Matrix(row).reshape(m, 1)
+                test = sp.Matrix.hstack(current, v)
+                if test.rank() > current.rank():
+                    reduced.append(row.tolist())
+                    current = test
+                if len(reduced) == expected_rank:
+                    break
+            basis_matrix = np.array(reduced, dtype=int)
+
         new_matrix = basis_matrix @ self.matrix @ basis_matrix.T
         
         return self.__class__(matrix=new_matrix, dimension=self.dimension)

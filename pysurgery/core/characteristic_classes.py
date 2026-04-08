@@ -40,7 +40,13 @@ def extract_stiefel_whitney_w2(q: IntersectionForm) -> np.ndarray:
     n = q.matrix.shape[0]
     if n == 0:
         return np.zeros(0, dtype=int)
-        
+
+    det_q = q.determinant()
+    if abs(det_q) != 1:
+        raise CharacteristicClassError(
+            f"Intersection form must be unimodular (det = +/-1) for Wu-class extraction; got det = {det_q}."
+        )
+
     # Convert Q to mod 2
     Q_mod2 = q.matrix % 2
     

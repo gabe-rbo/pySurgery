@@ -29,7 +29,16 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
 
     if not isinstance(mesh, trimesh.Trimesh):
         raise TypeError("Input must be a trimesh.Trimesh object.")
-        
+
+    # Scope boundary: this bridge currently supports 2-skeleton CW extraction
+    # from triangular surface meshes only.
+    if mesh.faces.ndim != 2 or mesh.faces.shape[1] != 3:
+        raise NotImplementedError(
+            "trimesh_to_cw_complex currently supports triangular faces only (2-skeleton extraction)."
+        )
+    if len(mesh.faces) == 0:
+        raise ValueError("Mesh has no 2-cells (faces); unsupported for current 2-skeleton conversion.")
+
     # 0-cells: Vertices
     n_vertices = len(mesh.vertices)
     

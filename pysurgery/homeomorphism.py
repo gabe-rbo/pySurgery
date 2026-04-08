@@ -4,7 +4,7 @@ from .core.complexes import ChainComplex
 from .core.exceptions import DimensionError
 import warnings
 
-def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, str]:
+def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex, allow_approx: bool = False) -> Tuple[bool | None, str]:
     """
     Analyzes the potential for homeomorphism between two 2-dimensional manifolds (surfaces).
     
@@ -22,7 +22,10 @@ def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, 
         r2_1, t2_1 = c1.homology(2)
         r2_2, t2_2 = c2.homology(2)
     except Exception as e:
-        warnings.warn(f"Topological Hint: H_2 homology extraction failed ({e}). Assuming non-orientable (Rank 0) to prevent pipeline crash.")
+        if not allow_approx:
+            return None, f"INCONCLUSIVE: Exact H_2 computation failed ({e!r}). Set allow_approx=True to use assumption-based fallback."
+        msg = f"Topological Hint: H_2 homology extraction failed ({e!r}). Assuming non-orientable (Rank 0) due to allow_approx=True."
+        warnings.warn(msg)
         r2_1, r2_2 = 0, 0
         
     orientable_1 = (r2_1 == 1)
@@ -35,8 +38,11 @@ def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, 
         r1_1, t1_1 = c1.homology(1)
         r1_2, t1_2 = c2.homology(1)
     except Exception as e:
-        warnings.warn(f"Topological Hint: H_1 homology extraction failed ({e}). Assuming genus 0.")
-        r1_1, r1_2 = 0, 0
+        if not allow_approx:
+            return None, f"INCONCLUSIVE: Exact H_1 computation failed ({e!r}). Set allow_approx=True to use assumption-based fallback."
+        msg = f"Topological Hint: H_1 homology extraction failed ({e!r}). Assuming genus 0 due to allow_approx=True."
+        warnings.warn(msg)
+        r1_1, r1_2, t1_1, t1_2 = 0, 0, [], []
         
     if r1_1 != r1_2:
         return False, f"IMPEDIMENT: Genus mismatch. H_1 rank differs ({r1_1} vs {r1_2})."
@@ -47,7 +53,7 @@ def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool, 
         
     return True, "SUCCESS: Homeomorphism established via the Classification Theorem of Closed Surfaces. Both manifolds share the same orientability and genus."
 
-def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool | None, str]:
+def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex, allow_approx: bool = False) -> Tuple[bool | None, str]:
     """
     Analyzes the potential for homeomorphism between two 3-dimensional manifolds.
     
@@ -61,7 +67,10 @@ def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool |
             r_1, t_1 = c1.homology(n)
             r_2, t_2 = c2.homology(n)
         except Exception as e:
-            warnings.warn(f"Topological Hint: Homology extraction failed at dimension {n} ({e}). Assuming empty homology to proceed with partial evaluation.")
+            if not allow_approx:
+                return None, f"INCONCLUSIVE: Exact homology extraction failed at dimension {n} ({e!r}). Set allow_approx=True for assumption-based fallback."
+            msg = f"Topological Hint: Homology extraction failed at dimension {n} ({e!r}). Assuming empty homology due to allow_approx=True."
+            warnings.warn(msg)
             r_1, r_2, t_1, t_2 = 0, 0, [], []
             
         if r_1 != r_2 or t_1 != t_2:
@@ -72,11 +81,12 @@ def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex) -> Tuple[bool |
         if c1.homology(1) == (0, []) and c1.homology(2) == (0, []) and c1.homology(3) == (1, []):
             return None, "INCONCLUSIVE: Both are Homology Spheres. By Perelman's resolution of the Poincare Conjecture, if they are simply-connected (pi_1 = 1), they are homeomorphic to S^3. However, pi_1 computation is required to distinguish from exotic homology spheres (like the Poincare dodecahedral space)."
     except Exception as e:
-        warnings.warn(f"Topological Hint: Sphere validation check failed ({e}).")
+        msg = f"Topological Hint: Sphere validation check failed ({e!r})."
+        warnings.warn(msg)
         
-    return False, "INCONCLUSIVE: Manifolds are Homology Equivalent. In 3D, true homeomorphism requires evaluating the fundamental group (pi_1) or geometric Ricci flow, which lies outside pure algebraic homology."
+    return None, "INCONCLUSIVE: Manifolds are Homology Equivalent. In 3D, true homeomorphism requires evaluating the fundamental group (pi_1) or geometric Ricci flow, which lies outside pure algebraic homology."
 
-def analyze_homeomorphism_high_dim(c1: ChainComplex, c2: ChainComplex, dim: int) -> Tuple[bool, str]:
+def analyze_homeomorphism_high_dim(c1: ChainComplex, c2: ChainComplex, dim: int, allow_approx: bool = False) -> Tuple[bool | None, str]:
     """
     Analyzes homeomorphism for high-dimensional manifolds (n >= 5) using the s-Cobordism Theorem 
     and Smale's Generalized Poincare Conjecture (1961).
@@ -90,7 +100,10 @@ def analyze_homeomorphism_high_dim(c1: ChainComplex, c2: ChainComplex, dim: int)
             r_1, t_1 = c1.homology(n)
             r_2, t_2 = c2.homology(n)
         except Exception as e:
-            warnings.warn(f"Topological Hint: Homology extraction failed at dimension {n} ({e}). Assuming empty homology.")
+            if not allow_approx:
+                return None, f"INCONCLUSIVE: Exact homology extraction failed at dimension {n} ({e!r}). Set allow_approx=True for assumption-based fallback."
+            msg = f"Topological Hint: Homology extraction failed at dimension {n} ({e!r}). Assuming empty homology due to allow_approx=True."
+            warnings.warn(msg)
             r_1, r_2, t_1, t_2 = 0, 0, [], []
             
         if r_1 != r_2 or t_1 != t_2:
@@ -106,14 +119,15 @@ def analyze_homeomorphism_high_dim(c1: ChainComplex, c2: ChainComplex, dim: int)
                 is_sphere = False
                 break
         except Exception as e:
-            warnings.warn(f"Topological Hint: Sphere validation iteration failed at dim {n} ({e}).")
+            msg = f"Topological Hint: Sphere validation iteration failed at dim {n} ({e!r})."
+            warnings.warn(msg)
             
     if is_sphere:
         return True, f"SUCCESS: Both manifolds are homology spheres. Assuming they are simply-connected (pi_1 = 1), Smale's Generalized Poincare Conjecture (1961) guarantees they are homeomorphic to S^{dim}. Note: They may still be exotic spheres (non-diffeomorphic) under Milnor's classification."
         
-    return False, f"INCONCLUSIVE: Manifolds are homology equivalent in {dim}D. By the s-Cobordism Theorem, exact homeomorphism requires verifying that the Whitehead torsion Wh(pi_1) vanishes, and computing Wall's L-group surgery obstructions L_{dim}(pi_1)."
+    return None, f"INCONCLUSIVE: Manifolds are homology equivalent in {dim}D. By the s-Cobordism Theorem, exact homeomorphism requires verifying that the Whitehead torsion Wh(pi_1) vanishes, and computing Wall's L-group surgery obstructions L_{dim}(pi_1)."
 
-def analyze_homeomorphism_4d(m1: IntersectionForm, m2: IntersectionForm, ks1: int = 0, ks2: int = 0) -> Tuple[bool, str]:
+def analyze_homeomorphism_4d(m1: IntersectionForm, m2: IntersectionForm, ks1: int = 0, ks2: int = 0) -> Tuple[bool | None, str]:
     """
     Analyzes the potential for homeomorphism between two simply-connected 4-manifolds.
     
@@ -152,7 +166,7 @@ def analyze_homeomorphism_4d(m1: IntersectionForm, m2: IntersectionForm, ks1: in
         return True, "SUCCESS: Homeomorphism established via Freedman's Theorem for indefinite forms."
         
     # Case: Definite forms (require lattice isomorphism)
-    return False, "INCONCLUSIVE: Lattice isomorphism for definite forms not verified. Rank/signature/parity match, but full Freedman classification requires an explicit integer lattice isomorphism check."
+    return None, "INCONCLUSIVE: Lattice isomorphism for definite forms not verified. Rank/signature/parity match, but full Freedman classification requires an explicit integer lattice isomorphism check."
 
 def surgery_to_remove_impediments(m: IntersectionForm, target_sig: int) -> Tuple[bool, str]:
     """
@@ -167,6 +181,6 @@ def surgery_to_remove_impediments(m: IntersectionForm, target_sig: int) -> Tuple
     return True, (
         f"PLAN: Connected sum with {n_blowups} copies of {blowup_type} "
         f"changes signature by {-sig_diff}. "
-        f"Alternatively, the L_4(1) surgery obstruction is {m.signature() // 8}; "
-        f"vanishing requires signature divisible by 8."
+        "Alternatively, the L_4(1) obstruction class requires signature divisible by 8 "
+        "for an integral signature/8 model."
     )

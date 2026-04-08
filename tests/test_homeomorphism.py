@@ -30,6 +30,33 @@ def test_analyze_homeomorphism_4d_impediment():
     assert not is_homeo
     assert "Parity mismatch" in reason
 
+
+def test_analyze_homeomorphism_4d_definite_is_inconclusive():
+    form1 = IntersectionForm(matrix=np.array([[1, 0], [0, 1]]), dimension=4)
+    form2 = IntersectionForm(matrix=np.array([[1, 0], [0, 1]]), dimension=4)
+    is_homeo, reason = analyze_homeomorphism_4d(form1, form2)
+    assert is_homeo is None
+    assert "INCONCLUSIVE" in reason
+
+
+def test_analyze_homeomorphism_2d_homology_failure_fallback():
+    class BrokenComplex:
+        def homology(self, n):
+            raise RuntimeError("boom")
+
+    from pysurgery.homeomorphism import analyze_homeomorphism_2d
+    is_homeo, reason = analyze_homeomorphism_2d(BrokenComplex(), BrokenComplex())
+    assert is_homeo is None
+    assert "INCONCLUSIVE" in reason
+
+    with pytest.warns(UserWarning) as rec:
+        is_homeo2, reason2 = analyze_homeomorphism_2d(BrokenComplex(), BrokenComplex(), allow_approx=True)
+    assert is_homeo2
+    assert "SUCCESS" in reason2
+    warning_text = "\n".join(str(w.message) for w in rec)
+    assert "boom" in warning_text
+    assert "{e}" not in warning_text
+
 def test_surgery_to_remove_impediments():
     matrix1 = np.array([[1, 0], [0, 1]]) # sig = 2
     form1 = IntersectionForm(matrix=matrix1, dimension=4)

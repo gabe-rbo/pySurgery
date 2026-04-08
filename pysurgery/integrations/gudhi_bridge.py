@@ -1,4 +1,6 @@
 import warnings
+from functools import reduce
+from math import gcd, lcm
 import numpy as np
 import scipy.sparse as sp
 from typing import List, Tuple
@@ -29,8 +31,8 @@ def extract_complex_data(simplex_tree):
         d = len(s) - 1
         if d not in dim_simplices:
             dim_simplices[d] = []
-        dim_simplices[d].append(tuple(sorted(s)))
-        
+        dim_simplices[d].append(tuple(s))
+
     for k in dim_simplices:
         dim_simplices[k].sort()
         
@@ -58,7 +60,7 @@ def extract_complex_data(simplex_tree):
     cells = {d: len(dim_simplices[d]) for d in dim_simplices}
     return boundaries, cells, dim_simplices, simplex_to_idx
 
-def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
+def simplex_tree_to_intersection_form(simplex_tree, allow_approx: bool = False) -> IntersectionForm:
     """
     Automatically derives the rigorous Intersection Form Q for a 4D manifold
     directly from its GUDHI SimplexTree filtration.
@@ -67,8 +69,8 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
     and applies it to the fundamental class [M].
     """
     boundaries, cells, dim_simplices, simplex_to_idx = extract_complex_data(simplex_tree)
-    complex_c = ChainComplex(boundaries=boundaries, dimensions=list(cells.keys()))
-    
+    complex_c = ChainComplex(boundaries=boundaries, dimensions=list(cells.keys()), coefficient_ring="Z")
+
     basis_2 = complex_c.cohomology_basis(2)
     
     if not basis_2 or 4 not in cells:
@@ -82,12 +84,13 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
             try:
                 # We need the nullspace of d4. compute_sparse_cohomology_basis computes nullspace of d_np1.T
                 # So we pass d4.T to find ker(d4).
-                basis_4 = julia_engine.compute_sparse_cohomology_basis(boundaries[4].T, None)
+                basis_4 = julia_engine.compute_sparse_cohomology_basis(boundaries[4].T, None, cn_size=cells[4])
                 if len(basis_4) > 0:
                     fund_class = basis_4[0].flatten()
                     fund_class_found = True
             except Exception as e:
-                warnings.warn(f"Topological Hint: Julia bridge failed to extract [M] ({e}). Falling back to SymPy exact nullspace.")
+                msg = f"Topological Hint: Julia bridge failed to extract [M] ({e!r}). Falling back to SymPy exact nullspace."
+                warnings.warn(msg)
                 
         if not fund_class_found:
             # Attempt SymPy exact nullspace for small/medium matrices
@@ -96,29 +99,60 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
                 null_4 = sym_d4.nullspace()
                 
                 if null_4:
-                    fund_class = np.array(null_4[0]).astype(float).flatten()
-                    denoms = [sympy_module.fraction(x)[1] for x in null_4[0]]
-                    lcm = np.lcm.reduce([int(d) for d in denoms])
-                    fund_class = np.array([int(x * lcm) for x in fund_class], dtype=np.int64)
-                    gcd = np.gcd.reduce(fund_class)
-                    if gcd != 0:
-                        fund_class = fund_class // gcd
+                    null_vec = null_4[0]
+                    denoms = [sympy_module.fraction(x)[1] for x in null_vec]
+                    common_lcm = reduce(lcm, (int(d) for d in denoms), 1)
+                    fund_class = np.array(
+                        [int(sympy_module.Integer(x * common_lcm)) for x in null_vec],
+                        dtype=np.int64,
+                    )
+                    gcd_val = reduce(gcd, (abs(int(v)) for v in fund_class.tolist()), 0)
+                    if gcd_val > 1:
+                        fund_class = fund_class // gcd_val
                     fund_class_found = True
             except Exception as e:
-                warnings.warn(f"Topological Hint: SymPy exact nullspace failed ({e}). This dataset is too massive for exact integer algebra. Falling back to floating-point SVD to approximate [M] over R.")
-                
+                if allow_approx:
+                    msg = (
+                        f"Topological Hint: SymPy exact nullspace failed ({e!r}). This dataset is too massive for exact integer algebra. "
+                        "Falling back to floating-point SVD to approximate [M] over R."
+                    )
+                    warnings.warn(msg)
+                else:
+                    msg = (
+                        f"Topological Hint: SymPy exact nullspace failed ({e!r}). "
+                        "Exact fallback to SVD is disabled unless allow_approx=True."
+                    )
+                    warnings.warn(msg)
+
         if not fund_class_found:
-            # Fallback to Sparse SVD for massive datasets when Julia is unavailable
+            if not allow_approx:
+                raise HomologyError(
+                    "Exact fundamental class extraction failed without Julia. "
+                    "Install Julia for fast exact sparse algebra or rerun with allow_approx=True."
+                )
+
+            # Explicitly opt-in approximate fallback via Sparse SVD.
             d4_sparse = boundaries[4].astype(float)
             try:
-                u, s, vt = spla.svds(d4_sparse, k=min(cells[4]-1, 5), which='SM')
-                tol = cells[4] * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
-                null_idx = np.where(s <= tol)[0]
-                if len(null_idx) > 0:
-                    fund_class = vt[null_idx[0], :].flatten()
-                    fund_class_found = True
+                if cells[4] == 1:
+                    col = d4_sparse.toarray()[:, 0]
+                    if np.allclose(col, 0.0, atol=1e-12):
+                        fund_class = np.array([1.0], dtype=float)
+                        fund_class_found = True
+                else:
+                    k_svd = min(cells[4] - 1, 5)
+                    u, s, vt = spla.svds(d4_sparse, k=k_svd, which='SM')
+                    tol = cells[4] * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
+                    null_idx = np.where(s <= tol)[0]
+                    if len(null_idx) > 0:
+                        fund_class = vt[null_idx[0], :].flatten()
+                        fund_class_found = True
             except Exception as e:
-                warnings.warn(f"Topological Hint: Sparse SVD failed to converge for [M] ({e}). The simplicial complex may be too topologically degenerate.")
+                msg = (
+                    f"Topological Hint: Sparse SVD failed to converge for [M] ({e!r}). "
+                    "The simplicial complex may be too topologically degenerate."
+                )
+                warnings.warn(msg)
 
         if not fund_class_found:
             raise HomologyError("No fundamental class [M] found (H_4 is empty or computation failed). "
@@ -156,9 +190,11 @@ def simplex_tree_to_intersection_form(simplex_tree) -> IntersectionForm:
         raise HomologyError("Cup product matrix is not symmetric — indicates a basis computation failure. Forcing symmetry may corrupt the intersection form.")
 
     if is_float:
-        Q_sym = np.round((Q + Q.T) / 2.0)
+        Q_sym = (Q + Q.T) / 2.0
     else:
-        Q_sym = np.round((Q + Q.T) / 2.0).astype(np.int64)
+        if not np.array_equal(Q, Q.T):
+            raise HomologyError("Cup product matrix is not exactly symmetric over Z.")
+        Q_sym = Q.astype(np.int64)
 
     return IntersectionForm(matrix=Q_sym, dimension=4)
 def extract_persistence_to_surgery(simplex_tree, min_persistence=0.5):
@@ -203,7 +239,7 @@ def extract_persistence_to_surgery(simplex_tree, min_persistence=0.5):
                 
     return surgery_targets
 
-def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
+def signature_landscape(simplex_tree, allow_approx: bool = False) -> List[Tuple[float, int]]:
     """
     A novel TDA invariant: The Signature Landscape.
     Instead of Betti numbers, we track the evolution of the intersection form's signature 
@@ -238,9 +274,12 @@ def signature_landscape(simplex_tree) -> List[Tuple[float, int]]:
             idx += 1
 
         try:
-            q_form = simplex_tree_to_intersection_form(st_sub)
+            q_form = simplex_tree_to_intersection_form(st_sub, allow_approx=allow_approx)
             signatures.append((val, q_form.signature()))
         except Exception:
-            signatures.append((val, 0))
+            if allow_approx:
+                signatures.append((val, 0))
+            else:
+                raise
 
     return signatures

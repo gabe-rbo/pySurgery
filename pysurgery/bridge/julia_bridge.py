@@ -1,4 +1,5 @@
 import os
+import threading
 import numpy as np
 
 try:
@@ -13,11 +14,14 @@ class JuliaBridge:
     Replaces subprocess mocks with native memory sharing via `juliacall`.
     """
     _instance = None
+    _lock = threading.Lock()
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super(JuliaBridge, cls).__new__(cls)
-            cls._instance._initialize()
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(JuliaBridge, cls).__new__(cls)
+                    cls._instance._initialize()
         return cls._instance
 
     def _initialize(self):
@@ -33,7 +37,7 @@ class JuliaBridge:
             self.backend = self.jl.SurgeryBackend
             self.available = True
         except Exception as e:
-            self.error = f"Failed to initialize Julia backend: {e}"
+            self.error = f"Failed to initialize Julia backend: {e!r}"
 
     def require_julia(self):
         from pysurgery.core.exceptions import SurgeryError
@@ -55,21 +59,31 @@ class JuliaBridge:
         factors = self.backend.exact_snf_sparse(jl_rows, jl_cols, jl_vals, shape[0], shape[1])
         return np.array(factors, dtype=np.int64)
 
-    def compute_sparse_cohomology_basis(self, d_np1, d_n) -> list:
+    def compute_sparse_cohomology_basis(self, d_np1, d_n, cn_size: int | None = None) -> list:
         """Executes the exact Julia sparse cohomology basis extraction Z^n / B^n."""
         self.require_julia()
         
         if d_np1 is None or d_np1.nnz == 0:
-            d_np1_rows, d_np1_cols, d_np1_vals = np.array([]), np.array([]), np.array([])
-            d_np1_m, d_np1_n = (d_n.shape[1], 0) if d_n is not None else (0, 0)
+            d_np1_rows = np.array([], dtype=np.int64)
+            d_np1_cols = np.array([], dtype=np.int64)
+            d_np1_vals = np.array([], dtype=np.int64)
+            if cn_size is not None:
+                d_np1_m, d_np1_n = (cn_size, 0)
+            else:
+                d_np1_m, d_np1_n = (d_n.shape[1], 0) if d_n is not None else (0, 0)
         else:
             d_np1_coo = d_np1.tocoo()
             d_np1_rows, d_np1_cols, d_np1_vals = d_np1_coo.row, d_np1_coo.col, d_np1_coo.data
             d_np1_m, d_np1_n = d_np1.shape
             
         if d_n is None or d_n.nnz == 0:
-            d_n_rows, d_n_cols, d_n_vals = np.array([]), np.array([]), np.array([])
-            d_n_m, d_n_n = (0, d_np1_m) if d_np1 is not None else (0, 0)
+            d_n_rows = np.array([], dtype=np.int64)
+            d_n_cols = np.array([], dtype=np.int64)
+            d_n_vals = np.array([], dtype=np.int64)
+            if cn_size is not None:
+                d_n_m, d_n_n = (0, cn_size)
+            else:
+                d_n_m, d_n_n = (0, d_np1_m) if d_np1 is not None else (0, 0)
         else:
             d_n_coo = d_n.tocoo()
             d_n_rows, d_n_cols, d_n_vals = d_n_coo.row, d_n_coo.col, d_n_coo.data

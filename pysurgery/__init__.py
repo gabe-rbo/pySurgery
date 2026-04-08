@@ -1,15 +1,15 @@
 from .core.complexes import ChainComplex, CWComplex
 from .core.intersection_forms import IntersectionForm
-from .core.quadratic_forms import QuadraticForm
+from .core.quadratic_forms import QuadraticForm, arf_invariant_gf2
 from .core.group_rings import GroupRingElement
-from .core.fundamental_group import FundamentalGroup, extract_pi_1
+from .core.fundamental_group import FundamentalGroup, GroupPresentation, extract_pi_1, simplify_presentation
 from .core.characteristic_classes import extract_stiefel_whitney_w2, check_spin_structure, extract_pontryagin_p1, verify_hirzebruch_signature
 from .core.kirby_calculus import KirbyDiagram
 from .core.k_theory import WhiteheadGroup, compute_whitehead_group
 from .algebraic_poincare import AlgebraicPoincareComplex
 from .algebraic_surgery import AlgebraicSurgeryComplex
-from .structure_set import StructureSet
-from .wall_groups import WallGroupL
+from .structure_set import StructureSet, NormalInvariantsResult, SurgeryExactSequenceResult
+from .wall_groups import WallGroupL, ObstructionResult
 from .bridge.julia_bridge import JuliaBridge
 from .homeomorphism import (
     analyze_homeomorphism_2d,
@@ -26,9 +26,12 @@ __all__ = [
     "CWComplex",
     "IntersectionForm",
     "QuadraticForm",
+    "arf_invariant_gf2",
     "GroupRingElement",
     "FundamentalGroup",
+    "GroupPresentation",
     "extract_pi_1",
+    "simplify_presentation",
     "extract_stiefel_whitney_w2",
     "check_spin_structure",
     "extract_pontryagin_p1",
@@ -39,7 +42,10 @@ __all__ = [
     "AlgebraicPoincareComplex",
     "AlgebraicSurgeryComplex",
     "StructureSet",
+    "NormalInvariantsResult",
+    "SurgeryExactSequenceResult",
     "WallGroupL",
+    "ObstructionResult",
     "JuliaBridge",
     "analyze_homeomorphism_2d",
     "analyze_homeomorphism_3d",

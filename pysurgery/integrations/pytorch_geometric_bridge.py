@@ -26,10 +26,16 @@ def pyg_to_cw_complex(data) -> CWComplex:
 
     if not hasattr(data, 'edge_index'):
         raise TypeError("Input must have an 'edge_index' attribute (like PyG Data).")
+    if hasattr(data, 'face') and data.face is not None:
+        raise NotImplementedError(
+            "pyg_to_cw_complex currently supports graph 1-skeletons only; face-level 2-cells are not implemented."
+        )
 
     n_vertices = data.num_nodes
     edge_index = data.edge_index.cpu().numpy()
-    
+    if edge_index.ndim != 2 or edge_index.shape[0] != 2:
+        raise ValueError("edge_index must have shape [2, E].")
+
     # We treat the graph as an undirected graph, but boundary matrices require orientation.
     # PyG edge_index usually contains both (u, v) and (v, u) for undirected graphs.
     # We will filter to only include edges where u < v to define a canonical orientation.

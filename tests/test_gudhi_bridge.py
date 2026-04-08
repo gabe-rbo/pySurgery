@@ -17,6 +17,15 @@ def test_signature_landscape():
     assert landscape[0][1] == 0
 
 
+def test_signature_landscape_exact_mode_raises_on_failure(monkeypatch):
+    st = gudhi.SimplexTree()
+    st.insert([0, 1, 2, 3, 4], 1.0)
+    import pysurgery.integrations.gudhi_bridge as gb
+    monkeypatch.setattr(gb, "simplex_tree_to_intersection_form", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("fail")))
+    with pytest.raises(RuntimeError):
+        gb.signature_landscape(st, allow_approx=False)
+
+
 def sample_circle(n_points):
     angles = np.linspace(0, 2*np.pi, n_points, endpoint=False)
     return np.column_stack([np.cos(angles), np.sin(angles)])

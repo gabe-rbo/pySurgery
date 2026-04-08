@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
+import pytest
 from pysurgery.core.math_core import get_sparse_snf_diagonal, get_snf_diagonal, smith_normal_form, extended_gcd
 
 def test_extended_gcd():
@@ -27,16 +28,35 @@ def test_smith_normal_form_exact():
     assert diag[2] == 0
 
 def test_get_sparse_snf_diagonal():
-    from pysurgery.bridge.julia_bridge import julia_engine
     B = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
     sp_B = sp.csr_matrix(B)
     diag = get_sparse_snf_diagonal(sp_B)
-    if julia_engine.available:
-        assert sorted(diag.tolist()) == [1, 3]
-    else:
-        assert len(diag) == 2
+    assert diag.tolist() == [1, 3, 0]
+
+
+def test_get_sparse_snf_diagonal_exact_mode_warns_exact_python_fallback(monkeypatch):
+    from pysurgery.bridge import julia_bridge
+
+    class _FakeJulia:
+        available = True
+
+        def compute_sparse_snf(self, *args, **kwargs):
+            raise RuntimeError("backend-fail")
+
+    monkeypatch.setattr(julia_bridge, "julia_engine", _FakeJulia())
+    A = sp.csr_matrix(np.array([[2]], dtype=np.int64))
+    with pytest.warns(UserWarning, match="exact Python/SymPy SNF"):
+        diag = get_sparse_snf_diagonal(A, allow_approx=False)
+    assert diag.tolist() == [2]
 
 def test_get_snf_diagonal():
     A = np.array([[3, 0], [0, 3]], dtype=np.int64)
     diag = get_snf_diagonal(A)
     assert sorted(diag.tolist()) == [3, 3]
+
+
+def test_get_snf_diagonal_trailing_zero_invariants():
+    A = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype=np.int64)
+    diag = get_snf_diagonal(A)
+    assert diag.tolist() == [1, 3, 0]
+

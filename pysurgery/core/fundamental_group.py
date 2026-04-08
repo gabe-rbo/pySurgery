@@ -1,5 +1,5 @@
 from typing import List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from .complexes import CWComplex
 
 class FundamentalGroup(BaseModel):
@@ -17,7 +17,106 @@ class FundamentalGroup(BaseModel):
         rels = ", ".join(["".join(r) for r in self.relations])
         return f"< {gens} | {rels} >"
 
-def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
+
+def _inverse_word_token(tok: str) -> str:
+    return tok[:-3] if tok.endswith("^-1") else f"{tok}^-1"
+
+
+def _free_reduce(word: List[str]) -> List[str]:
+    stack: List[str] = []
+    for tok in word:
+        if stack and _inverse_word_token(tok) == stack[-1]:
+            stack.pop()
+        else:
+            stack.append(tok)
+    return stack
+
+
+def _cyclic_reduce(word: List[str]) -> List[str]:
+    w = _free_reduce(word)
+    while len(w) >= 2 and _inverse_word_token(w[0]) == w[-1]:
+        w = w[1:-1]
+        w = _free_reduce(w)
+    return w
+
+
+def _canonicalize_cyclic_word(word: List[str]) -> List[str]:
+    if not word:
+        return []
+    inv_rev = [_inverse_word_token(t) for t in reversed(word)]
+
+    def rotations(w: List[str]):
+        n = len(w)
+        for i in range(n):
+            yield w[i:] + w[:i]
+
+    best = None
+    for cand in list(rotations(word)) + list(rotations(inv_rev)):
+        key = tuple(cand)
+        if best is None or key < tuple(best):
+            best = cand
+    return best if best is not None else []
+
+
+def simplify_presentation(generators: List[str], relations: List[List[str]]) -> FundamentalGroup:
+    # First pass: free+cyclic reduction and canonicalization of relators.
+    rels = []
+    for r in relations:
+        rr = _cyclic_reduce(r)
+        if rr:
+            rels.append(_canonicalize_cyclic_word(rr))
+
+    # Remove duplicates preserving deterministic order.
+    seen = set()
+    dedup = []
+    for r in rels:
+        key = tuple(r)
+        if key not in seen:
+            seen.add(key)
+            dedup.append(r)
+
+    # Eliminate generators fixed to identity by singleton relators.
+    kill = {r[0] for r in dedup if len(r) == 1}
+    if kill:
+        new_gens = [g for g in generators if g not in kill]
+        new_rels = []
+        for r in dedup:
+            rr = [t for t in r if (t.replace("^-1", "") not in kill)]
+            rr = _cyclic_reduce(rr)
+            if rr:
+                new_rels.append(_canonicalize_cyclic_word(rr))
+        # Rededup after elimination.
+        seen2 = set()
+        dedup2 = []
+        for r in new_rels:
+            key = tuple(r)
+            if key not in seen2:
+                seen2.add(key)
+                dedup2.append(r)
+        return FundamentalGroup(generators=new_gens, relations=dedup2)
+
+    return FundamentalGroup(generators=generators, relations=dedup)
+
+
+class GroupPresentation(BaseModel):
+    """Structured group descriptor for higher-level obstruction APIs."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    kind: str
+    factors: List[str] = Field(default_factory=list)
+
+    def normalized(self) -> str:
+        k = self.kind.strip().lower()
+        if k in {"trivial", "1"}:
+            return "1"
+        if k in {"z", "integer"}:
+            return "Z"
+        if k in {"product", "direct_product"} and self.factors:
+            return " x ".join(self.factors)
+        return self.kind
+
+def extract_pi_1(cw: CWComplex, simplify: bool = True) -> FundamentalGroup:
     """
     Computes a presentation for the fundamental group pi_1(X) by constructing 
     a maximal spanning tree in the 1-skeleton.
@@ -56,7 +155,6 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
             # Do NOT add to adjacency: a self-loop does not help BFS tree growth.
             # It is always a non-tree edge and becomes a generator.
             continue
-            continue
         elif len(col_row) != 2:
             edge_list.append(None)
             continue
@@ -78,20 +176,23 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
     visited = [False] * n_vertices
     tree_edges = set()
     
-    # Simple BFS starting from vertex 0
+    # Build a maximal spanning forest (robust even if the 1-skeleton is disconnected).
     if n_vertices > 0:
         import collections
-        queue = collections.deque([0])
-        visited[0] = True
-        
-        while queue:
-            curr = queue.popleft()
-            for neighbor, edge_idx, direction in adj[curr]:
-                if not visited[neighbor]:
-                    visited[neighbor] = True
-                    tree_edges.add(edge_idx)
-                    queue.append(neighbor)
-                    
+        for start in range(n_vertices):
+            if visited[start]:
+                continue
+            queue = collections.deque([start])
+            visited[start] = True
+
+            while queue:
+                curr = queue.popleft()
+                for neighbor, edge_idx, direction in adj[curr]:
+                    if not visited[neighbor]:
+                        visited[neighbor] = True
+                        tree_edges.add(edge_idx)
+                        queue.append(neighbor)
+
     # Edges not in the tree are our generators
     generators = [f"g_{i}" for i in range(n_edges) if i not in tree_edges]
     gen_map = {i: f"g_{i}" for i in range(n_edges) if i not in tree_edges}
@@ -113,48 +214,69 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
             
             # Rigorous path-lifting to orient the boundary correctly.
             # We trace the edges head-to-tail to form the exact algebraic string presentation.
-            edges_in_face = list(zip(col_data, col_row))
-            if len(edges_in_face) < 1: 
+            edges_in_face = []
+            for val, e in zip(col_data, col_row):
+                mult = abs(int(val))
+                if mult == 0:
+                    continue
+                sign = 1 if int(val) > 0 else -1
+                for _ in range(mult):
+                    edges_in_face.append((sign, int(e)))
+            if len(edges_in_face) < 1:
                 continue
                 
             edge_endpoints = {}
-            for val, e in edges_in_face:
+            for occ_id, (val, e) in enumerate(edges_in_face):
+                if e < 0 or e >= len(edge_list):
+                    continue
                 if edge_list[e] is None:
                     continue
                 u, v = edge_list[e]
                 # Directed edge is u -> v.
                 # If val == 1, path traverses u -> v. If -1, traverses v -> u.
                 if val == 1:
-                    edge_endpoints[e] = (u, v, 1)
+                    edge_endpoints[occ_id] = (e, u, v, 1)
                 else:
-                    edge_endpoints[e] = (v, u, -1)
-                    
+                    edge_endpoints[occ_id] = (e, v, u, -1)
+
+            if not edge_endpoints:
+                continue
+
             path = []
-            curr_val, curr_e = edges_in_face[0]
-            if curr_e not in edge_endpoints:
+            curr_occ = None
+            for occ_id in range(len(edges_in_face)):
+                if occ_id in edge_endpoints:
+                    curr_occ = occ_id
+                    break
+            if curr_occ is None:
                 continue
             
-            curr_u, curr_v, curr_dir = edge_endpoints[curr_e]
+            curr_e, curr_u, curr_v, curr_dir = edge_endpoints[curr_occ]
             path.append((curr_e, curr_dir))
-            used = {curr_e}
+            used = {curr_occ}
+            start_node = curr_u
             target_node = curr_v
             
             # Trace the boundary
-            while len(path) < len(edges_in_face):
+            while len(path) < len(edge_endpoints):
                 next_e_found = False
-                for val, e in edges_in_face:
-                    if e in used or e not in edge_endpoints:
+                for occ_id in range(len(edges_in_face)):
+                    if occ_id in used or occ_id not in edge_endpoints:
                         continue
-                    u, v, d = edge_endpoints[e]
+                    e, u, v, d = edge_endpoints[occ_id]
                     if u == target_node:
                         path.append((e, d))
                         target_node = v
-                        used.add(e)
+                        used.add(occ_id)
                         next_e_found = True
                         break
                 if not next_e_found:
                     break # Degenerate cycle, just use what we have
-                    
+
+            # Require a closed combinatorial cycle before creating a relation.
+            if target_node != start_node:
+                continue
+
             # If path tracing was perfectly successful, build the exact word
             relation = []
             for e, d in path:
@@ -170,4 +292,6 @@ def extract_pi_1(cw: CWComplex) -> FundamentalGroup:
                 
     # Raw presentation is mathematically complete.
     # We pass it to Julia for exact Tietze/Abelianization reductions when needed in K-Theory.
+    if simplify:
+        return simplify_presentation(generators, relations)
     return FundamentalGroup(generators=generators, relations=relations)
