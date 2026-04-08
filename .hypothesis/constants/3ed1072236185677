@@ -1,4 +1,0 @@
-# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/integrations/jax_bridge.py
-# hypothesis_version: 6.151.10
-
-[2.0, 10.0, 'JAX is required.']

@@ -1,4 +1,0 @@
-# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/integrations/__init__.py
-# hypothesis_version: 6.151.10
-
-['extract_complex_data', 'heal_mesh_topology', 'pyg_to_cw_complex', 'signature_landscape']
