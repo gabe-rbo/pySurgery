@@ -70,6 +70,6 @@ def test_K3_homeomorphism():
     form1 = IntersectionForm(matrix=k3_matrix, dimension=4)
     form2 = IntersectionForm(matrix=k3_matrix.copy(), dimension=4)
     
-    is_homeo, reason = analyze_homeomorphism_4d(form1, form2)
+    is_homeo, reason = analyze_homeomorphism_4d(form1, form2, ks1=0, ks2=0, simply_connected=True)
     assert is_homeo
     assert "SUCCESS" in reason

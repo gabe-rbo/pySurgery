@@ -12,10 +12,15 @@ from .structure_set import StructureSet, NormalInvariantsResult, SurgeryExactSeq
 from .wall_groups import WallGroupL, ObstructionResult
 from .bridge.julia_bridge import JuliaBridge
 from .homeomorphism import (
+    HomeomorphismResult,
     analyze_homeomorphism_2d,
+    analyze_homeomorphism_2d_result,
     analyze_homeomorphism_3d,
+    analyze_homeomorphism_3d_result,
     analyze_homeomorphism_4d,
+    analyze_homeomorphism_4d_result,
     analyze_homeomorphism_high_dim,
+    analyze_homeomorphism_high_dim_result,
     surgery_to_remove_impediments
 )
 from . import integrations
@@ -47,10 +52,15 @@ __all__ = [
     "WallGroupL",
     "ObstructionResult",
     "JuliaBridge",
+    "HomeomorphismResult",
     "analyze_homeomorphism_2d",
+    "analyze_homeomorphism_2d_result",
     "analyze_homeomorphism_3d",
+    "analyze_homeomorphism_3d_result",
     "analyze_homeomorphism_4d",
+    "analyze_homeomorphism_4d_result",
     "analyze_homeomorphism_high_dim",
+    "analyze_homeomorphism_high_dim_result",
     "surgery_to_remove_impediments",
     "integrations"
 ]

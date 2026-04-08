@@ -1,28 +1,191 @@
-from typing import Tuple
+from dataclasses import dataclass, field
+from typing import Literal, Tuple
 from .core.intersection_forms import IntersectionForm
 from .core.complexes import ChainComplex
 from .core.exceptions import DimensionError
+from .core.fundamental_group import FundamentalGroup, GroupPresentation
+from .core.k_theory import WhiteheadGroup, compute_whitehead_group
+from .wall_groups import ObstructionResult, WallGroupL
 import warnings
 import itertools
 import numpy as np
+import sympy as sp
+
+
+@dataclass
+class HomeomorphismResult:
+    """Structured decision object used by dimension-aware analyzers."""
+
+    status: Literal["success", "impediment", "inconclusive", "surgery_required"]
+    is_homeomorphic: bool | None
+    reasoning: str
+    theorem: str | None = None
+    evidence: list[str] = field(default_factory=list)
+    missing_data: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+    exact: bool = True
+
+    def to_legacy_tuple(self) -> Tuple[bool | None, str]:
+        return self.is_homeomorphic, self.reasoning
+
+
+def _normalize_torsion(torsion: list[int]) -> list[int]:
+    return sorted(abs(int(x)) for x in torsion if abs(int(x)) > 1)
+
+
+def _check_cohomology_equivalence(
+    c1: ChainComplex,
+    c2: ChainComplex,
+    max_dim: int,
+    theorem: str,
+    allow_approx: bool,
+) -> HomeomorphismResult | None:
+    if c1.coefficient_ring != c2.coefficient_ring:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=(
+                "INCONCLUSIVE: Cohomology comparison requires a shared coefficient ring; "
+                f"received {c1.coefficient_ring!r} vs {c2.coefficient_ring!r}."
+            ),
+            theorem=theorem,
+            missing_data=["Common coefficient ring for cohomology invariants"],
+        )
+
+    for n in range(max_dim + 1):
+        try:
+            r1, t1 = c1.cohomology(n)
+            r2, t2 = c2.cohomology(n)
+        except Exception as e:
+            if allow_approx:
+                warnings.warn(
+                    f"Topological Hint: Cohomology extraction failed at dimension {n} ({e!r}). Exact classification disabled."
+                )
+            return HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning=f"INCONCLUSIVE: Exact cohomology extraction failed at dimension {n} ({e!r}).",
+                theorem=theorem,
+                missing_data=[f"Exact H^{n}"],
+                exact=False,
+            )
+
+        t1n = _normalize_torsion(t1)
+        t2n = _normalize_torsion(t2)
+        if r1 != r2 or t1n != t2n:
+            return HomeomorphismResult(
+                status="impediment",
+                is_homeomorphic=False,
+                reasoning=(
+                    f"IMPEDIMENT: Cohomology groups differ in dimension {n} "
+                    f"(Rank: {r1} vs {r2}, Torsion: {t1n} vs {t2n})."
+                ),
+                theorem=theorem,
+                evidence=[f"H^{n} mismatch"],
+            )
+
+    return None
+
+
+def _check_cup_product_compatibility(
+    cup_product_signature_1: dict | None,
+    cup_product_signature_2: dict | None,
+    theorem: str,
+) -> HomeomorphismResult | None:
+    if cup_product_signature_1 is None and cup_product_signature_2 is None:
+        return None
+    if (cup_product_signature_1 is None) != (cup_product_signature_2 is None):
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=(
+                "INCONCLUSIVE: Cohomology-ring comparison requires cup-product signatures "
+                "for both manifolds."
+            ),
+            theorem=theorem,
+            missing_data=["Cup-product signature for both manifolds"],
+        )
+    if cup_product_signature_1 != cup_product_signature_2:
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning="IMPEDIMENT: Cohomology-ring signatures differ (cup-product incompatibility).",
+            theorem=theorem,
+            evidence=["Cup-product signature mismatch"],
+        )
+    return None
+
+
+def _det_int_small(M: np.ndarray) -> int:
+    n = M.shape[0]
+    if n == 0:
+        return 1
+    if n == 1:
+        return int(M[0, 0])
+    if n == 2:
+        return int(M[0, 0] * M[1, 1] - M[0, 1] * M[1, 0])
+    return int(sp.Matrix(M.tolist()).det())
+
+
+def _presentation_key(pi1: FundamentalGroup) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
+    rels = tuple(tuple(tok for tok in rel) for rel in pi1.relations)
+    return tuple(pi1.generators), rels
+
+
+def _infer_pi_group_descriptor(pi1: FundamentalGroup | None, pi_group: str | GroupPresentation | None) -> str | GroupPresentation | None:
+    if pi_group is not None:
+        return pi_group
+    if pi1 is None:
+        return None
+    if not pi1.generators:
+        return "1"
+    if not pi1.relations and len(pi1.generators) == 1:
+        return "Z"
+    return None
+
+
+def _homology_sphere_like(c: ChainComplex, dim: int) -> bool | None:
+    try:
+        r0, t0 = c.homology(0)
+        if r0 != 1 or _normalize_torsion(t0):
+            return False
+        for n in range(1, dim):
+            r, t = c.homology(n)
+            if r != 0 or _normalize_torsion(t):
+                return False
+        rdim, tdim = c.homology(dim)
+        return rdim == 1 and _normalize_torsion(tdim) == []
+    except Exception:
+        return None
 
 
 def _search_integer_isometry(Q1: np.ndarray, Q2: np.ndarray, max_entry: int = 2) -> np.ndarray | None:
     """Bounded search for U in GL_n(Z) with U^T Q1 U = Q2 (small-rank fallback)."""
+    if Q1.ndim != 2 or Q2.ndim != 2 or Q1.shape[0] != Q1.shape[1] or Q2.shape[0] != Q2.shape[1]:
+        return None
+    if Q1.shape != Q2.shape:
+        return None
     n = Q1.shape[0]
     if n > 4:
         return None
     values = range(-max_entry, max_entry + 1)
     for entries in itertools.product(values, repeat=n * n):
         U = np.array(entries, dtype=np.int64).reshape((n, n))
-        det = round(float(np.linalg.det(U)))
+        det = _det_int_small(U)
         if abs(det) != 1:
             continue
         if np.array_equal(U.T @ Q1 @ U, Q2):
             return U
     return None
 
-def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex, allow_approx: bool = False) -> Tuple[bool | None, str]:
+def analyze_homeomorphism_2d_result(
+    c1: ChainComplex,
+    c2: ChainComplex,
+    allow_approx: bool = False,
+    *,
+    cup_product_signature_1: dict | None = None,
+    cup_product_signature_2: dict | None = None,
+) -> HomeomorphismResult:
     """
     Analyzes the potential for homeomorphism between two 2-dimensional manifolds (surfaces).
     
@@ -37,41 +200,121 @@ def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex, allow_approx: b
     reasoning : str
     """
     try:
-        r2_1, t2_1 = c1.homology(2)
-        r2_2, t2_2 = c2.homology(2)
+        r2_1, _ = c1.homology(2)
+        r2_2, _ = c2.homology(2)
     except Exception as e:
-        if not allow_approx:
-            return None, f"INCONCLUSIVE: Exact H_2 computation failed ({e!r}). Set allow_approx=True to use assumption-based fallback."
-        msg = f"Topological Hint: H_2 homology extraction failed ({e!r}). Assuming non-orientable (Rank 0) due to allow_approx=True."
-        warnings.warn(msg)
-        r2_1, r2_2 = 0, 0
-        
+        if allow_approx:
+            warnings.warn(f"Topological Hint: H_2 homology extraction failed ({e!r}). Exact classification disabled.")
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=f"INCONCLUSIVE: Exact H_2 computation failed ({e!r}).",
+            theorem="Classification of Closed Surfaces",
+            missing_data=["Exact H_2"],
+            exact=False,
+        )
+
     orientable_1 = (r2_1 == 1)
     orientable_2 = (r2_2 == 1)
     
     if orientable_1 != orientable_2:
-        return False, f"IMPEDIMENT: Orientability mismatch. Manifold 1 is {'Orientable' if orientable_1 else 'Non-Orientable'}, Manifold 2 is {'Orientable' if orientable_2 else 'Non-Orientable'}."
-        
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning=f"IMPEDIMENT: Orientability mismatch. Manifold 1 is {'Orientable' if orientable_1 else 'Non-Orientable'}, Manifold 2 is {'Orientable' if orientable_2 else 'Non-Orientable'}.",
+            theorem="Classification of Closed Surfaces",
+            evidence=[f"H_2 ranks: {r2_1} vs {r2_2}"],
+        )
+
     try:
         r1_1, t1_1 = c1.homology(1)
         r1_2, t1_2 = c2.homology(1)
     except Exception as e:
-        if not allow_approx:
-            return None, f"INCONCLUSIVE: Exact H_1 computation failed ({e!r}). Set allow_approx=True to use assumption-based fallback."
-        msg = f"Topological Hint: H_1 homology extraction failed ({e!r}). Assuming genus 0 due to allow_approx=True."
-        warnings.warn(msg)
-        r1_1, r1_2, t1_1, t1_2 = 0, 0, [], []
-        
-    if r1_1 != r1_2:
-        return False, f"IMPEDIMENT: Genus mismatch. H_1 rank differs ({r1_1} vs {r1_2})."
-        
-    # Check torsion in H_1 (relevant for non-orientable surfaces like RP^2 vs Klein Bottle)
-    if t1_1 != t1_2:
-        return False, f"IMPEDIMENT: Torsion in H_1 differs ({t1_1} vs {t1_2})."
-        
-    return True, "SUCCESS: Homeomorphism established via the Classification Theorem of Closed Surfaces. Both manifolds share the same orientability and genus."
+        if allow_approx:
+            warnings.warn(f"Topological Hint: H_1 homology extraction failed ({e!r}). Exact classification disabled.")
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=f"INCONCLUSIVE: Exact H_1 computation failed ({e!r}).",
+            theorem="Classification of Closed Surfaces",
+            missing_data=["Exact H_1"],
+            exact=False,
+        )
 
-def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex, allow_approx: bool = False) -> Tuple[bool | None, str]:
+    if r1_1 != r1_2:
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning=f"IMPEDIMENT: Genus mismatch. H_1 rank differs ({r1_1} vs {r1_2}).",
+            theorem="Classification of Closed Surfaces",
+            evidence=[f"H_1 ranks: {r1_1} vs {r1_2}"],
+        )
+
+    # Check torsion in H_1 (relevant for non-orientable surfaces like RP^2 vs Klein Bottle)
+    t1_1n = _normalize_torsion(t1_1)
+    t1_2n = _normalize_torsion(t1_2)
+    if t1_1n != t1_2n:
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning=f"IMPEDIMENT: Torsion in H_1 differs ({t1_1n} vs {t1_2n}).",
+            theorem="Classification of Closed Surfaces",
+            evidence=["Invariant-factor torsion mismatch in H_1"],
+        )
+
+    coho_check = _check_cohomology_equivalence(
+        c1,
+        c2,
+        max_dim=2,
+        theorem="Classification of Closed Surfaces",
+        allow_approx=allow_approx,
+    )
+    if coho_check is not None:
+        return coho_check
+
+    cup_check = _check_cup_product_compatibility(
+        cup_product_signature_1,
+        cup_product_signature_2,
+        theorem="Classification of Closed Surfaces",
+    )
+    if cup_check is not None:
+        return cup_check
+
+    return HomeomorphismResult(
+        status="success",
+        is_homeomorphic=True,
+        reasoning="SUCCESS: Homeomorphism established via the Classification Theorem of Closed Surfaces using exact H_1/H_2 invariants.",
+        theorem="Classification of Closed Surfaces",
+        evidence=["Orientability match", "H_1 rank match", "H_1 torsion match"],
+    )
+
+
+def analyze_homeomorphism_2d(
+    c1: ChainComplex,
+    c2: ChainComplex,
+    allow_approx: bool = False,
+    *,
+    cup_product_signature_1: dict | None = None,
+    cup_product_signature_2: dict | None = None,
+) -> Tuple[bool | None, str]:
+    return analyze_homeomorphism_2d_result(
+        c1,
+        c2,
+        allow_approx=allow_approx,
+        cup_product_signature_1=cup_product_signature_1,
+        cup_product_signature_2=cup_product_signature_2,
+    ).to_legacy_tuple()
+
+def analyze_homeomorphism_3d_result(
+    c1: ChainComplex,
+    c2: ChainComplex,
+    allow_approx: bool = False,
+    *,
+    pi1_1: FundamentalGroup | None = None,
+    pi1_2: FundamentalGroup | None = None,
+    cup_product_signature_1: dict | None = None,
+    cup_product_signature_2: dict | None = None,
+) -> HomeomorphismResult:
     """
     Analyzes the potential for homeomorphism between two 3-dimensional manifolds.
     
@@ -79,32 +322,129 @@ def analyze_homeomorphism_3d(c1: ChainComplex, c2: ChainComplex, allow_approx: b
     Algebraic topology alone (homology) is insufficient to prove homeomorphism in general 
     (e.g., Poincare homology spheres have the same homology as S^3 but different fundamental groups).
     """
-    # Check basic homology equivalence
+    # Check basic homology equivalence (exact-only for certifying statements).
     for n in range(4):
         try:
             r_1, t_1 = c1.homology(n)
             r_2, t_2 = c2.homology(n)
         except Exception as e:
-            if not allow_approx:
-                return None, f"INCONCLUSIVE: Exact homology extraction failed at dimension {n} ({e!r}). Set allow_approx=True for assumption-based fallback."
-            msg = f"Topological Hint: Homology extraction failed at dimension {n} ({e!r}). Assuming empty homology due to allow_approx=True."
-            warnings.warn(msg)
-            r_1, r_2, t_1, t_2 = 0, 0, [], []
-            
-        if r_1 != r_2 or t_1 != t_2:
-            return False, f"IMPEDIMENT: Homology groups differ in dimension {n} (Rank: {r_1} vs {r_2}, Torsion: {t_1} vs {t_2}). Manifolds are not even homotopy equivalent."
-            
-    # If they are homology spheres
-    try:
-        if c1.homology(1) == (0, []) and c1.homology(2) == (0, []) and c1.homology(3) == (1, []):
-            return None, "INCONCLUSIVE: Both are Homology Spheres. By Perelman's resolution of the Poincare Conjecture, if they are simply-connected (pi_1 = 1), they are homeomorphic to S^3. However, pi_1 computation is required to distinguish from exotic homology spheres (like the Poincare dodecahedral space)."
-    except Exception as e:
-        msg = f"Topological Hint: Sphere validation check failed ({e!r})."
-        warnings.warn(msg)
-        
-    return None, "INCONCLUSIVE: Manifolds are Homology Equivalent. In 3D, true homeomorphism requires evaluating the fundamental group (pi_1) or geometric Ricci flow, which lies outside pure algebraic homology."
+            if allow_approx:
+                warnings.warn(f"Topological Hint: Homology extraction failed at dimension {n} ({e!r}). Exact classification disabled.")
+            return HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning=f"INCONCLUSIVE: Exact homology extraction failed at dimension {n} ({e!r}).",
+                theorem="Geometrization / 3-manifold recognition",
+                missing_data=[f"Exact H_{n}"],
+                exact=False,
+            )
 
-def analyze_homeomorphism_high_dim(c1: ChainComplex, c2: ChainComplex, dim: int, allow_approx: bool = False) -> Tuple[bool | None, str]:
+        t_1n = _normalize_torsion(t_1)
+        t_2n = _normalize_torsion(t_2)
+        if r_1 != r_2 or t_1n != t_2n:
+            return HomeomorphismResult(
+                status="impediment",
+                is_homeomorphic=False,
+                reasoning=f"IMPEDIMENT: Homology groups differ in dimension {n} (Rank: {r_1} vs {r_2}, Torsion: {t_1n} vs {t_2n}).",
+                theorem="Geometrization / 3-manifold recognition",
+                evidence=[f"H_{n} mismatch"],
+            )
+
+    if (pi1_1 is None) != (pi1_2 is None):
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning="INCONCLUSIVE: Fundamental-group data supplied for only one manifold.",
+            theorem="Geometrization / 3-manifold recognition",
+            missing_data=["Matched pi_1 data for both manifolds"],
+        )
+
+    if pi1_1 is not None and pi1_2 is not None and _presentation_key(pi1_1) != _presentation_key(pi1_2):
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning="IMPEDIMENT: Fundamental groups differ; manifolds are not homeomorphic.",
+            theorem="Geometrization / 3-manifold recognition",
+            evidence=["pi_1 presentation mismatch"],
+        )
+
+    coho_check = _check_cohomology_equivalence(
+        c1,
+        c2,
+        max_dim=3,
+        theorem="Geometrization / 3-manifold recognition",
+        allow_approx=allow_approx,
+    )
+    if coho_check is not None:
+        return coho_check
+
+    cup_check = _check_cup_product_compatibility(
+        cup_product_signature_1,
+        cup_product_signature_2,
+        theorem="Geometrization / 3-manifold recognition",
+    )
+    if cup_check is not None:
+        return cup_check
+
+    s1 = _homology_sphere_like(c1, 3)
+    s2 = _homology_sphere_like(c2, 3)
+    if s1 and s2:
+        if pi1_1 is None:
+            return HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning="INCONCLUSIVE: Both are homology-sphere candidates, but pi_1 data is required before applying Poincare/Geometrization conclusions.",
+                theorem="Poincare Conjecture / Geometrization",
+                missing_data=["pi_1 for both manifolds"],
+            )
+        if not pi1_1.generators and not pi1_2.generators:
+            return HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning="INCONCLUSIVE: Homology-sphere and trivial pi_1 evidence is promising; a full 3-manifold recognition pipeline is still required in this API.",
+                theorem="Poincare Conjecture / Geometrization",
+                assumptions=["Closed connected 3-manifold hypotheses must hold"],
+            )
+
+    return HomeomorphismResult(
+        status="inconclusive",
+        is_homeomorphic=None,
+        reasoning="INCONCLUSIVE: Manifolds are homology equivalent. In 3D, full homeomorphism recognition requires geometric/fundamental-group analysis beyond homology alone.",
+        theorem="Geometrization / 3-manifold recognition",
+        missing_data=["Certified geometric or group-theoretic recognition witness"],
+    )
+
+
+def analyze_homeomorphism_3d(
+    c1: ChainComplex,
+    c2: ChainComplex,
+    allow_approx: bool = False,
+    *,
+    cup_product_signature_1: dict | None = None,
+    cup_product_signature_2: dict | None = None,
+) -> Tuple[bool | None, str]:
+    return analyze_homeomorphism_3d_result(
+        c1,
+        c2,
+        allow_approx=allow_approx,
+        cup_product_signature_1=cup_product_signature_1,
+        cup_product_signature_2=cup_product_signature_2,
+    ).to_legacy_tuple()
+
+def analyze_homeomorphism_high_dim_result(
+    c1: ChainComplex,
+    c2: ChainComplex,
+    dim: int,
+    allow_approx: bool = False,
+    *,
+    pi1: FundamentalGroup | None = None,
+    pi_group: str | GroupPresentation | None = None,
+    whitehead_group: WhiteheadGroup | None = None,
+    wall_obstruction: ObstructionResult | None = None,
+    wall_form: IntersectionForm | None = None,
+    cup_product_signature_1: dict | None = None,
+    cup_product_signature_2: dict | None = None,
+) -> HomeomorphismResult:
     """
     Analyzes homeomorphism for high-dimensional manifolds (n >= 5) using the s-Cobordism Theorem 
     and Smale's Generalized Poincare Conjecture (1961).
@@ -118,34 +458,188 @@ def analyze_homeomorphism_high_dim(c1: ChainComplex, c2: ChainComplex, dim: int,
             r_1, t_1 = c1.homology(n)
             r_2, t_2 = c2.homology(n)
         except Exception as e:
-            if not allow_approx:
-                return None, f"INCONCLUSIVE: Exact homology extraction failed at dimension {n} ({e!r}). Set allow_approx=True for assumption-based fallback."
-            msg = f"Topological Hint: Homology extraction failed at dimension {n} ({e!r}). Assuming empty homology due to allow_approx=True."
-            warnings.warn(msg)
-            r_1, r_2, t_1, t_2 = 0, 0, [], []
-            
-        if r_1 != r_2 or t_1 != t_2:
-            return False, f"IMPEDIMENT: Homology mismatch in dimension {n}. Manifolds are not homotopy equivalent."
-            
-    # High-dimensional surgery logic
-    # If they are homology equivalent to a sphere
-    is_sphere = True
-    for n in range(1, dim):
-        try:
-            r, t = c1.homology(n)
-            if r != 0 or t:
-                is_sphere = False
-                break
-        except Exception as e:
-            msg = f"Topological Hint: Sphere validation iteration failed at dim {n} ({e!r})."
-            warnings.warn(msg)
-            
-    if is_sphere:
-        return True, f"SUCCESS: Both manifolds are homology spheres. Assuming they are simply-connected (pi_1 = 1), Smale's Generalized Poincare Conjecture (1961) guarantees they are homeomorphic to S^{dim}. Note: They may still be exotic spheres (non-diffeomorphic) under Milnor's classification."
-        
-    return None, f"INCONCLUSIVE: Manifolds are homology equivalent in {dim}D. By the s-Cobordism Theorem, exact homeomorphism requires verifying that the Whitehead torsion Wh(pi_1) vanishes, and computing Wall's L-group surgery obstructions L_{dim}(pi_1)."
+            if allow_approx:
+                warnings.warn(f"Topological Hint: Homology extraction failed at dimension {n} ({e!r}). Exact classification disabled.")
+            return HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning=f"INCONCLUSIVE: Exact homology extraction failed at dimension {n} ({e!r}).",
+                theorem="s-Cobordism / surgery classification",
+                missing_data=[f"Exact H_{n}"],
+                exact=False,
+            )
 
-def analyze_homeomorphism_4d(m1: IntersectionForm, m2: IntersectionForm, ks1: int = 0, ks2: int = 0) -> Tuple[bool | None, str]:
+        t_1n = _normalize_torsion(t_1)
+        t_2n = _normalize_torsion(t_2)
+        if r_1 != r_2 or t_1n != t_2n:
+            return HomeomorphismResult(
+                status="impediment",
+                is_homeomorphic=False,
+                reasoning=f"IMPEDIMENT: Homology mismatch in dimension {n} (Rank: {r_1} vs {r_2}, Torsion: {t_1n} vs {t_2n}).",
+                theorem="s-Cobordism / surgery classification",
+                evidence=[f"H_{n} mismatch"],
+            )
+
+    coho_check = _check_cohomology_equivalence(
+        c1,
+        c2,
+        max_dim=dim,
+        theorem="s-Cobordism / surgery classification",
+        allow_approx=allow_approx,
+    )
+    if coho_check is not None:
+        return coho_check
+
+    cup_check = _check_cup_product_compatibility(
+        cup_product_signature_1,
+        cup_product_signature_2,
+        theorem="s-Cobordism / surgery classification",
+    )
+    if cup_check is not None:
+        return cup_check
+
+    descriptor = _infer_pi_group_descriptor(pi1, pi_group)
+    if descriptor is None:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=f"INCONCLUSIVE: Homology matches in {dim}D, but pi_1/group-ring descriptor is missing. s-Cobordism requires Whitehead and Wall obstruction checks.",
+            theorem="s-Cobordism / surgery classification",
+            missing_data=["pi_1 or supported pi-group descriptor", "Whitehead torsion", "Wall obstruction"],
+        )
+
+    wh = whitehead_group
+    if wh is None:
+        if pi1 is not None:
+            wh = compute_whitehead_group(pi1)
+        elif descriptor == "1":
+            wh = WhiteheadGroup(rank=0, description="Wh(1)=0")
+
+    if wh is None:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning="INCONCLUSIVE: Whitehead torsion was not provided and cannot be inferred from available data.",
+            theorem="s-Cobordism / surgery classification",
+            missing_data=["Whitehead torsion Wh(pi_1)"],
+        )
+
+    if not wh.computable:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=f"INCONCLUSIVE: Whitehead torsion computation failed ({wh.description}).",
+            theorem="s-Cobordism / surgery classification",
+            missing_data=["Computable Wh(pi_1)"],
+            assumptions=wh.assumptions,
+            exact=wh.exact,
+        )
+
+    if wh.rank > 0:
+        return HomeomorphismResult(
+            status="surgery_required",
+            is_homeomorphic=False,
+            reasoning=f"SURGERY_REQUIRED: Whitehead torsion obstruction detected (rank >= {wh.rank}).",
+            theorem="s-Cobordism / surgery classification",
+            evidence=[wh.description],
+            assumptions=wh.assumptions,
+            exact=wh.exact,
+        )
+
+    wall = wall_obstruction
+    if wall is None:
+        try:
+            wall = WallGroupL(dimension=dim, pi=descriptor).compute_obstruction_result(wall_form)
+        except Exception as e:
+            return HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning=f"INCONCLUSIVE: Wall obstruction evaluation failed ({e!r}).",
+                theorem="s-Cobordism / surgery classification",
+                missing_data=["Computable Wall L-group obstruction"],
+            )
+
+    if not wall.computable:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=f"INCONCLUSIVE: Wall obstruction not computable ({wall.message}).",
+            theorem="s-Cobordism / surgery classification",
+            missing_data=[f"Computable L_{dim}({wall.pi}) obstruction"],
+            assumptions=wall.assumptions,
+            exact=wall.exact,
+        )
+
+    if wall.value is not None and int(wall.value) != 0:
+        return HomeomorphismResult(
+            status="surgery_required",
+            is_homeomorphic=False,
+            reasoning=f"SURGERY_REQUIRED: Non-zero Wall obstruction detected in L_{dim}({wall.pi}) (value={wall.value}).",
+            theorem="s-Cobordism / surgery classification",
+            evidence=["Whitehead obstruction vanishes", f"Wall obstruction value {wall.value}"],
+            assumptions=wall.assumptions,
+            exact=wall.exact,
+        )
+
+    s1 = _homology_sphere_like(c1, dim)
+    s2 = _homology_sphere_like(c2, dim)
+    if s1 is None or s2 is None:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning="INCONCLUSIVE: Could not verify homology-sphere side conditions exactly.",
+            theorem="s-Cobordism / surgery classification",
+            missing_data=["Exact homology-sphere verification"],
+        )
+
+    if s1 and s2 and descriptor == "1":
+        return HomeomorphismResult(
+            status="success",
+            is_homeomorphic=True,
+            reasoning=f"SUCCESS: Homology-sphere conditions, Wh(pi_1)=0, and vanishing Wall obstruction support homeomorphism in {dim}D under s-cobordism/generalized Poincare hypotheses.",
+            theorem="s-Cobordism / generalized Poincare",
+            evidence=["Homology sphere checks passed", "Wh(pi_1)=0", f"L_{dim}(pi_1) obstruction vanishes"],
+            assumptions=["Closed connected manifold hypotheses", "Input normal-map/surgery model is valid"],
+            exact=wall.exact and wh.exact,
+        )
+
+    return HomeomorphismResult(
+        status="inconclusive",
+        is_homeomorphic=None,
+        reasoning=f"INCONCLUSIVE: Homology equivalence holds in {dim}D and computed surgery obstructions vanish, but this API has no explicit homotopy-equivalence witness to complete classification.",
+        theorem="s-Cobordism / surgery classification",
+        evidence=["Homology match", "Wh(pi_1)=0", f"L_{dim}(pi_1) obstruction vanishes"],
+        assumptions=wall.assumptions + wh.assumptions,
+        exact=wall.exact and wh.exact,
+    )
+
+
+def analyze_homeomorphism_high_dim(
+    c1: ChainComplex,
+    c2: ChainComplex,
+    dim: int,
+    allow_approx: bool = False,
+    *,
+    cup_product_signature_1: dict | None = None,
+    cup_product_signature_2: dict | None = None,
+) -> Tuple[bool | None, str]:
+    return analyze_homeomorphism_high_dim_result(
+        c1,
+        c2,
+        dim=dim,
+        allow_approx=allow_approx,
+        cup_product_signature_1=cup_product_signature_1,
+        cup_product_signature_2=cup_product_signature_2,
+    ).to_legacy_tuple()
+
+def analyze_homeomorphism_4d_result(
+    m1: IntersectionForm,
+    m2: IntersectionForm,
+    ks1: int | None = None,
+    ks2: int | None = None,
+    *,
+    simply_connected: bool | None = None,
+) -> HomeomorphismResult:
     """
     Analyzes the potential for homeomorphism between two simply-connected 4-manifolds.
     
@@ -162,41 +656,160 @@ def analyze_homeomorphism_4d(m1: IntersectionForm, m2: IntersectionForm, ks1: in
     if m1.dimension != 4 or m2.dimension != 4:
         raise DimensionError(f"Freedman's Classification Theorem strictly governs simply-connected 4-manifolds via intersection forms. "
                              f"Received manifolds of dimensions {m1.dimension} and {m2.dimension}. Hint: Use 2D, 3D, or high_dim analyzers instead.")
-        
+
+    if simply_connected is None:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning="INCONCLUSIVE: Simply-connectedness was not supplied; Freedman classification cannot be applied safely.",
+            theorem="Freedman classification",
+            missing_data=["Verification that both manifolds are simply-connected"],
+        )
+
+    if not simply_connected:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning="INCONCLUSIVE: Input marked as non-simply-connected; this analyzer currently covers the simply-connected Freedman branch.",
+            theorem="Freedman classification",
+            missing_data=["Non-simply-connected 4D surgery pipeline"],
+        )
+
+    n = int(np.asarray(m1.matrix).shape[0])
+    if m1.rank() != n or m2.rank() != n:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning="INCONCLUSIVE: Degenerate intersection form detected; unimodular non-degenerate forms are required here.",
+            theorem="Freedman classification",
+            missing_data=["Non-degenerate unimodular intersection forms"],
+        )
+
+    try:
+        det1 = abs(int(m1.determinant()))
+        det2 = abs(int(m2.determinant()))
+    except Exception as e:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=f"INCONCLUSIVE: Exact determinant/unimodularity check failed ({e!r}).",
+            theorem="Freedman classification",
+            missing_data=["Exact determinant for both forms"],
+        )
+
+    if det1 != 1 or det2 != 1:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=f"INCONCLUSIVE: Intersection forms are not unimodular (|det|={det1} vs {det2}).",
+            theorem="Freedman classification",
+            missing_data=["Unimodular forms required for this branch"],
+        )
+
     # Impediment 1: Rank
     if m1.rank() != m2.rank():
-        return False, f"IMPEDIMENT: Ranks differ ({m1.rank()} vs {m2.rank()}). Homeomorphism is impossible."
-        
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning=f"IMPEDIMENT: Ranks differ ({m1.rank()} vs {m2.rank()}). Homeomorphism is impossible.",
+            theorem="Freedman classification",
+        )
+
     # Impediment 2: Signature
     if m1.signature() != m2.signature():
-        return False, f"IMPEDIMENT: Signatures differ ({m1.signature()} vs {m2.signature()}). The L_4(1) surgery obstruction is non-zero."
-        
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning=f"IMPEDIMENT: Signatures differ ({m1.signature()} vs {m2.signature()}). The L_4(1) surgery obstruction is non-zero.",
+            theorem="Freedman classification",
+        )
+
     # Impediment 3: Parity (Type)
     if m1.type() != m2.type():
-        return False, f"IMPEDIMENT: Parity mismatch (Type {m1.type()} vs Type {m2.type()})."
-        
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning=f"IMPEDIMENT: Parity mismatch (Type {m1.type()} vs Type {m2.type()}).",
+            theorem="Freedman classification",
+        )
+
+    if ks1 is None or ks2 is None:
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning="INCONCLUSIVE: Kirby-Siebenmann invariants were not supplied.",
+            theorem="Freedman classification",
+            missing_data=["ks1", "ks2"],
+        )
+
     # Impediment 4: Kirby-Siebenmann Invariant
     if ks1 != ks2:
-        return False, f"IMPEDIMENT: Kirby-Siebenmann invariants differ ({ks1} vs {ks2}). These manifolds are homotopically equivalent but topologically distinct."
-        
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning=f"IMPEDIMENT: Kirby-Siebenmann invariants differ ({ks1} vs {ks2}). These manifolds are homotopically equivalent but topologically distinct.",
+            theorem="Freedman classification",
+        )
+
     # Case: Indefinite forms (classified by rank, signature, parity)
     if m1.is_indefinite():
-        return True, (
-            "SUCCESS: Homeomorphism established via Freedman's Theorem for indefinite forms "
-            f"(rank={m1.rank()}, signature={m1.signature()}, type={m1.type()}, KS={ks1})."
+        return HomeomorphismResult(
+            status="success",
+            is_homeomorphic=True,
+            reasoning=(
+                "SUCCESS: Homeomorphism established via Freedman's theorem for indefinite unimodular forms "
+                f"(rank={m1.rank()}, signature={m1.signature()}, type={m1.type()}, KS={ks1})."
+            ),
+            theorem="Freedman classification",
+            evidence=["Indefinite unimodular forms classified by rank/signature/type", "Matching KS invariant"],
         )
 
     # Case: Definite forms (require lattice isomorphism)
     Q1 = np.asarray(m1.matrix, dtype=np.int64)
     Q2 = np.asarray(m2.matrix, dtype=np.int64)
     if np.array_equal(Q1, Q2):
-        return True, "SUCCESS: Definite intersection forms match exactly as integer lattices."
+        return HomeomorphismResult(
+            status="success",
+            is_homeomorphic=True,
+            reasoning="SUCCESS: Definite intersection forms match exactly as integer lattices.",
+            theorem="Freedman classification",
+            evidence=["Exact matrix equality"],
+        )
 
     U = _search_integer_isometry(Q1, Q2, max_entry=2)
     if U is not None:
-        return True, "SUCCESS: Definite lattice isomorphism certificate found (U^T Q1 U = Q2)."
+        return HomeomorphismResult(
+            status="success",
+            is_homeomorphic=True,
+            reasoning="SUCCESS: Definite lattice isomorphism certificate found (U^T Q1 U = Q2).",
+            theorem="Freedman classification",
+            evidence=["Explicit unimodular isometry witness"],
+        )
 
-    return None, "INCONCLUSIVE: No small-entry unimodular lattice isomorphism certificate found for definite forms. Install/enable Julia for faster exact lattice-isometry workflows on larger ranks."
+    return HomeomorphismResult(
+        status="inconclusive",
+        is_homeomorphic=None,
+        reasoning="INCONCLUSIVE: No bounded-search unimodular lattice-isometry certificate found for definite forms.",
+        theorem="Freedman classification",
+        missing_data=["Exact lattice-isometry solver for definite forms"],
+    )
+
+
+def analyze_homeomorphism_4d(
+    m1: IntersectionForm,
+    m2: IntersectionForm,
+    ks1: int | None = None,
+    ks2: int | None = None,
+    *,
+    simply_connected: bool | None = None,
+) -> Tuple[bool | None, str]:
+    return analyze_homeomorphism_4d_result(
+        m1,
+        m2,
+        ks1=ks1,
+        ks2=ks2,
+        simply_connected=simply_connected,
+    ).to_legacy_tuple()
 
 def surgery_to_remove_impediments(m: IntersectionForm, target_sig: int) -> Tuple[bool, str]:
     """
@@ -204,13 +817,13 @@ def surgery_to_remove_impediments(m: IntersectionForm, target_sig: int) -> Tuple
     """
     sig_diff = m.signature() - target_sig
     if sig_diff == 0:
-        return True, "Signatures already match. No surgery required."
-    # Blow-up with CP^2 or -CP^2 changes signature by ±1 and rank by 1
+        return True, "Signatures already match. No signature-adjustment surgery required; parity, KS, Wh(pi_1), and Wall obstructions may still need checks."
+    # Blow-up with CP^2 or -CP^2 changes signature by +/-1 and rank by 1.
     n_blowups = abs(sig_diff)
-    blowup_type = "CP²" if sig_diff < 0 else "(-CP²)"
+    blowup_type = "CP^2" if sig_diff < 0 else "(-CP^2)"
     return True, (
         f"PLAN: Connected sum with {n_blowups} copies of {blowup_type} "
         f"changes signature by {-sig_diff}. "
-        "Alternatively, the L_4(1) obstruction class requires signature divisible by 8 "
-        "for an integral signature/8 model."
+        "This only addresses signature-level obstructions; complete homeomorphism analysis may still require "
+        "Kirby-Siebenmann agreement, Whitehead-torsion vanishing, and Wall L-group obstruction checks."
     )

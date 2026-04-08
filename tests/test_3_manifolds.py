@@ -30,4 +30,4 @@ def test_poincare_homology_sphere():
     
     is_homeo, reason = analyze_homeomorphism_3d(cc_phs, cc_s3)
     assert not is_homeo
-    assert "INCONCLUSIVE: Both are Homology Spheres" in reason
+    assert "INCONCLUSIVE: Both are homology-sphere candidates" in reason
