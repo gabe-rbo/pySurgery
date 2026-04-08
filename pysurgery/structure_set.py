@@ -2,6 +2,7 @@ from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 from .core.complexes import ChainComplex
 from .core.exceptions import StructureSetError
+from .wall_groups import l_group_symbol
 
 
 class NormalInvariantsResult(BaseModel):
@@ -106,7 +107,21 @@ class StructureSet(BaseModel):
         n = self.dimension
 
         if not self._is_trivial_group_symbol(self.fundamental_group):
-            raise StructureSetError(f"The structure set for non-simply connected groups (pi_1 = {self.fundamental_group}) relies on evaluating exact twisted Wall groups L_n(Z[pi_1]), which necessitates the Julia bridge for representation theory computation.")
+            fg = self.fundamental_group
+            return SurgeryExactSequenceResult(
+                dimension=n,
+                fundamental_group=fg,
+                l_n_symbol=l_group_symbol(n, fg),
+                l_n_plus_1_symbol=l_group_symbol(n + 1, fg),
+                computable=False,
+                exact=False,
+                analysis=[
+                    f"Non-simply-connected case detected (pi_1 = {fg}).",
+                    "The surgery exact sequence remains valid, but twisted Wall groups L_n(Z[pi_1]) are only partially implemented in this API.",
+                    "For this calculation, enable Julia to accelerate exact representation-theoretic/group-ring reductions.",
+                ],
+                normal_invariants=normal_invariants,
+            )
 
         if n < 5:
             raise StructureSetError("The Surgery Exact Sequence strictly applies to dimensions n >= 5. In 4D, Freedman's classification completely replaces the exact sequence.")

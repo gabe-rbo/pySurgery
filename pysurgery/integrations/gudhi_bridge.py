@@ -131,13 +131,18 @@ def simplex_tree_to_intersection_form(simplex_tree, allow_approx: bool = False) 
                     "Install Julia for fast exact sparse algebra or rerun with allow_approx=True."
                 )
 
+            warnings.warn(
+                "APPROXIMATION FALLBACK: Using floating-point SVD to estimate [M]. "
+                "This may lose exact integer cycle information."
+            )
+
             # Explicitly opt-in approximate fallback via Sparse SVD.
             d4_sparse = boundaries[4].astype(float)
             try:
                 if cells[4] == 1:
                     col = d4_sparse.toarray()[:, 0]
                     if np.allclose(col, 0.0, atol=1e-12):
-                        fund_class = np.array([1.0], dtype=float)
+                        fund_class = np.array([1], dtype=np.int64)
                         fund_class_found = True
                 else:
                     k_svd = min(cells[4] - 1, 5)
@@ -145,8 +150,15 @@ def simplex_tree_to_intersection_form(simplex_tree, allow_approx: bool = False) 
                     tol = cells[4] * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
                     null_idx = np.where(s <= tol)[0]
                     if len(null_idx) > 0:
-                        fund_class = vt[null_idx[0], :].flatten()
-                        fund_class_found = True
+                        approx = vt[null_idx[0], :].flatten()
+                        fund_candidate = np.round(approx).astype(np.int64)
+                        if np.linalg.norm(d4_sparse @ fund_candidate) <= 1e-6:
+                            fund_class = fund_candidate
+                            fund_class_found = True
+                        else:
+                            warnings.warn(
+                                "SVD-derived integer candidate is not a numerical cycle (d4*[M] != 0 within tolerance)."
+                            )
             except Exception as e:
                 msg = (
                     f"Topological Hint: Sparse SVD failed to converge for [M] ({e!r}). "

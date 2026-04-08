@@ -30,10 +30,15 @@ def test_trimesh_scope_import_guard():
 
 def test_pyg_scope_rejects_face_data(monkeypatch):
     monkeypatch.setattr(pytorch_geometric_bridge, "HAS_TORCH", True)
-    edge_index = np.array([[0, 1], [1, 0]], dtype=np.int64)
-    data = _FakePyGData(edge_index=edge_index, num_nodes=2, face=np.array([[0, 1, 2]], dtype=np.int64))
-    with pytest.raises(NotImplementedError):
-        pytorch_geometric_bridge.pyg_to_cw_complex(data)
+    # Complete undirected triangle (both directions for each edge)
+    edge_index = np.array(
+        [[0, 1, 1, 2, 2, 0], [1, 0, 2, 1, 0, 2]],
+        dtype=np.int64,
+    )
+    face = np.array([[0], [1], [2]], dtype=np.int64)
+    data = _FakePyGData(edge_index=edge_index, num_nodes=3, face=face)
+    cw = pytorch_geometric_bridge.pyg_to_cw_complex(data)
+    assert cw.cells[2] == 1
 
 
 def test_pyg_scope_edge_index_shape_check(monkeypatch):

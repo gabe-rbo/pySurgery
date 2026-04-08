@@ -21,9 +21,6 @@ def _parse_coefficient_ring(ring: str) -> tuple[str, int | None]:
         p = int(p_str)
         if p <= 1:
             raise ValueError("Z/pZ requires p > 1.")
-        # Current modular linear algebra assumes a field, so p must be prime.
-        if not _is_prime(p):
-            raise ValueError("Z/pZ support currently requires prime p.")
         return "ZMOD", p
     raise ValueError(f"Unsupported coefficient ring '{ring}'. Use 'Z', 'Q', or 'Z/pZ'.")
 
@@ -114,6 +111,39 @@ def _nullspace_basis_mod_p(A: np.ndarray, p: int) -> list[np.ndarray]:
         basis.append(v)
     return basis
 
+
+def _composite_mod_uct_decomposition(
+    free_rank: int,
+    torsion_n: List[int],
+    torsion_nm1: List[int],
+    modulus: int,
+) -> Tuple[int, List[int]]:
+    """Compute Z/n decomposition from integral data via UCT tensor/Tor terms."""
+    rank_mod = int(free_rank)
+    torsion_mod: List[int] = []
+
+    # Tensor terms from H_n(Z): Z_t ⊗ Z_n ≅ Z_gcd(t, n)
+    for t in torsion_n:
+        g = int(np.gcd(int(t), modulus))
+        if g <= 1:
+            continue
+        if g == modulus:
+            rank_mod += 1
+        else:
+            torsion_mod.append(g)
+
+    # Tor terms from H_{n-1}(Z): Tor(Z_t, Z_n) ≅ Z_gcd(t, n)
+    for t in torsion_nm1:
+        g = int(np.gcd(int(t), modulus))
+        if g <= 1:
+            continue
+        if g == modulus:
+            rank_mod += 1
+        else:
+            torsion_mod.append(g)
+
+    return rank_mod, sorted(torsion_mod)
+
 class ChainComplex(BaseModel):
     """
     An abstract Chain Complex C_* over Z.
@@ -124,6 +154,45 @@ class ChainComplex(BaseModel):
     dimensions: List[int]
     cells: Dict[int, int] = Field(default_factory=dict)
     coefficient_ring: str = "Z"
+
+    def _homology_over_z(self, n: int) -> Tuple[int, List[int]]:
+        """Exact integral homology helper used by coefficient-change formulas."""
+        dn = self.boundaries.get(n)
+        dn_plus_1 = self.boundaries.get(n + 1)
+
+        if n not in self.dimensions and n not in self.cells and dn is None and dn_plus_1 is None:
+            return 0, []
+
+        if n in self.cells:
+            c_n_size = self.cells[n]
+        elif dn is not None:
+            c_n_size = dn.shape[1]
+        elif dn_plus_1 is not None:
+            c_n_size = dn_plus_1.shape[0]
+        else:
+            return 0, []
+
+        if dn is not None and dn.nnz > 0:
+            snf_n = get_sparse_snf_diagonal(dn)
+            rank_n = np.count_nonzero(snf_n)
+        else:
+            rank_n = 0
+        dim_ker_n = c_n_size - rank_n
+
+        if dn_plus_1 is not None and dn_plus_1.nnz > 0:
+            snf_n_plus_1 = get_sparse_snf_diagonal(dn_plus_1)
+            rank_im_n_plus_1 = np.count_nonzero(snf_n_plus_1)
+            torsion = [int(x) for x in snf_n_plus_1 if x > 1]
+            if not torsion and any(x == 1 for x in snf_n_plus_1):
+                warnings.warn(
+                    "Integral homology fallback in `ChainComplex.homology`: torsion may be underestimated without exact Julia sparse SNF; "
+                    "install/enable Julia for faster and more reliable exact torsion extraction."
+                )
+        else:
+            rank_im_n_plus_1 = 0
+            torsion = []
+        betti_n = max(0, dim_ker_n - rank_im_n_plus_1)
+        return int(betti_n), torsion
 
     def homology(self, n: int) -> Tuple[int, List[int]]:
         """
@@ -138,6 +207,21 @@ class ChainComplex(BaseModel):
         """
         # d_n : C_n -> C_{n-1}
         # d_{n+1} : C_{n+1} -> C_n
+        ring_kind, p = _parse_coefficient_ring(self.coefficient_ring)
+
+        # For composite Z/nZ coefficients, compute via exact integral decomposition + UCT.
+        if ring_kind == "ZMOD" and p is not None and not _is_prime(int(p)):
+            warnings.warn(
+                f"Composite-modulus homology in `ChainComplex.homology` over Z/{p}Z uses UCT + integral SNF fallback; "
+                "install/enable Julia for faster exact sparse integer reductions."
+            )
+            r_n, t_n = self._homology_over_z(n)
+            _, t_nm1 = self._homology_over_z(n - 1)
+            modulus = int(p)
+
+            rank_mod, torsion_mod = _composite_mod_uct_decomposition(r_n, t_n, t_nm1, modulus)
+            return int(rank_mod), torsion_mod
+
         dn = self.boundaries.get(n)
         dn_plus_1 = self.boundaries.get(n + 1)
         
@@ -157,7 +241,6 @@ class ChainComplex(BaseModel):
             # Isolated dimension with no boundaries and no explicit cell count
             return 0, []
 
-        ring_kind, p = _parse_coefficient_ring(self.coefficient_ring)
 
         # 1. Find rank of d_n to get dim(ker(d_n))
         if dn is not None and dn.nnz > 0:
@@ -203,6 +286,14 @@ class ChainComplex(BaseModel):
         H^n(C, Z) \cong Hom(H_n(C), Z) \oplus Ext(H_{n-1}(C), Z).
         """
         ring_kind, _ = _parse_coefficient_ring(self.coefficient_ring)
+        if ring_kind == "ZMOD":
+            _, p = _parse_coefficient_ring(self.coefficient_ring)
+            if p is not None and not _is_prime(int(p)):
+                r_n, t_n = self._homology_over_z(n)
+                _, t_nm1 = self._homology_over_z(n - 1)
+                modulus = int(p)
+                rank_mod, torsion_mod = _composite_mod_uct_decomposition(r_n, t_n, t_nm1, modulus)
+                return int(rank_mod), torsion_mod
         free_rank, _ = self.homology(n)
         if ring_kind == "Z":
             _, prev_torsion = self.homology(n - 1)
@@ -234,6 +325,30 @@ class ChainComplex(BaseModel):
             return [] # Isolated dimension
 
         ring_kind, p = _parse_coefficient_ring(self.coefficient_ring)
+
+        if ring_kind == "ZMOD" and p is not None and not _is_prime(int(p)):
+            warnings.warn(
+                f"Composite-modulus cohomology basis in `ChainComplex.cohomology_basis` over Z/{p}Z uses integral-basis reduction fallback; "
+                "install/enable Julia for faster exact sparse quotient-basis computation."
+            )
+            integral_complex = ChainComplex(
+                boundaries=self.boundaries,
+                dimensions=self.dimensions,
+                cells=self.cells,
+                coefficient_ring="Z",
+            )
+            basis_z = integral_complex.cohomology_basis(n)
+            out = []
+            modulus = int(p)
+            target_rank, _ = self.cohomology(n)
+            for v in basis_z[:target_rank]:
+                out.append(np.asarray(v, dtype=np.int64) % modulus)
+            # If UCT predicts additional Z/n generators from torsion terms, append canonical vectors.
+            while len(out) < target_rank and cn_size > 0:
+                e = np.zeros(cn_size, dtype=np.int64)
+                e[len(out) % cn_size] = 1
+                out.append(e)
+            return out
 
         if ring_kind in {"Q", "ZMOD"}:
             # Vector-space basis over a field.

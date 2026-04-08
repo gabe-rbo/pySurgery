@@ -3,6 +3,24 @@ from .core.intersection_forms import IntersectionForm
 from .core.complexes import ChainComplex
 from .core.exceptions import DimensionError
 import warnings
+import itertools
+import numpy as np
+
+
+def _search_integer_isometry(Q1: np.ndarray, Q2: np.ndarray, max_entry: int = 2) -> np.ndarray | None:
+    """Bounded search for U in GL_n(Z) with U^T Q1 U = Q2 (small-rank fallback)."""
+    n = Q1.shape[0]
+    if n > 4:
+        return None
+    values = range(-max_entry, max_entry + 1)
+    for entries in itertools.product(values, repeat=n * n):
+        U = np.array(entries, dtype=np.int64).reshape((n, n))
+        det = round(float(np.linalg.det(U)))
+        if abs(det) != 1:
+            continue
+        if np.array_equal(U.T @ Q1 @ U, Q2):
+            return U
+    return None
 
 def analyze_homeomorphism_2d(c1: ChainComplex, c2: ChainComplex, allow_approx: bool = False) -> Tuple[bool | None, str]:
     """
@@ -163,10 +181,22 @@ def analyze_homeomorphism_4d(m1: IntersectionForm, m2: IntersectionForm, ks1: in
         
     # Case: Indefinite forms (classified by rank, signature, parity)
     if m1.is_indefinite():
-        return True, "SUCCESS: Homeomorphism established via Freedman's Theorem for indefinite forms."
-        
+        return True, (
+            "SUCCESS: Homeomorphism established via Freedman's Theorem for indefinite forms "
+            f"(rank={m1.rank()}, signature={m1.signature()}, type={m1.type()}, KS={ks1})."
+        )
+
     # Case: Definite forms (require lattice isomorphism)
-    return None, "INCONCLUSIVE: Lattice isomorphism for definite forms not verified. Rank/signature/parity match, but full Freedman classification requires an explicit integer lattice isomorphism check."
+    Q1 = np.asarray(m1.matrix, dtype=np.int64)
+    Q2 = np.asarray(m2.matrix, dtype=np.int64)
+    if np.array_equal(Q1, Q2):
+        return True, "SUCCESS: Definite intersection forms match exactly as integer lattices."
+
+    U = _search_integer_isometry(Q1, Q2, max_entry=2)
+    if U is not None:
+        return True, "SUCCESS: Definite lattice isomorphism certificate found (U^T Q1 U = Q2)."
+
+    return None, "INCONCLUSIVE: No small-entry unimodular lattice isomorphism certificate found for definite forms. Install/enable Julia for faster exact lattice-isometry workflows on larger ranks."
 
 def surgery_to_remove_impediments(m: IntersectionForm, target_sig: int) -> Tuple[bool, str]:
     """

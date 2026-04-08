@@ -66,11 +66,13 @@ def cup_i_product(
     simplices_arr = np.array(simplices_target, dtype=np.int64)
 
     def face_sign(indices: Tuple[int, ...]) -> int:
-        # Inclusion sign of a face [v_{i0},...,v_{ik}] into [v_0,...,v_n].
-        parity = 0
-        for pos, idx in enumerate(indices):
-            parity += (idx - pos)
-        return -1 if (parity % 2) else 1
+        # Inclusion sign from inversion parity of the induced permutation.
+        inversions = 0
+        for a in range(len(indices)):
+            for b in range(a + 1, len(indices)):
+                if indices[a] > indices[b]:
+                    inversions += 1
+        return -1 if (inversions % 2) else 1
 
     result = np.zeros(len(simplices_arr), dtype=np.int64)
     all_idx = tuple(range(n + 1))

@@ -49,9 +49,8 @@ def get_snf_diagonal(A: np.ndarray) -> np.ndarray:
     factors = np.zeros(diag_len, dtype=np.int64)
     for i in range(diag_len):
         factors[i] = abs(S[i, i])
-    nonzero = np.sort(factors[factors != 0])
-    zeros = np.zeros(diag_len - len(nonzero), dtype=np.int64)
-    return np.concatenate((nonzero, zeros))
+    # Preserve the natural SNF order; sorting can destroy the invariant-factor structure.
+    return factors[factors != 0]
 
 def get_sparse_snf_diagonal(A_sparse, allow_approx: bool = False) -> np.ndarray:
     """

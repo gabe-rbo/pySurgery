@@ -19,6 +19,8 @@ def arf_invariant_gf2(M: np.ndarray, q: np.ndarray) -> int:
         raise DimensionError("Arf invariant requires even-dimensional ambient space.")
 
     # Arf invariant is classically defined for nondegenerate quadratic spaces.
+    # Here we enforce nondegeneracy of the associated bilinear form matrix M,
+    # which is the standard computational assumption for these APIs.
     if _rank_mod_2(M) != n:
         raise DimensionError("Arf invariant is undefined for degenerate GF(2) bilinear forms.")
 

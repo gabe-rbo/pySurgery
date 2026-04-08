@@ -30,28 +30,36 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
     if not isinstance(mesh, trimesh.Trimesh):
         raise TypeError("Input must be a trimesh.Trimesh object.")
 
-    # Scope boundary: this bridge currently supports 2-skeleton CW extraction
-    # from triangular surface meshes only.
-    if mesh.faces.ndim != 2 or mesh.faces.shape[1] != 3:
-        raise NotImplementedError(
-            "trimesh_to_cw_complex currently supports triangular faces only (2-skeleton extraction)."
-        )
+    if mesh.faces.ndim != 2 or mesh.faces.shape[1] < 3:
+        raise ValueError("trimesh_to_cw_complex expects polygonal faces with at least 3 vertices.")
     if len(mesh.faces) == 0:
         raise ValueError("Mesh has no 2-cells (faces); unsupported for current 2-skeleton conversion.")
 
     # 0-cells: Vertices
     n_vertices = len(mesh.vertices)
     
-    # 1-cells: Edges
-    # Trimesh provides mesh.edges_unique which are sorted (v1, v2) pairs
-    edges = mesh.edges_unique
-    n_edges = len(edges)
-    edge_to_idx = {tuple(e): i for i, e in enumerate(edges)}
-    
     # 2-cells: Faces
-    faces = mesh.faces
+    faces = np.asarray(mesh.faces, dtype=np.int64)
     n_faces = len(faces)
-    
+
+    # 1-cells: build unique undirected edges from polygon face cycles
+    edge_to_idx = {}
+    edges = []
+    face_boundary_edges = []
+    for f in faces:
+        cycle = [int(v) for v in f.tolist()]
+        cyc_edges = []
+        for i in range(len(cycle)):
+            u = cycle[i]
+            v = cycle[(i + 1) % len(cycle)]
+            key = (u, v) if u < v else (v, u)
+            if key not in edge_to_idx:
+                edge_to_idx[key] = len(edges)
+                edges.append(key)
+            cyc_edges.append((u, v, edge_to_idx[key]))
+        face_boundary_edges.append(cyc_edges)
+    n_edges = len(edges)
+
     cells = {0: n_vertices, 1: n_edges, 2: n_faces}
     
     # Boundary 1: d_1 (Edges -> Vertices)
@@ -68,29 +76,17 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
     d1 = sp.csr_matrix((d1_data, (d1_rows, d1_cols)), shape=(n_vertices, n_edges), dtype=np.int64)
     
     # Boundary 2: d_2 (Faces -> Edges)
-    # For each face (v1, v2, v3), boundary is (v1,v2) + (v2,v3) - (v1,v3)
+    # For each polygon face, boundary is the signed sum of its oriented boundary edges.
     d2_rows = []
     d2_cols = []
     d2_data = []
-    
-    for j, (v1, v2, v3) in enumerate(faces):
-        # We need to find the index of each edge and its orientation
-        face_edges = [(v1, v2), (v2, v3), (v1, v3)]
-        signs = [1, 1, -1]
-        
-        for e, sign in zip(face_edges, signs):
-            # Check if edge is in unique edges as (v1, v2) or (v2, v1)
-            sorted_e = tuple(sorted(e))
-            if sorted_e in edge_to_idx:
-                idx = edge_to_idx[sorted_e]
-                # Adjust sign if the original edge was reversed
-                if sorted_e != e:
-                    sign *= -1
-                
-                d2_rows.append(idx)
-                d2_cols.append(j)
-                d2_data.append(sign)
-                
+    for j, edge_cycle in enumerate(face_boundary_edges):
+        for u, v, idx in edge_cycle:
+            sign = 1 if (u, v) == edges[idx] else -1
+            d2_rows.append(idx)
+            d2_cols.append(j)
+            d2_data.append(sign)
+
     d2 = sp.csr_matrix((d2_data, (d2_rows, d2_cols)), shape=(n_edges, n_faces), dtype=np.int64)
     
     boundary_check = d1 @ d2

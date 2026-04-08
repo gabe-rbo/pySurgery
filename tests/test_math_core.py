@@ -31,7 +31,7 @@ def test_get_sparse_snf_diagonal():
     B = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
     sp_B = sp.csr_matrix(B)
     diag = get_sparse_snf_diagonal(sp_B)
-    assert diag.tolist() == [1, 3, 0]
+    assert diag.tolist() == [1, 3]
 
 
 def test_get_sparse_snf_diagonal_exact_mode_warns_exact_python_fallback(monkeypatch):
@@ -58,5 +58,5 @@ def test_get_snf_diagonal():
 def test_get_snf_diagonal_trailing_zero_invariants():
     A = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype=np.int64)
     diag = get_snf_diagonal(A)
-    assert diag.tolist() == [1, 3, 0]
+    assert diag.tolist() == [1, 3]
 

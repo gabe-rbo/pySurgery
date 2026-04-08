@@ -14,6 +14,7 @@ If you’ve ever felt “persistent homology is informative, but not decisive,�
 Most numerical linear-algebra approaches over $\mathbb{R}$ lose information that lives over $\mathbb{Z}$ (especially torsion). pySurgery focuses on *exact* and *structure-aware* invariants:
 
 * **Homology & cohomology over $\mathbb{Z}$** via **Smith Normal Form (SNF)** (captures torsion)
+* **Coefficient support** for `Z`, `Q`, and `Z/pZ` (including composite moduli via UCT decomposition)
 * **Cup product** (Alexander–Whitney) to extract intersection information
 * **Intersection forms** for 4-manifolds (rank/signature/parity)
 * Hooks for **surgery-theoretic** obstructions and higher-dimensional classification workflows
@@ -25,6 +26,8 @@ Most numerical linear-algebra approaches over $\mathbb{R}$ lose information that
 ### Install
 
 Requires **Python >= 3.10+**.
+
+Project metadata (including version and Python requirement) is defined in `pyproject.toml`.
 
 #### Install from PyPI (recommended)
 
@@ -118,6 +121,8 @@ $$
 
 Summing over a fundamental class yields intersection form entries.
 
+pySurgery also provides simplicial cup-$i$ operations (`i >= 0`) for higher-order cochain interactions.
+
 ### 3) Intersection forms & 4D classification signals
 
 For 4-manifolds, pySurgery constructs the **intersection form** $Q$, computes rank/signature/parity, and supports workflows inspired by Freedman-style classification (with attention to needed hypotheses/invariants).
@@ -151,6 +156,42 @@ Discrete topology can blow up combinatorially (e.g., large point clouds). pySurg
 2. **NumPy/Numba acceleration** for inner loops (e.g., cup product sweeps)
 3. **Julia bridge** for large exact-$\mathbb{Z}$ workloads when Python becomes the bottleneck
 
+Approximate (floating-point) fallbacks exist in selected large/sparse workflows, but are opt-in where mathematically sensitive and emit explicit warnings when exact integer guarantees are weakened.
+
+### Exactness policy
+
+pySurgery defaults to exact integer-topology workflows whenever practical.
+
+* **Default mode:** exact-first (`allow_approx=False` in APIs that expose it)
+* **Approximate mode:** explicitly opt in via `allow_approx=True`
+* **Warnings:** approximate paths emit warnings when torsion/exact-cycle guarantees may be weakened
+
+For mathematically rigorous classification/proof-oriented workflows, prefer exact mode and treat approximate mode as exploratory.
+
+#### Example: exact vs approximate fundamental class extraction
+
+```python
+from pysurgery.integrations.gudhi_bridge import simplex_tree_to_intersection_form
+
+# Exact-first: raise if exact extraction cannot be completed.
+q_exact = simplex_tree_to_intersection_form(st, allow_approx=False)
+
+# Exploratory fallback: allows numerical approximation with warnings.
+q_fast = simplex_tree_to_intersection_form(st, allow_approx=True)
+```
+
+#### Example: exact vs approximate dimension-aware homeomorphism analysis
+
+```python
+from pysurgery.homeomorphism import analyze_homeomorphism_2d
+
+# Exact-first classification attempt.
+ok_exact, msg_exact = analyze_homeomorphism_2d(c1, c2, allow_approx=False)
+
+# Permissive fallback for noisy/large pipelines.
+ok_fast, msg_fast = analyze_homeomorphism_2d(c1, c2, allow_approx=True)
+```
+
 ---
 
 ## Package layout
@@ -160,14 +201,14 @@ pysurgery/
 ├── core/
 │   ├── cup_product.py
 │   ├── complexes.py
-│   ├── characteristic_clases.py
+│   ├── characteristic_classes.py
 │   ├── exceptions.py
 │   ├── fundamental_group.py
 │   ├── group_rings.py
 │   ├── intersection_forms.py
 │   ├── k_theory.py
-│   ├── kirby_forms.py
-|   ├── math_core.py
+│   ├── kirby_calculus.py
+│   ├── math_core.py
 │   └── quadratic_forms.py
 ├── bridge/
 │   ├── julia_bridge.py

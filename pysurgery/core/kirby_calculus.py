@@ -52,15 +52,13 @@ class KirbyDiagram(BaseModel):
         if source_idx == target_idx:
             raise KirbyMoveError("Cannot slide a handle over itself.")
             
-        # The algebraic realization of a handle slide is a change of basis matrix P.
-        # If we slide handle source_idx over handle target_idx, we map the basis 
-        # vector e_source to e_source + e_target.
-        # The change of basis matrix is P = I + E_{target, source}.
+        # The algebraic realization of a handle slide is a change of basis matrix P
+        # with e_source -> e_source + e_target.
         P = np.eye(n, dtype=int)
-        P[target_idx, source_idx] = 1
-        
-        new_mat = P.T @ self.linking_matrix @ P
-        
+        P[source_idx, target_idx] = 1
+
+        new_mat = P @ self.linking_matrix @ P.T
+
         return KirbyDiagram.from_matrix(new_mat)
 
     def extract_intersection_form(self) -> IntersectionForm:

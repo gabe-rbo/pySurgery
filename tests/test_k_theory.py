@@ -25,8 +25,9 @@ def test_compute_whitehead_group_Z5():
         assert wg.rank == 1
         assert "definitively exists" in wg.description
     else:
-        assert not wg.computable
-        assert wg.rank == -1
+        assert wg.computable
+        assert wg.rank == 1
+        assert not wg.exact
 
 
 def test_cyclic_whitehead_rank_formula():

@@ -1,4 +1,5 @@
 from typing import List, Optional, Union
+import warnings
 from pydantic import BaseModel, Field
 from .core.intersection_forms import IntersectionForm
 from .core.quadratic_forms import QuadraticForm
@@ -181,7 +182,10 @@ class WallGroupL(BaseModel):
                 pi=pi,
                 computable=False,
                 exact=False,
-                message="JuliaBridge backend unavailable for exact multisignature",
+                message=(
+                    "JuliaBridge backend unavailable for exact multisignature in "
+                    "WallGroupL.compute_obstruction_result; install/enable Julia for this calculation."
+                ),
                 assumptions=assumptions,
             )
 
@@ -207,6 +211,54 @@ class WallGroupL(BaseModel):
             return self._compute_for_single_factor(n, "1", form)
         if len(nontrivial) == 1:
             return self._compute_for_single_factor(n, nontrivial[0], form)
+
+        # Recursive Shaneson splitting for products with Z factors:
+        # L_n(pi x Z) ≅ L_n(pi) ⊕ L_{n-1}(pi).
+        if "Z" in nontrivial:
+            rest = nontrivial.copy()
+            rest.remove("Z")
+            rest_pi = " x ".join(rest) if rest else "1"
+            try:
+                left = WallGroupL(dimension=n, pi=rest_pi).compute_obstruction_result(form)
+                right = WallGroupL(dimension=n - 1, pi=rest_pi).compute_obstruction_result(form)
+            except SurgeryObstructionError as e:
+                return ObstructionResult(
+                    dimension=n,
+                    pi=pi,
+                    computable=False,
+                    exact=False,
+                    message=(
+                        f"Shaneson splitting for '{pi}' reduced to factor '{rest_pi}', but required form data is missing: {e}"
+                    ),
+                    assumptions=["Shaneson splitting applied", "Insufficient form input for reduced factors"],
+                )
+
+            if left.computable and right.computable and left.value is not None and right.value is not None:
+                if left.modulus is None and right.modulus is None:
+                    return ObstructionResult(
+                        dimension=n,
+                        pi=pi,
+                        computable=True,
+                        exact=left.exact and right.exact,
+                        value=int(left.value) + int(right.value),
+                        assumptions=left.assumptions + right.assumptions + ["Shaneson splitting over Z-factor"],
+                    )
+            return ObstructionResult(
+                dimension=n,
+                pi=pi,
+                computable=False,
+                exact=False,
+                message=(
+                    f"Partial product decomposition for '{pi}' succeeded, but mixed-valued/modular components "
+                    "cannot yet be assembled into a single obstruction element."
+                ),
+                assumptions=["Shaneson splitting applied", "Component assembly for mixed summands incomplete"],
+            )
+
+        warnings.warn(
+            "Wall obstruction fallback in `WallGroupL.compute_obstruction_result`: non-Z multi-factor product "
+            "requires richer representation-theoretic decomposition; Julia-backed workflows are typically faster."
+        )
         return ObstructionResult(
             dimension=n,
             pi=pi,
@@ -214,7 +266,7 @@ class WallGroupL(BaseModel):
             exact=False,
             message=(
                 f"Product group '{pi}' needs a full factor-wise L-theory decomposition; "
-                "current API only reduces products with at most one nontrivial factor."
+                "current API supports recursive Z-factor splitting and single-factor exact solvers."
             ),
             assumptions=["No complete product-group assembly map implemented yet"],
         )

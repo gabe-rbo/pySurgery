@@ -26,10 +26,6 @@ def pyg_to_cw_complex(data) -> CWComplex:
 
     if not hasattr(data, 'edge_index'):
         raise TypeError("Input must have an 'edge_index' attribute (like PyG Data).")
-    if hasattr(data, 'face') and data.face is not None:
-        raise NotImplementedError(
-            "pyg_to_cw_complex currently supports graph 1-skeletons only; face-level 2-cells are not implemented."
-        )
 
     n_vertices = data.num_nodes
     edge_index = data.edge_index.cpu().numpy()
@@ -43,9 +39,19 @@ def pyg_to_cw_complex(data) -> CWComplex:
     mask = edge_index[0, :] < edge_index[1, :]
     unique_edges = edge_index[:, mask]
     n_edges = unique_edges.shape[1]
-    
+    edge_to_idx = {}
+    for j in range(n_edges):
+        u, v = int(unique_edges[0, j]), int(unique_edges[1, j])
+        edge_to_idx[(u, v)] = j
+
+    has_faces = hasattr(data, 'face') and data.face is not None
+    face_obj = data.face if has_faces else None
+    n_faces = int(face_obj.shape[1]) if has_faces else 0
+
     cells = {0: n_vertices, 1: n_edges}
-    
+    if n_faces > 0:
+        cells[2] = n_faces
+
     # Boundary 1: d_1 (Edges -> Vertices)
     d1_rows = []
     d1_cols = []
@@ -61,5 +67,35 @@ def pyg_to_cw_complex(data) -> CWComplex:
     d1 = sp.csr_matrix((d1_data, (d1_rows, d1_cols)), shape=(n_vertices, n_edges), dtype=np.int64)
     
     attaching_maps = {1: d1}
-    
+
+    if n_faces > 0:
+        face_arr = face_obj.cpu().numpy() if hasattr(face_obj, "cpu") else np.asarray(face_obj)
+        if face_arr.ndim != 2 or face_arr.shape[0] < 3:
+            raise ValueError("face must have shape [k, F] with k >= 3.")
+
+        d2_rows = []
+        d2_cols = []
+        d2_data = []
+
+        for j in range(n_faces):
+            cycle = [int(v) for v in face_arr[:, j].tolist()]
+            for i in range(len(cycle)):
+                u = cycle[i]
+                v = cycle[(i + 1) % len(cycle)]
+                key = (u, v) if u < v else (v, u)
+                if key not in edge_to_idx:
+                    raise ValueError(
+                        f"Face references edge ({u}, {v}) that is missing from edge_index."
+                    )
+                sign = 1 if key == (u, v) else -1
+                d2_rows.append(edge_to_idx[key])
+                d2_cols.append(j)
+                d2_data.append(sign)
+
+        d2 = sp.csr_matrix((d2_data, (d2_rows, d2_cols)), shape=(n_edges, n_faces), dtype=np.int64)
+        boundary_check = d1 @ d2
+        if boundary_check.nnz > 0 and np.any(boundary_check.data != 0):
+            raise ValueError("Invalid face orientation: boundary operator d_1 o d_2 != 0.")
+        attaching_maps[2] = d2
+
     return CWComplex(cells=cells, attaching_maps=attaching_maps)

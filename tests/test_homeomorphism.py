@@ -31,12 +31,12 @@ def test_analyze_homeomorphism_4d_impediment():
     assert "Parity mismatch" in reason
 
 
-def test_analyze_homeomorphism_4d_definite_is_inconclusive():
+def test_analyze_homeomorphism_4d_definite_exact_match_is_homeomorphic():
     form1 = IntersectionForm(matrix=np.array([[1, 0], [0, 1]]), dimension=4)
     form2 = IntersectionForm(matrix=np.array([[1, 0], [0, 1]]), dimension=4)
     is_homeo, reason = analyze_homeomorphism_4d(form1, form2)
-    assert is_homeo is None
-    assert "INCONCLUSIVE" in reason
+    assert is_homeo is True
+    assert "SUCCESS" in reason
 
 
 def test_analyze_homeomorphism_2d_homology_failure_fallback():

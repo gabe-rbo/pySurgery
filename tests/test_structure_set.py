@@ -42,8 +42,9 @@ def test_structure_set_accepts_trivial_group_aliases():
 
 def test_structure_set_rejects_non_trivial_group_without_backend():
     s = StructureSet(dimension=5, fundamental_group="Z")
-    with pytest.raises(StructureSetError):
-        s.evaluate_exact_sequence()
+    out = s.evaluate_exact_sequence_result()
+    assert not out.computable
+    assert "Non-simply-connected case" in " ".join(out.analysis)
 
 
 def test_structure_set_requires_dimension_at_least_5():

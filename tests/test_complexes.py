@@ -89,10 +89,24 @@ def test_cwcomplex_propagates_coefficient_ring():
     assert cc.coefficient_ring == "Q"
 
 
-def test_zmod_requires_prime_modulus():
+def test_zmod_supports_composite_modulus():
     c = ChainComplex(boundaries={}, dimensions=[0], cells={0: 1}, coefficient_ring="Z/4Z")
-    with pytest.raises(ValueError):
-        c.homology(0)
+    assert c.homology(0) == (1, [])
+
+
+def test_zmod_composite_modulus_tensor_contribution_from_integral_torsion():
+    # Integral model with H_1 = Z_4: one 1-cell and one 2-cell with d2 = [4].
+    d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
+    d2 = sp.csr_matrix(np.array([[4]], dtype=np.int64))
+    c = ChainComplex(
+        boundaries={1: d1, 2: d2},
+        dimensions=[0, 1, 2],
+        cells={0: 1, 1: 1, 2: 1},
+        coefficient_ring="Z/4Z",
+    )
+    # H_1(X; Z/4) gets a Z/4 summand from Z_4 tensor Z_4.
+    assert c.homology(1) == (1, [])
+    assert c.cohomology(1) == (1, [])
 
 
 @pytest.mark.parametrize("name, builder, bettis, torsion, euler", get_surfaces() if 'get_surfaces' in globals() else [])

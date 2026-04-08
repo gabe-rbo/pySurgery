@@ -54,6 +54,12 @@ def test_group_ring_involution_non_cyclic():
         el.involution()
 
 
+def test_group_ring_involution_non_cyclic_with_group_order_still_requires_structure():
+    el = GroupRingElement({"a": 1}, group_order=5)
+    with pytest.raises(GroupRingError):
+        el.involution()
+
+
 def test_group_ring_generic_group_law_noncyclic():
     # Klein four group V4 = {1,a,b,c}, where a^2=b^2=c^2=1 and ab=c, bc=a, ca=b.
     table = {
@@ -62,7 +68,8 @@ def test_group_ring_generic_group_law_noncyclic():
         ("b", "1"): "b", ("b", "a"): "c", ("b", "b"): "1", ("b", "c"): "a",
         ("c", "1"): "c", ("c", "a"): "b", ("c", "b"): "a", ("c", "c"): "1",
     }
-    law = lambda x, y: table[(x, y)]
+    def law(x, y):
+        return table[(x, y)]
 
     x = GroupRingElement({"a": 1, "b": 1}, group_law=law)
     y = GroupRingElement({"a": 1, "1": 1}, group_law=law)
@@ -73,8 +80,11 @@ def test_group_ring_generic_group_law_noncyclic():
 
 def test_group_ring_generic_involution_callback():
     inv = {"1": "1", "a": "a", "b": "b", "c": "c"}
-    inv_law = lambda g: inv[g]
-    law = lambda x, y: x if y == "1" else y if x == "1" else "1"
+    def inv_law(g):
+        return inv[g]
+
+    def law(x, y):
+        return x if y == "1" else y if x == "1" else "1"
     el = GroupRingElement({"a": 2, "1": 1}, group_law=law, inverse_law=inv_law)
     bar = el.involution()
     assert bar.coeffs == {"a": 2, "1": 1}

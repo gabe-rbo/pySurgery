@@ -125,8 +125,14 @@ class IntersectionForm(BaseModel):
             raise IsotropicError(f"Surgery class 'x' must be isotropic (Q(x,x) = 0). Its self-intersection is {np.dot(x, self.matrix @ x)}. "
                                  "Topological translation: The normal bundle of the embedded sphere twists (like a Möbius strip), physically blocking the attachment of the surgery handle $D^3 \\times S^1$.")
             
-        if np.gcd.reduce(x) != 1:
-            raise NonPrimitiveError("Surgery class 'x' is not primitive (GCD of coordinates > 1). "
+        nonzero_components = x[x != 0]
+        if len(nonzero_components) == 0:
+            raise NonPrimitiveError(
+                "Surgery class 'x' is zero. Cannot perform surgery on the zero class. "
+                "Topological translation: The zero class has no geometric surgery representative."
+            )
+        if int(np.gcd.reduce(nonzero_components.astype(np.int64))) != 1:
+            raise NonPrimitiveError("Surgery class 'x' is not primitive (GCD of non-zero coordinates > 1). "
                                     "Topological translation: The class is a mathematical multiple of a basis element. Attempting surgery on it would create irremediable singularities in the resulting space.")
             
         x_TQ = x.T @ self.matrix

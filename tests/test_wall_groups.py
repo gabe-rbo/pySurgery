@@ -60,7 +60,7 @@ def test_wall_group_product_presentation_symbol_and_obstruction_message():
     gp = GroupPresentation(kind="product", factors=["Z", "Z_3"])
     wg = WallGroupL(dimension=8, pi=gp)
     out = wg.compute_obstruction()
-    assert "Product group" in str(out)
+    assert ("Product group" in str(out)) or ("Shaneson splitting" in str(out))
 
 
 def test_wall_group_typed_result_exact_simple_case():

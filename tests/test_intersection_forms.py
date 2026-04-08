@@ -138,6 +138,14 @@ def test_algebraic_surgery_invalid_isotropic():
         form.perform_algebraic_surgery(x)
 
 
+def test_algebraic_surgery_zero_class_rejected():
+    Q = np.array([[0, 1], [1, 0]])
+    form = IntersectionForm(matrix=Q, dimension=4)
+    from pysurgery.core.exceptions import NonPrimitiveError
+    with pytest.raises(NonPrimitiveError):
+        form.perform_algebraic_surgery(np.array([0, 0]))
+
+
 def test_torus_intersection_form():
     # Placeholder for checking if intersection form functions run
     # Since Q = [0 1; 1 0] or similar for T2

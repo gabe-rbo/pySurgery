@@ -59,13 +59,20 @@ def extract_stiefel_whitney_w2(q: IntersectionForm) -> np.ndarray:
     
     # Find inverse over GF(2) using SymPy
     sym_Q = sp.Matrix(Q_mod2)
+    det_mod2 = int(sym_Q.det()) % 2
+    if det_mod2 == 0:
+        raise CharacteristicClassError(
+            "Intersection form is not invertible over Z_2. This contradicts unimodularity over Z and indicates degenerate input data."
+        )
     try:
         sym_Q_inv = sym_Q.inv_mod(2)
         w2_sym = (sym_Q_inv * sp.Matrix(diag_mod2)) % 2
         w2 = np.array(w2_sym).astype(int).flatten()
         return w2
-    except ValueError:
-        raise CharacteristicClassError("Intersection form is not invertible over Z_2. The manifold is not closed or Poincaré Duality has failed.")
+    except (ValueError, ZeroDivisionError) as e:
+        raise CharacteristicClassError(
+            f"Intersection form inversion over Z_2 failed ({e!r}). The manifold may violate closed-unimodular assumptions."
+        )
 
 def check_spin_structure(q: IntersectionForm) -> str:
     """
