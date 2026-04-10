@@ -1,12 +1,9 @@
 import os
 import threading
+import importlib.util
 import numpy as np
 
-try:
-    from juliacall import Main as jl
-    HAS_JULIACALL = True
-except ImportError:
-    HAS_JULIACALL = False
+HAS_JULIACALL = importlib.util.find_spec("juliacall") is not None
 
 class JuliaBridge:
     """
@@ -21,23 +18,54 @@ class JuliaBridge:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super(JuliaBridge, cls).__new__(cls)
-                    cls._instance._initialize()
+                    cls._instance._initialized = False
+                    cls._instance._available = False
+                    cls._instance.error = None
+                    cls._instance.jl = None
+                    cls._instance.backend = None
         return cls._instance
 
     def _initialize(self):
-        self.available = False
+        if self._initialized:
+            return
+
+        self._available = False
         if not HAS_JULIACALL:
             self.error = "juliacall is not installed. Install via `pip install juliacall`."
+            self._initialized = True
             return
             
         try:
-            self.jl = jl
+            from juliacall import Main as jl_main
+            self.jl = jl_main
             backend_script = os.path.join(os.path.dirname(__file__), "surgery_backend.jl")
             self.jl.include(backend_script)
             self.backend = self.jl.SurgeryBackend
-            self.available = True
+            self._available = True
         except Exception as e:
             self.error = f"Failed to initialize Julia backend: {e!r}"
+            self._available = False
+        finally:
+            self._initialized = True
+
+    def _ensure_initialized(self):
+        if self._initialized:
+            return
+        with self._lock:
+            if self._initialized:
+                return
+            self._initialize()
+
+    @property
+    def available(self) -> bool:
+        self._ensure_initialized()
+        return self._available
+
+    @available.setter
+    def available(self, value: bool):
+        # Allow tests to monkeypatch availability while preserving singleton API.
+        self._initialized = True
+        self._available = bool(value)
 
     def require_julia(self):
         from pysurgery.core.exceptions import SurgeryError
@@ -52,10 +80,10 @@ class JuliaBridge:
     def compute_sparse_snf(self, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray, shape: tuple) -> np.ndarray:
         """Executes the highly optimized Julia Sparse SNF backend."""
         self.require_julia()
-        # Julia uses 1-based indexing for sparse matrices
-        jl_rows = self.jl.Array(rows + 1)
-        jl_cols = self.jl.Array(cols + 1)
-        jl_vals = self.jl.Array(vals)
+        # Keep zero-based indices on Python side; backend lifts to Julia indexing.
+        jl_rows = self.jl.Array(np.asarray(rows, dtype=np.int64))
+        jl_cols = self.jl.Array(np.asarray(cols, dtype=np.int64))
+        jl_vals = self.jl.Array(np.asarray(vals, dtype=np.int64))
         factors = self.backend.exact_snf_sparse(jl_rows, jl_cols, jl_vals, shape[0], shape[1])
         return np.array(factors, dtype=np.int64)
 
@@ -89,10 +117,16 @@ class JuliaBridge:
             d_n_rows, d_n_cols, d_n_vals = d_n_coo.row, d_n_coo.col, d_n_coo.data
             d_n_m, d_n_n = d_n.shape
             
-        # 1-based indexing
+        # Keep zero-based indices on Python side; backend lifts to Julia indexing.
+        d_np1_rows = np.asarray(d_np1_rows, dtype=np.int64)
+        d_np1_cols = np.asarray(d_np1_cols, dtype=np.int64)
+        d_np1_vals = np.asarray(d_np1_vals, dtype=np.int64)
+        d_n_rows = np.asarray(d_n_rows, dtype=np.int64)
+        d_n_cols = np.asarray(d_n_cols, dtype=np.int64)
+        d_n_vals = np.asarray(d_n_vals, dtype=np.int64)
         basis_jl = self.backend.exact_sparse_cohomology_basis(
-            self.jl.Array(d_np1_rows + 1), self.jl.Array(d_np1_cols + 1), self.jl.Array(d_np1_vals), d_np1_m, d_np1_n,
-            self.jl.Array(d_n_rows + 1), self.jl.Array(d_n_cols + 1), self.jl.Array(d_n_vals), d_n_m, d_n_n
+            self.jl.Array(d_np1_rows), self.jl.Array(d_np1_cols), self.jl.Array(d_np1_vals), d_np1_m, d_np1_n,
+            self.jl.Array(d_n_rows), self.jl.Array(d_n_cols), self.jl.Array(d_n_vals), d_n_m, d_n_n
         )
         
         # Parse output
@@ -103,9 +137,11 @@ class JuliaBridge:
         
     def group_ring_multiply(self, coeffs1: dict, coeffs2: dict, group_order: int) -> dict:
         self.require_julia()
-        # We convert dicts to arrays to pass to Julia
-        k1, v1 = list(coeffs1.keys()), list(coeffs1.values())
-        k2, v2 = list(coeffs2.keys()), list(coeffs2.values())
+        # Normalize Python values before crossing language boundary.
+        k1 = [str(k) for k in coeffs1.keys()]
+        v1 = [int(v) for v in coeffs1.values()]
+        k2 = [str(k) for k in coeffs2.keys()]
+        v2 = [int(v) for v in coeffs2.values()]
         res_keys, res_vals = self.backend.group_ring_multiply(k1, v1, k2, v2, group_order)
         return {str(k): int(v) for k, v in zip(res_keys, res_vals)}
         

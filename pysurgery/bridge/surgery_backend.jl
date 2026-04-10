@@ -24,12 +24,16 @@ function hermitian_signature(matrix)
 end
 
 function exact_snf_sparse(rows, cols, vals, m, n)
-    A = sparse(Vector{Int}(rows), Vector{Int}(cols), Vector{Int}(vals), m, n)
-    
+    if !HAS_ABSTRACT_ALGEBRA
+        error("AbstractAlgebra unavailable")
+    end
+
+    # Python passes zero-based COO indices; lift to Julia's one-based indexing.
+    row_idx = Int64.(rows) .+ 1
+    col_idx = Int64.(cols) .+ 1
+    A = sparse(row_idx, col_idx, Int64.(vals), m, n)
+
     try
-        if !HAS_ABSTRACT_ALGEBRA
-            error("AbstractAlgebra unavailable")
-        end
         ZZ = AbstractAlgebra.ZZ
         A_aa = AbstractAlgebra.matrix(ZZ, Matrix(A))
         S_aa = AbstractAlgebra.snf(A_aa)
@@ -42,9 +46,7 @@ function exact_snf_sparse(rows, cols, vals, m, n)
         end
         return sort(factors)
     catch e
-        # Correct fallback: estimate rank only, cannot recover invariant factors
-        rank_estimate = rank(Matrix{Float64}(A))
-        return ones(Int64, rank_estimate)  # 1s signal "no torsion detected, rank only"
+        rethrow(e)
     end
 end
 
@@ -52,8 +54,12 @@ function exact_sparse_cohomology_basis(
     d_np1_rows, d_np1_cols, d_np1_vals, d_np1_m, d_np1_n,
     d_n_rows, d_n_cols, d_n_vals, d_n_m, d_n_n
 )
-    coboundary_mat = sparse(d_np1_cols, d_np1_rows, d_np1_vals, d_np1_n, d_np1_m)
-    
+    # Python passes zero-based COO indices; lift to Julia's one-based indexing.
+    np1_r = Int64.(d_np1_rows) .+ 1
+    np1_c = Int64.(d_np1_cols) .+ 1
+    np1_v = Int64.(d_np1_vals)
+    coboundary_mat = sparse(np1_c, np1_r, np1_v, d_np1_n, d_np1_m)
+
     basis = Vector{Vector{Int64}}()
     try
         if !HAS_ABSTRACT_ALGEBRA
@@ -81,12 +87,13 @@ function exact_sparse_cohomology_basis(
     catch e
         dense_M = Matrix{Float64}(coboundary_mat)
         F = svd(dense_M)
-        tol = maximum(size(dense_M)) * eps(Float64) * F.S[1]
-        null_indices = findall(x -> x <= tol, F.S)
-        nullity = length(null_indices)
+        smax = isempty(F.S) ? 0.0 : maximum(F.S)
+        tol = maximum(size(dense_M)) * eps(Float64) * smax
+        rank_est = count(x -> x > tol, F.S)
+        nullity = size(dense_M, 2) - rank_est
         # Float fallback: recover null space from SVD, then scale each vector to
         # clear denominators using the GCD of a rational reconstruction.
-        null_basis_float = [F.V[:, i] for i in (size(F.V, 2) - nullity + 1):size(F.V, 2)]
+        null_basis_float = nullity > 0 ? [F.V[:, i] for i in (size(F.V, 2) - nullity + 1):size(F.V, 2)] : Vector{Vector{Float64}}()
         for v in null_basis_float
             # Scale to smallest integer multiple using the largest component
             max_comp = maximum(abs.(v))
@@ -103,8 +110,11 @@ function exact_sparse_cohomology_basis(
         end
     end
     
-    dn_mat = sparse(d_n_cols, d_n_rows, d_n_vals, d_n_n, d_n_m)
-    
+    n_r = Int64.(d_n_rows) .+ 1
+    n_c = Int64.(d_n_cols) .+ 1
+    n_v = Int64.(d_n_vals)
+    dn_mat = sparse(n_c, n_r, n_v, d_n_n, d_n_m)
+
     quotient_basis = Vector{Vector{Int64}}()
     if size(dn_mat, 2) > 0
         dense_dn = Matrix{Float64}(dn_mat)
@@ -192,6 +202,14 @@ function group_ring_multiply(k1::Vector{String}, v1::Vector{Int}, k2::Vector{Str
         end
     end
     return final_k, final_v
+end
+
+function group_ring_multiply(k1::AbstractVector, v1::AbstractVector, k2::AbstractVector, v2::AbstractVector, group_order::Int)
+    k1s = String[string(x) for x in k1]
+    v1i = Int64[Int(x) for x in v1]
+    k2s = String[string(x) for x in k2]
+    v2i = Int64[Int(x) for x in v2]
+    return group_ring_multiply(k1s, v1i, k2s, v2i, group_order)
 end
 
 function multisignature(matrix, p::Int)
