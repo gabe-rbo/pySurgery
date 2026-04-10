@@ -1,0 +1,151 @@
+{
+  "contract_version": "2026.04-phase10",
+  "items": [
+    {
+      "id": "theorem.surface.classification.closed",
+      "kind": "theorem_tag",
+      "target": "surface.classification.closed",
+      "notebooks": ["examples/05_omni_dimensional_homeomorphisms.ipynb"],
+      "required_snippets": ["analyze_homeomorphism_2d"]
+    },
+    {
+      "id": "theorem.3d.poincare.geometrization",
+      "kind": "theorem_tag",
+      "target": "3d.poincare.geometrization",
+      "notebooks": [
+        "examples/05_omni_dimensional_homeomorphisms.ipynb",
+        "examples/08_certificate_workflows.ipynb"
+      ],
+      "required_snippets": ["analyze_homeomorphism_3d", "recognition_certificate"]
+    },
+    {
+      "id": "theorem.4d.freedman.simply_connected",
+      "kind": "theorem_tag",
+      "target": "4d.freedman.simply_connected",
+      "notebooks": [
+        "examples/02_intersection_forms.ipynb",
+        "examples/08_certificate_workflows.ipynb"
+      ],
+      "required_snippets": ["analyze_homeomorphism_4d", "definite_lattice_isometry_certificate"]
+    },
+    {
+      "id": "theorem.highdim.scobordism.surgery",
+      "kind": "theorem_tag",
+      "target": "highdim.scobordism.surgery",
+      "notebooks": [
+        "examples/05_omni_dimensional_homeomorphisms.ipynb",
+        "examples/08_certificate_workflows.ipynb"
+      ],
+      "required_snippets": ["analyze_homeomorphism_high_dim", "homotopy_completion_certificate"]
+    },
+    {
+      "id": "theorem.highdim.wall.group_ring",
+      "kind": "theorem_tag",
+      "target": "highdim.wall.group_ring",
+      "notebooks": ["examples/08_certificate_workflows.ipynb"],
+      "required_snippets": ["product_assembly_certificate"]
+    },
+    {
+      "id": "cert.three_manifold_recognition",
+      "kind": "certificate",
+      "target": "ThreeManifoldRecognitionCertificate",
+      "notebooks": ["examples/08_certificate_workflows.ipynb"],
+      "required_snippets": ["ThreeManifoldRecognitionCertificate"]
+    },
+    {
+      "id": "cert.homotopy_completion",
+      "kind": "certificate",
+      "target": "HomotopyCompletionCertificate",
+      "notebooks": ["examples/08_certificate_workflows.ipynb"],
+      "required_snippets": ["HomotopyCompletionCertificate"]
+    },
+    {
+      "id": "cert.product_assembly",
+      "kind": "certificate",
+      "target": "ProductAssemblyCertificate",
+      "notebooks": ["examples/08_certificate_workflows.ipynb"],
+      "required_snippets": ["ProductAssemblyCertificate"]
+    },
+    {
+      "id": "cert.definite_lattice_isometry",
+      "kind": "certificate",
+      "target": "DefiniteLatticeIsometryCertificate",
+      "notebooks": ["examples/08_certificate_workflows.ipynb"],
+      "required_snippets": ["DefiniteLatticeIsometryCertificate"]
+    },
+    {
+      "id": "api.witness.dispatcher",
+      "kind": "api_symbol",
+      "target": "build_homeomorphism_witness",
+      "notebooks": [
+        "examples/08_certificate_workflows.ipynb",
+        "examples/10_witness_builder_reference.ipynb"
+      ],
+      "required_snippets": ["build_homeomorphism_witness"]
+    },
+    {
+      "id": "workflow.explicit_homeomorphism",
+      "kind": "workflow",
+      "target": "explicit_homeomorphism_witness",
+      "notebooks": ["examples/08_certificate_workflows.ipynb"],
+      "required_snippets": ["explicit_map", "definite_lattice_isometry_certificate"]
+    },
+    {
+      "id": "workflow.obstruction_interference",
+      "kind": "workflow",
+      "target": "obstruction_driven_decision",
+      "notebooks": ["examples/08_certificate_workflows.ipynb"],
+      "required_snippets": ["surgery_required", "wall_obstruction"]
+    },
+    {
+      "id": "workflow.surgery_planning",
+      "kind": "workflow",
+      "target": "surgery_planning",
+      "notebooks": ["examples/08_certificate_workflows.ipynb"],
+      "required_snippets": ["surgery_to_remove_impediments"]
+    },
+    {
+      "id": "workflow.branch_matrix",
+      "kind": "workflow",
+      "target": "decision_status_matrix",
+      "notebooks": ["examples/09_branch_matrix_and_failure_modes.ipynb"],
+      "required_snippets": ["success", "impediment", "inconclusive", "surgery_required"]
+    },
+    {
+      "id": "workflow.witness_reference",
+      "kind": "workflow",
+      "target": "witness_builder_reference",
+      "notebooks": ["examples/10_witness_builder_reference.ipynb"],
+      "required_snippets": [
+        "build_surface_homeomorphism_witness",
+        "build_3d_homeomorphism_witness",
+        "build_4d_homeomorphism_witness",
+        "build_high_dim_homeomorphism_witness"
+      ]
+    },
+    {
+      "id": "workflow.capstone_end_to_end",
+      "kind": "workflow",
+      "target": "end_to_end_problem_solving",
+      "notebooks": ["examples/11_capstone_end_to_end_workflow.ipynb"],
+      "required_snippets": [
+        "extract_pi_1",
+        "compute_whitehead_group",
+        "analyze_homeomorphism_high_dim_result",
+        "build_homeomorphism_witness",
+        "surgery_to_remove_impediments"
+      ]
+    },
+    {
+      "id": "workflow.data_grounded_generators",
+      "kind": "workflow",
+      "target": "pi1_and_h1_as_data_elements",
+      "notebooks": ["examples/11_capstone_end_to_end_workflow.ipynb"],
+      "required_snippets": [
+        "extract_pi_1_with_traces",
+        "compute_optimal_h1_basis_from_simplices"
+      ]
+    }
+  ]
+}
+

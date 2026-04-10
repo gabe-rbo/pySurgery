@@ -5,7 +5,7 @@ try:
     from tests.discrete_surface_data import get_surfaces, get_3_manifolds, to_complex
 except ImportError:
     pass
-from pysurgery.core.fundamental_group import extract_pi_1, simplify_presentation
+from pysurgery.core.fundamental_group import extract_pi_1, simplify_presentation, infer_standard_group_descriptor, FundamentalGroup
 from pysurgery.core.complexes import CWComplex
 
 def test_extract_pi_1_trivial():
@@ -97,6 +97,20 @@ def test_extract_pi_1_disable_simplification_keeps_singleton_relation():
     assert pi_raw.relations == [["g_0"]]
     pi_s = extract_pi_1(cw, simplify=True)
     assert pi_s.relations == []
+
+
+def test_infer_standard_group_descriptor_recognizes_trivial_and_infinite_cyclic():
+    assert infer_standard_group_descriptor(FundamentalGroup(generators=[], relations=[])) == "1"
+    assert infer_standard_group_descriptor(FundamentalGroup(generators=["g_0"], relations=[])) == "Z"
+
+
+def test_infer_standard_group_descriptor_recognizes_finite_cyclic_via_gcd_of_relators():
+    pi = FundamentalGroup(
+        generators=["g_0"],
+        relations=[["g_0", "g_0", "g_0", "g_0"], ["g_0", "g_0", "g_0", "g_0", "g_0", "g_0"]],
+    )
+    # <g | g^4, g^6> = C_gcd(4,6) = C_2
+    assert infer_standard_group_descriptor(pi) == "Z_2"
 
 
 @pytest.mark.parametrize("name, builder, bettis, torsion, euler", get_surfaces() if 'get_surfaces' in globals() else [])

@@ -3,7 +3,7 @@ from typing import List
 import warnings
 import sympy as sp
 from sympy.matrices.normalforms import smith_normal_form
-from .fundamental_group import FundamentalGroup
+from .fundamental_group import FundamentalGroup, infer_standard_group_descriptor
 from ..bridge.julia_bridge import julia_engine
 
 def euler_totient(n):
@@ -87,13 +87,43 @@ def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
     Computes or approximates the Whitehead group for the given fundamental group.
     Uses Julia for exact abelianization and rank extractions via Bass-Heller-Swan.
     """
-    if not pi1.generators:
+    descriptor = infer_standard_group_descriptor(pi1)
+
+    if descriptor == "1":
         return WhiteheadGroup(
             rank=0,
             description="Wh(1) = 0. The s-Cobordism theorem has no obstruction.",
             computable=True,
             exact=True,
             method="trivial_group",
+        )
+
+    if descriptor == "Z":
+        return WhiteheadGroup(
+            rank=0,
+            description="Wh(Z) = 0 by Bass-Heller-Swan. No s-Cobordism obstruction.",
+            computable=True,
+            exact=True,
+            method="infinite_cyclic_theorem",
+        )
+
+    if descriptor is not None and descriptor.startswith("Z_"):
+        n = int(descriptor.split("_", 1)[1])
+        rank = cyclic_whitehead_rank(n)
+        if rank == 0:
+            return WhiteheadGroup(
+                rank=0,
+                description=f"Wh(C_{n}) has rank 0 by the finite cyclic Whitehead rank formula.",
+                computable=True,
+                exact=True,
+                method="finite_cyclic_theorem",
+            )
+        return WhiteheadGroup(
+            rank=rank,
+            description=f"Wh(C_{n}) has free abelian rank {rank} by the finite cyclic Whitehead rank formula.",
+            computable=True,
+            exact=True,
+            method="finite_cyclic_theorem",
         )
 
     if not pi1.relations:

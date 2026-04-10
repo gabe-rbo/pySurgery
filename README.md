@@ -86,7 +86,12 @@ A step-by-step interactive curriculum is provided in `examples/` (Jupyter notebo
 4. `04_advanced_tda_and_surgery_theory.ipynb` — raw data → GUDHI → cup product → intersection form
 5. `05_omni_dimensional_homeomorphisms.ipynb` — how classification behavior changes by dimension
 6. `06_kirby_calculus_and_characteristic_classes.ipynb` — characteristic classes & Kirby-style ideas
-7. `07_fundamental_group_and_structure_set.ipynb` — $\pi_1$ extraction + structure-set oriented workflows
+7. `07_fundamental_group_and_structure_set.ipynb` — $\pi_1$ extraction, Whitehead data, and typed structure-set workflows
+8. `08_certificate_workflows.ipynb` — explicit homeomorphism witnesses, obstruction interference, and surgery planning
+9. `09_branch_matrix_and_failure_modes.ipynb` — success/impediment/inconclusive/surgery-required branch matrix
+10. `10_witness_builder_reference.ipynb` — witness-builder API reference and dispatcher coverage
+11. `11_capstone_end_to_end_workflow.ipynb` — one full problem-solving pipeline using the library end-to-end
+12. `12_topological_denoising_via_surgery.ipynb` — noisy torus denoising by index-1 surgery, with generator pushforward visuals
 
 ---
 
@@ -146,6 +151,14 @@ In dimensions $n \ge 5$, classification interacts with $\pi_1$, Whitehead torsio
 * **4D**: intersection forms + parity/signature style invariants
 * **5D+**: surgery-theoretic invariants and $\pi_1$-sensitive obstructions
 
+### 8) Data-grounded optimal homology generators
+
+For discrete simplicial data, pySurgery includes data-grounded generator extraction for $H_1$ (cycle representatives as edge-level elements of the input complex), with Julia-accelerated and Python fallback paths.
+
+The generator/optimality pipeline follows the "Generators and Optimality" framework in:
+
+* Tamal K. Dey and Yusu Wang, *Computational Topology for Data Analysis*.
+
 ---
 
 ## Computational optimizations
@@ -192,6 +205,74 @@ ok_exact, msg_exact = analyze_homeomorphism_2d(c1, c2, allow_approx=False)
 ok_fast, msg_fast = analyze_homeomorphism_2d(c1, c2, allow_approx=True)
 ```
 
+### Homeomorphism witness builders
+
+`pysurgery.homeomorphism` answers: **"is a homeomorphism certified by invariants/obstructions?"**
+
+`pysurgery.homeomorphism_witness` goes further and returns a **structured witness object** when exact data is sufficient.
+
+```python
+from pysurgery.homeomorphism_witness import build_homeomorphism_witness
+
+res = build_homeomorphism_witness(c1=c1, c2=c2, dim=2)
+if res.status == "success":
+    print(res.witness.kind)        # e.g. "surface_classification"
+    print(res.witness.theorem)     # theorem branch used
+    print(res.witness.certificates)
+else:
+    print(res.reasoning)
+    print(res.missing_data)
+```
+
+#### Dimension-specific builders
+
+```python
+from pysurgery.homeomorphism_witness import (
+    build_surface_homeomorphism_witness,
+    build_3d_homeomorphism_witness,
+    build_4d_homeomorphism_witness,
+    build_high_dim_homeomorphism_witness,
+)
+```
+
+* `build_surface_homeomorphism_witness(...)` (2D)
+* `build_3d_homeomorphism_witness(...)` (3D)
+* `build_4d_homeomorphism_witness(...)` (Freedman branch)
+* `build_high_dim_homeomorphism_witness(...)` (`n >= 5`, surgery-theoretic branch)
+
+For `n >= 5`, an explicit completion certificate can be supplied via
+`homotopy_completion_certificate={"provided": True, "exact": True, "validated": True, ...}`.
+Certified success requires this certificate to be decision-ready (`exact` and `validated`).
+Legacy `homotopy_witness_hook` inputs are still accepted and bridged for compatibility.
+For nontrivial product groups, factor-wise Wall decompositions are exposed as structured surrogate certificates;
+exact success still requires assembly-certified product-group obstruction data.
+
+For 3D geometric-recognition completion, you can provide
+`recognition_certificate={"provided": True, "exact": True, "validated": True, ...}`.
+This allows exact success in non-Poincare branches when the certificate is decision-ready.
+
+For high-dimensional nontrivial product groups, provide
+`product_assembly_certificate={"provided": True, "exact": True, "validated": True, ...}`
+to upgrade surrogate product decompositions into decision-ready assembly evidence.
+
+#### 4D explicit algebraic witness
+
+In definite 4D cases, the witness may include an integer isometry matrix `U` (stored in `witness.certificates["isometry_matrix"]`) such that:
+
+$$
+U^T Q_1 U = Q_2.
+$$
+
+This is an explicit algebraic certificate for the lattice isomorphism part of the classification branch.
+
+#### Interpreting witness results
+
+* `status="success"`: exact theorem/certificate path produced a witness.
+* `status="inconclusive"`: not enough exact data to construct a certified witness (check `missing_data`).
+* `status="surgery_required"`: obstruction branch indicates surgery-level impediment instead of direct witness construction.
+
+`witness.exact` indicates whether the returned witness is exact-topology certified (`True`) or exploratory/heuristic (`False`).
+
 ---
 
 ## Package layout
@@ -227,6 +308,7 @@ Key modules:
 * `pysurgery.core.intersection_forms` — lattice math, parity checks, surgery engine
 * `pysurgery.core.math_core` — SNF / exact integer computation core
 * `pysurgery.homeomorphism` — dimension-aware analyzers
+* `pysurgery.homeomorphism_witness` — explicit witness/certificate builders
 * `pysurgery.integrations`
 
   * `gudhi_bridge` — TDA point clouds → topology objects

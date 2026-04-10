@@ -1,6 +1,9 @@
-from typing import List
+from typing import Dict, List, Tuple
+from math import gcd
 from pydantic import BaseModel, ConfigDict, Field
 from .complexes import CWComplex
+from .exact_algebra import normalize_word_token
+from .generator_models import Pi1GeneratorTrace, Pi1PresentationWithTraces
 
 class FundamentalGroup(BaseModel):
     """
@@ -19,12 +22,14 @@ class FundamentalGroup(BaseModel):
 
 
 def _inverse_word_token(tok: str) -> str:
-    return tok[:-3] if tok.endswith("^-1") else f"{tok}^-1"
+    nt = normalize_word_token(tok)
+    return nt[:-3] if nt.endswith("^-1") else f"{nt}^-1"
 
 
 def _free_reduce(word: List[str]) -> List[str]:
     stack: List[str] = []
     for tok in word:
+        tok = normalize_word_token(tok)
         if stack and _inverse_word_token(tok) == stack[-1]:
             stack.pop()
         else:
@@ -98,6 +103,48 @@ def simplify_presentation(generators: List[str], relations: List[List[str]]) -> 
     return FundamentalGroup(generators=generators, relations=dedup)
 
 
+def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
+    """Infer a conservative descriptor among {"1", "Z", "Z_n"} when provable.
+
+    This intentionally avoids heuristic/non-abelian guesses and only certifies
+    descriptors from simplified one-generator presentations.
+    """
+    simplified = simplify_presentation(list(pi1.generators), [list(rel) for rel in pi1.relations])
+    gens = list(simplified.generators)
+    rels = [list(rel) for rel in simplified.relations]
+
+    if not gens:
+        return "1"
+    if len(gens) != 1:
+        return None
+
+    g = gens[0]
+    if not rels:
+        return "Z"
+
+    exponents: List[int] = []
+    for rel in rels:
+        exp_sum = 0
+        for tok in rel:
+            base = tok[:-3] if tok.endswith("^-1") else tok
+            if base != g:
+                return None
+            exp_sum += -1 if tok.endswith("^-1") else 1
+        if exp_sum != 0:
+            exponents.append(abs(int(exp_sum)))
+
+    if not exponents:
+        return None
+
+    n = exponents[0]
+    for x in exponents[1:]:
+        n = gcd(n, x)
+
+    if n == 1:
+        return "1"
+    return f"Z_{n}"
+
+
 class GroupPresentation(BaseModel):
     """Structured group descriptor for higher-level obstruction APIs."""
 
@@ -115,6 +162,154 @@ class GroupPresentation(BaseModel):
         if k in {"product", "direct_product"} and self.factors:
             return " x ".join(self.factors)
         return self.kind
+
+
+def _path_between_tree(u: int, v: int, parent: Dict[int, int]) -> List[int]:
+    """Return the vertex path between u and v inside a rooted spanning forest."""
+    path_u: List[int] = []
+    seen_u = set()
+    x = u
+    while x != -1:
+        path_u.append(x)
+        seen_u.add(x)
+        x = parent.get(x, -1)
+
+    path_v: List[int] = []
+    y = v
+    while y not in seen_u and y != -1:
+        path_v.append(y)
+        y = parent.get(y, -1)
+
+    if y == -1:
+        return []
+
+    lca = y
+    i = path_u.index(lca)
+    return path_u[: i + 1] + list(reversed(path_v))
+
+
+def extract_pi_1_with_traces(cw: CWComplex, simplify: bool = True) -> Pi1PresentationWithTraces:
+    """Return pi_1 presentation with generator traces as data-native edge/vertex paths.
+
+    The algebraic presentation matches `extract_pi_1` semantics, while `traces`
+    maps each generator to an explicit cycle representative in the 1-skeleton.
+    """
+    d1 = cw.attaching_maps.get(1)
+    if d1 is None:
+        return Pi1PresentationWithTraces(generators=[], relations=[], traces=[])
+
+    n_vertices = d1.shape[0]
+    n_edges = d1.shape[1]
+    if n_edges == 0:
+        return Pi1PresentationWithTraces(generators=[], relations=[], traces=[])
+
+    # Build adjacency + edge endpoint table from d1 exactly as in extract_pi_1.
+    adj: Dict[int, List[Tuple[int, int, int]]] = {i: [] for i in range(n_vertices)}
+    edge_list: List[Tuple[int, int] | None] = []
+
+    d1_csc = d1.tocsc()
+    for e in range(n_edges):
+        col_start = d1_csc.indptr[e]
+        col_end = d1_csc.indptr[e + 1]
+        col_data = d1_csc.data[col_start:col_end]
+        col_row = d1_csc.indices[col_start:col_end]
+
+        if len(col_row) == 0:
+            edge_list.append((0, 0))
+            continue
+        if len(col_row) != 2:
+            edge_list.append(None)
+            continue
+
+        u, v = -1, -1
+        for val, r in zip(col_data, col_row):
+            if val == -1:
+                u = int(r)
+            elif val == 1:
+                v = int(r)
+
+        if u != -1 and v != -1:
+            adj[u].append((v, e, 1))
+            adj[v].append((u, e, -1))
+            edge_list.append((u, v))
+        else:
+            edge_list.append(None)
+
+    visited = [False] * n_vertices
+    tree_edges = set()
+    parent: Dict[int, int] = {}
+    component_root: Dict[int, int] = {}
+
+    if n_vertices > 0:
+        import collections
+
+        for start in range(n_vertices):
+            if visited[start]:
+                continue
+            queue = collections.deque([start])
+            visited[start] = True
+            parent[start] = -1
+            component_root[start] = start
+
+            while queue:
+                curr = queue.popleft()
+                for neighbor, edge_idx, _ in adj[curr]:
+                    if not visited[neighbor]:
+                        visited[neighbor] = True
+                        tree_edges.add(edge_idx)
+                        parent[neighbor] = curr
+                        component_root[neighbor] = start
+                        queue.append(neighbor)
+
+    raw_generators = [f"g_{i}" for i in range(n_edges) if i not in tree_edges]
+    raw_gen_map = {i: f"g_{i}" for i in range(n_edges) if i not in tree_edges}
+
+    # Build raw relations by reusing existing extractor with simplify disabled.
+    raw_pi = extract_pi_1(cw, simplify=False)
+    out_pi = simplify_presentation(raw_pi.generators, raw_pi.relations) if simplify else raw_pi
+
+    keep = set(out_pi.generators)
+    traces: List[Pi1GeneratorTrace] = []
+    for edge_idx, gen_name in raw_gen_map.items():
+        if gen_name not in keep:
+            continue
+        if edge_idx < 0 or edge_idx >= len(edge_list):
+            continue
+        endpoints = edge_list[edge_idx]
+        if endpoints is None:
+            continue
+        u, v = endpoints
+
+        if u == v:
+            vertex_path = [u]
+            directed = [(u, v)]
+            comp_root = component_root.get(u, u)
+        else:
+            path_vertices = _path_between_tree(v, u, parent)
+            directed = [(u, v)]
+            for i in range(len(path_vertices) - 1):
+                directed.append((path_vertices[i], path_vertices[i + 1]))
+            vertex_path = [u]
+            for _, b in directed:
+                vertex_path.append(b)
+            comp_root = component_root.get(u, component_root.get(v, u))
+
+        traces.append(
+            Pi1GeneratorTrace(
+                generator=gen_name,
+                edge_index=edge_idx,
+                component_root=int(comp_root),
+                vertex_path=[int(x) for x in vertex_path],
+                directed_edge_path=[(int(a), int(b)) for a, b in directed],
+                undirected_edge_path=[tuple(sorted((int(a), int(b)))) for a, b in directed],
+            )
+        )
+
+    return Pi1PresentationWithTraces(
+        generators=list(out_pi.generators),
+        relations=[list(r) for r in out_pi.relations],
+        traces=traces,
+    )
 
 def extract_pi_1(cw: CWComplex, simplify: bool = True) -> FundamentalGroup:
     """

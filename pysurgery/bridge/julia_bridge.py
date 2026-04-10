@@ -114,6 +114,14 @@ class JuliaBridge:
         self.require_julia()
         return int(self.backend.multisignature(matrix, p))
 
+    def integral_lattice_isometry(self, matrix1: np.ndarray, matrix2: np.ndarray) -> np.ndarray | None:
+        """Find U in GL_n(Z) with U^T * matrix1 * U = matrix2 for definite forms."""
+        self.require_julia()
+        candidate = self.backend.integral_lattice_isometry(matrix1, matrix2)
+        if candidate is None:
+            return None
+        return np.array(candidate, dtype=np.int64)
+
     def abelianize_and_bhs_rank(self, generators: list, relations: list) -> tuple:
         """
         Takes raw string generators and relations, computes the abelianization,
@@ -125,5 +133,26 @@ class JuliaBridge:
         flat_rels = [" ".join(r) for r in relations]
         free_rank, torsions = self.backend.abelianize_group(generators, flat_rels)
         return int(free_rank), list(torsions)
+
+    def compute_optimal_h1_basis_from_simplices(
+        self,
+        simplices: list,
+        num_vertices: int,
+        *,
+        point_cloud: np.ndarray | None = None,
+        max_roots: int | None = None,
+        root_stride: int = 1,
+        max_cycles: int | None = None,
+    ) -> list:
+        """Compute an optimal H1 basis via Julia backend (Algorithms 8+7 composition)."""
+        self.require_julia()
+        pts = point_cloud if point_cloud is not None else self.jl.nothing
+        mr = max_roots if max_roots is not None else self.jl.nothing
+        mc = max_cycles if max_cycles is not None else self.jl.nothing
+        out = self.backend.optgen_from_simplices(simplices, int(num_vertices), pts, mr, int(root_stride), mc)
+        basis_py = []
+        for cyc in out:
+            basis_py.append([tuple((int(e[0]), int(e[1]))) for e in cyc])
+        return basis_py
 
 julia_engine = JuliaBridge()

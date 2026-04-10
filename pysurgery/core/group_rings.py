@@ -1,6 +1,7 @@
 from typing import Callable, Dict, Optional
 import warnings
 from .exceptions import GroupRingError
+from .exact_algebra import normalize_word_token
 from ..bridge.julia_bridge import julia_engine
 
 class GroupRingElement:
@@ -12,6 +13,10 @@ class GroupRingElement:
     @staticmethod
     def _normalize_key(g: str) -> str:
         gs = str(g).strip()
+        try:
+            gs = normalize_word_token(gs)
+        except ValueError:
+            pass
         if gs in {"e", "1", "g0", "g_0"}:
             return "1"
         return gs

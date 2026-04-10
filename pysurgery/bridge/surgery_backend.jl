@@ -4,7 +4,14 @@ module SurgeryBackend
 using LinearAlgebra
 using SparseArrays
 
-export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, group_ring_multiply, multisignature, abelianize_group
+export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices
+
+const HAS_ABSTRACT_ALGEBRA = try
+    @eval import AbstractAlgebra
+    true
+catch
+    false
+end
 
 function hermitian_signature(matrix)
     # Convert to Julia Matrix
@@ -20,7 +27,9 @@ function exact_snf_sparse(rows, cols, vals, m, n)
     A = sparse(Vector{Int}(rows), Vector{Int}(cols), Vector{Int}(vals), m, n)
     
     try
-        import AbstractAlgebra
+        if !HAS_ABSTRACT_ALGEBRA
+            error("AbstractAlgebra unavailable")
+        end
         ZZ = AbstractAlgebra.ZZ
         A_aa = AbstractAlgebra.matrix(ZZ, Matrix(A))
         S_aa = AbstractAlgebra.snf(A_aa)
@@ -34,7 +43,7 @@ function exact_snf_sparse(rows, cols, vals, m, n)
         return sort(factors)
     catch e
         # Correct fallback: estimate rank only, cannot recover invariant factors
-        rank_estimate = rank(dense_A)
+        rank_estimate = rank(Matrix{Float64}(A))
         return ones(Int64, rank_estimate)  # 1s signal "no torsion detected, rank only"
     end
 end
@@ -47,7 +56,9 @@ function exact_sparse_cohomology_basis(
     
     basis = Vector{Vector{Int64}}()
     try
-        import AbstractAlgebra
+        if !HAS_ABSTRACT_ALGEBRA
+            error("AbstractAlgebra unavailable")
+        end
         QQ = AbstractAlgebra.QQ
         M_qq = AbstractAlgebra.matrix(QQ, Matrix(coboundary_mat))
         nullity, nullspace_mat = AbstractAlgebra.nullspace(M_qq)
@@ -76,7 +87,6 @@ function exact_sparse_cohomology_basis(
         # Float fallback: recover null space from SVD, then scale each vector to
         # clear denominators using the GCD of a rational reconstruction.
         null_basis_float = [F.V[:, i] for i in (size(F.V, 2) - nullity + 1):size(F.V, 2)]
-        basis = [round.(Int64, F.V[:, i] .* scale) for i in null_indices]
         for v in null_basis_float
             # Scale to smallest integer multiple using the largest component
             max_comp = maximum(abs.(v))
@@ -109,7 +119,9 @@ function exact_sparse_cohomology_basis(
             is_indep = false
             if new_rank > curr_rank
                 try
-                    import AbstractAlgebra
+                    if !HAS_ABSTRACT_ALGEBRA
+                        error("AbstractAlgebra unavailable")
+                    end
                     ZZ = AbstractAlgebra.ZZ
                     int_test = AbstractAlgebra.matrix(ZZ, Matrix{Int}(hcat(Matrix(dn_mat), vec)))
                     snf_test = AbstractAlgebra.snf(int_test)
@@ -200,6 +212,413 @@ function multisignature(matrix, p::Int)
     return total
 end
 
+function integral_lattice_isometry(matrix1, matrix2)
+    A = Matrix{Int64}(matrix1)
+    B = Matrix{Int64}(matrix2)
+    n = size(A, 1)
+    if size(A, 2) != n || size(B, 1) != n || size(B, 2) != n
+        return nothing
+    end
+
+    evals_a = eigvals(Hermitian(Matrix{Float64}(A)))
+    evals_b = eigvals(Hermitian(Matrix{Float64}(B)))
+    scale = max(1.0, maximum(abs.(vcat(evals_a, evals_b))))
+    tol = n * eps(Float64) * scale
+
+    pos_a = all(x -> x > tol, evals_a)
+    neg_a = all(x -> x < -tol, evals_a)
+    pos_b = all(x -> x > tol, evals_b)
+    neg_b = all(x -> x < -tol, evals_b)
+    if !((pos_a && pos_b) || (neg_a && neg_b))
+        return nothing
+    end
+
+    Adef = pos_a ? A : -A
+    Bdef = pos_b ? B : -B
+    lam_min = minimum(eigvals(Hermitian(Matrix{Float64}(Adef))))
+    if lam_min <= 0
+        return nothing
+    end
+
+    targets = [Int(Bdef[i, i]) for i in 1:n]
+    if any(t -> t <= 0, targets)
+        return nothing
+    end
+
+    radius = maximum([Int(floor(sqrt(t / lam_min))) + 1 for t in targets])
+    range_vals = collect(-radius:radius)
+    vectors_by_norm = Dict{Int, Vector{Vector{Int64}}}()
+    for t in unique(targets)
+        vectors_by_norm[t] = Vector{Vector{Int64}}()
+    end
+
+    for tup in Iterators.product(ntuple(_ -> range_vals, n)...)
+        v = Int64[tup...]
+        qv = Int(dot(v, Adef * v))
+        if haskey(vectors_by_norm, qv)
+            push!(vectors_by_norm[qv], v)
+            if length(vectors_by_norm[qv]) > 20000
+                return nothing
+            end
+        end
+    end
+
+    if any(t -> isempty(vectors_by_norm[t]), targets)
+        return nothing
+    end
+
+    order = sortperm(1:n; by = j -> length(vectors_by_norm[targets[j]]))
+    cols = [zeros(Int64, n) for _ in 1:n]
+    chosen_original_indices = Int[]
+
+    function backtrack(pos::Int)
+        if pos > n
+            U = hcat(cols...)
+            d = round(Int, det(Matrix{Float64}(U)))
+            if abs(d) != 1
+                return nothing
+            end
+            return transpose(U) * A * U == B ? U : nothing
+        end
+
+        j = order[pos]
+        for v in vectors_by_norm[targets[j]]
+            ok = true
+            for i in chosen_original_indices
+                if Int(dot(cols[i], Adef * v)) != Int(Bdef[i, j])
+                    ok = false
+                    break
+                end
+            end
+            if !ok
+                continue
+            end
+
+            cols[j] = v
+            push!(chosen_original_indices, j)
+            out = backtrack(pos + 1)
+            if out !== nothing
+                return out
+            end
+            pop!(chosen_original_indices)
+        end
+
+        return nothing
+    end
+
+    return backtrack(1)
+end
+
+# -----------------------------------------------------------------------------
+# Data-grounded H1 generators (Algorithms 10, 8, 7, 9)
+#
+# Attribution:
+#   T. K. Dey and Y. Wang, Computational Topology for Data Analysis,
+#   chapter "Generators and Optimality".
+#
+# This implementation works directly on simplices supplied from Python via
+# juliacall and is intended to back pySurgery's "elements of your data"
+# generator APIs.
+# -----------------------------------------------------------------------------
+
+const HEdge = NTuple{2,Int}
+const HTriangle = NTuple{3,Int}
+const HCycle = Vector{HEdge}
+
+@inline _order_hedge(u::Int, v::Int) = u <= v ? (u, v) : (v, u)
+
+function _to_vertices_simplex(s)
+    if s isa Tuple
+        return [Int(x) for x in s]
+    elseif s isa AbstractVector
+        return [Int(x) for x in s]
+    else
+        return Int[]
+    end
+end
+
+function _edge_weight_h1(u::Int, v::Int, points)
+    if points === nothing
+        return 1.0
+    end
+    s = 0.0
+    @inbounds @simd for j in axes(points, 2)
+        d = points[u + 1, j] - points[v + 1, j]  # vertices are 0-based in Python
+        s += d * d
+    end
+    return sqrt(s)
+end
+
+function _normalize_edges_triangles(simplices)
+    edges = HEdge[]
+    triangles = HTriangle[]
+    vertex_ids = Set{Int}()
+    for s in simplices
+        vs = _to_vertices_simplex(s)
+        if length(vs) == 2
+            e = _order_hedge(vs[1], vs[2])
+            push!(edges, e)
+            push!(vertex_ids, e[1]); push!(vertex_ids, e[2])
+        elseif length(vs) == 3
+            sort!(vs)
+            t = (vs[1], vs[2], vs[3])
+            push!(triangles, t)
+            push!(vertex_ids, t[1]); push!(vertex_ids, t[2]); push!(vertex_ids, t[3])
+        end
+    end
+    unique!(edges)
+    unique!(triangles)
+    return edges, triangles, vertex_ids
+end
+
+mutable struct HDSU
+    parent::Vector{Int}
+    rank::Vector{UInt8}
+end
+HDSU(n::Int) = HDSU(collect(1:n), fill(UInt8(0), n))
+
+@inline function _find_h!(d::HDSU, x::Int)
+    px = d.parent[x]
+    px == x && return x
+    r = _find_h!(d, px)
+    d.parent[x] = r
+    return r
+end
+
+@inline function _unite_h!(d::HDSU, a::Int, b::Int)
+    ra = _find_h!(d, a)
+    rb = _find_h!(d, b)
+    ra == rb && return false
+    if d.rank[ra] < d.rank[rb]
+        ra, rb = rb, ra
+    end
+    d.parent[rb] = ra
+    d.rank[ra] == d.rank[rb] && (d.rank[ra] += UInt8(1))
+    return true
+end
+
+function _minimum_spanning_edges_h(edges::Vector{HEdge}, weights::Dict{HEdge,Float64}, num_vertices::Int)
+    order = sortperm(edges; by = e -> weights[e])
+    dsu = HDSU(max(num_vertices, 1))
+    spanning = Set{HEdge}()
+    for idx in order
+        u, v = edges[idx]
+        if _unite_h!(dsu, u + 1, v + 1)
+            push!(spanning, (u, v))
+        end
+    end
+    return spanning
+end
+
+function _annot_edge_h(simplices, num_vertices::Int, edge_weights::Dict{HEdge,Float64})
+    edges, triangles, _ = _normalize_edges_triangles(simplices)
+    weights = Dict{HEdge,Float64}()
+    for e in edges
+        weights[e] = get(edge_weights, e, 1.0)
+    end
+
+    spanning = _minimum_spanning_edges_h(edges, weights, num_vertices)
+    non_tree = [e for e in edges if !in(e, spanning)]
+    m = length(non_tree)
+
+    annotations = Dict{HEdge,BitVector}()
+    m == 0 && (for e in edges; annotations[e] = BitVector(); end; return annotations, 0)
+
+    for e in spanning
+        annotations[e] = falses(m)
+    end
+    for (i, e) in enumerate(non_tree)
+        v = falses(m); v[i] = true
+        annotations[e] = v
+    end
+
+    active = trues(m)
+    boundary = falses(m)
+    for t in triangles
+        u, v, w = t
+        e1, e2, e3 = _order_hedge(u, v), _order_hedge(v, w), _order_hedge(u, w)
+
+        fill!(boundary, false)
+        haskey(annotations, e1) && (boundary .⊻= annotations[e1])
+        haskey(annotations, e2) && (boundary .⊻= annotations[e2])
+        haskey(annotations, e3) && (boundary .⊻= annotations[e3])
+
+        pivot = 0
+        @inbounds for i in 1:m
+            (boundary[i] && active[i]) || continue
+            pivot = i
+            break
+        end
+        pivot == 0 && continue
+
+        for (e, vec) in annotations
+            vec[pivot] && (vec .⊻= boundary)
+        end
+        active[pivot] = false
+    end
+
+    final = Dict{HEdge,BitVector}()
+    for (e, vec) in annotations
+        final[e] = vec[active]
+    end
+    return final, count(active)
+end
+
+function _shortest_path_tree_h(root::Int, adjacency::Dict{Int,Vector{Tuple{Int,Float64}}})
+    dist = Dict{Int,Float64}(root => 0.0)
+    parent = Dict{Int,Int}(root => -1)
+    heap = [(0.0, root)]
+
+    while !isempty(heap)
+        sort!(heap, by = x -> x[1])
+        d, u = popfirst!(heap)
+        d != dist[u] && continue
+        for (v, w) in get(adjacency, u, Tuple{Int,Float64}[])
+            nd = d + w
+            if nd < get(dist, v, Inf)
+                dist[v] = nd
+                parent[v] = u
+                push!(heap, (nd, v))
+            end
+        end
+    end
+
+    tree_edges = Set{HEdge}()
+    for (child, par) in parent
+        par == -1 && continue
+        push!(tree_edges, _order_hedge(child, par))
+    end
+    return parent, tree_edges
+end
+
+function _path_between_h_vertices(u::Int, v::Int, parent::Dict{Int,Int})
+    path_u = Int[]
+    seen_u = Set{Int}()
+    x = u
+    while x != -1
+        push!(path_u, x)
+        push!(seen_u, x)
+        x = get(parent, x, -1)
+    end
+    path_v = Int[]
+    y = v
+    while !in(y, seen_u) && y != -1
+        push!(path_v, y)
+        y = get(parent, y, -1)
+    end
+    y == -1 && return Int[]
+    i = findfirst(==(y), path_u)
+    return vcat(path_u[1:i], reverse(path_v))
+end
+
+function _path_edges_h(path_vertices::Vector{Int})
+    edges = HEdge[]
+    for i in 1:(length(path_vertices) - 1)
+        push!(edges, _order_hedge(path_vertices[i], path_vertices[i + 1]))
+    end
+    return edges
+end
+
+function _generator_cycles_h(simplices, num_vertices::Int, points; max_roots=nothing, root_stride::Int=1, max_cycles=nothing)
+    edges, _, vertex_ids = _normalize_edges_triangles(simplices)
+    isempty(edges) && return HCycle[]
+
+    adjacency = Dict{Int,Vector{Tuple{Int,Float64}}}()
+    for (u, v) in edges
+        w = _edge_weight_h1(u, v, points)
+        push!(get!(adjacency, u, Tuple{Int,Float64}[]), (v, w))
+        push!(get!(adjacency, v, Tuple{Int,Float64}[]), (u, w))
+    end
+
+    vertices = isempty(vertex_ids) ? collect(0:max(num_vertices - 1, 0)) : sort(collect(vertex_ids))
+    selected_roots = vertices[begin:max(root_stride, 1):end]
+    if max_roots !== nothing
+        selected_roots = selected_roots[1:min(Int(max_roots), length(selected_roots))]
+    end
+
+    cycles = HCycle[]
+    for root in selected_roots
+        parent, tree_edges = _shortest_path_tree_h(root, adjacency)
+        for (u, v) in edges
+            e = _order_hedge(u, v)
+            if in(e, tree_edges) || !haskey(parent, u) || !haskey(parent, v)
+                continue
+            end
+            path_vertices = _path_between_h_vertices(u, v, parent)
+            length(path_vertices) < 2 && continue
+            cyc = HEdge[e]
+            append!(cyc, _path_edges_h(path_vertices))
+            push!(cycles, cyc)
+            if max_cycles !== nothing && length(cycles) >= Int(max_cycles)
+                return cycles
+            end
+        end
+    end
+    return cycles
+end
+
+function _cycle_annotation_h(cycle::HCycle, simplex_annotations::Dict{HEdge,BitVector}, len::Int)
+    ann = falses(len)
+    for e in cycle
+        se = _order_hedge(e[1], e[2])
+        haskey(simplex_annotations, se) && (ann .⊻= simplex_annotations[se])
+    end
+    return ann
+end
+
+function _is_independent_h!(cv::BitVector, pivots::Dict{Int,BitVector})
+    for i in eachindex(cv)
+        cv[i] || continue
+        if haskey(pivots, i)
+            cv .⊻= pivots[i]
+        else
+            pivots[i] = copy(cv)
+            return true
+        end
+    end
+    return false
+end
+
+function _greedy_basis_h(cycles::Vector{HCycle}, simplices, num_vertices::Int, points)
+    edges, triangles, vertex_ids = _normalize_edges_triangles(simplices)
+    if isempty(edges)
+        for cyc in cycles
+            append!(edges, cyc)
+            for (u, v) in cyc
+                push!(vertex_ids, u); push!(vertex_ids, v)
+            end
+        end
+    end
+    if num_vertices <= 0 && !isempty(vertex_ids)
+        num_vertices = maximum(vertex_ids) + 1
+    end
+
+    ew = Dict{HEdge,Float64}()
+    for e in edges
+        ew[e] = _edge_weight_h1(e[1], e[2], points)
+    end
+
+    simplices_all = Any[]
+    append!(simplices_all, edges)
+    append!(simplices_all, triangles)
+    simplex_annotations, vec_dim = _annot_edge_h(simplices_all, num_vertices, ew)
+
+    cycles_sorted = sort(cycles; by = cyc -> sum(_edge_weight_h1(u, v, points) for (u, v) in cyc))
+    basis = HCycle[]
+    pivots = Dict{Int,BitVector}()
+    for cyc in cycles_sorted
+        ann = _cycle_annotation_h(cyc, simplex_annotations, vec_dim)
+        _is_independent_h!(ann, pivots) && push!(basis, cyc)
+    end
+    return basis
+end
+
+function optgen_from_simplices(simplices, num_vertices::Int, point_cloud=nothing, max_roots=nothing, root_stride::Int=1, max_cycles=nothing)
+    points = point_cloud === nothing ? nothing : Matrix{Float64}(point_cloud)
+    cycles = _generator_cycles_h(simplices, num_vertices, points; max_roots=max_roots, root_stride=root_stride, max_cycles=max_cycles)
+    return _greedy_basis_h(cycles, simplices, num_vertices, points)
+end
+
 function abelianize_group(generators::Vector{String}, relations::Vector{String})
     # Extracts Betti numbers and invariant factors (torsion) of the abelianization.
     # Abelianization H_1 = Z^n / R.
@@ -222,7 +641,12 @@ function abelianize_group(generators::Vector{String}, relations::Vector{String})
     end  # for i
 
     # Compute SNF of the relation matrix to extract free rank and torsion
-    import AbstractAlgebra
+    if !HAS_ABSTRACT_ALGEBRA
+        # Fallback: rank-only over Q, no torsion recovery without SNF.
+        rq = rank(Matrix{Float64}(M))
+        free_rank = n_gens - rq
+        return Int(free_rank), Int[]
+    end
     ZZ = AbstractAlgebra.ZZ
     M_aa = AbstractAlgebra.matrix(ZZ, M)
     S_aa = AbstractAlgebra.snf(M_aa)

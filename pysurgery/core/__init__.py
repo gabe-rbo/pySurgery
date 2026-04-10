@@ -3,10 +3,22 @@ from .intersection_forms import IntersectionForm
 from .quadratic_forms import QuadraticForm, arf_invariant_gf2
 from .group_rings import GroupRingElement
 from .math_core import get_snf_diagonal, get_sparse_snf_diagonal
-from .fundamental_group import FundamentalGroup, GroupPresentation, extract_pi_1, simplify_presentation
+from .fundamental_group import FundamentalGroup, GroupPresentation, extract_pi_1, extract_pi_1_with_traces, simplify_presentation, infer_standard_group_descriptor
+from .generator_models import Pi1GeneratorTrace, Pi1PresentationWithTraces, HomologyGenerator, HomologyBasisResult
+from .homology_generators import (
+    annot_edge,
+    generator_cycles_from_simplices,
+    greedy_h1_basis,
+    compute_optimal_h1_basis_from_simplices,
+    compute_optimal_h1_basis_from_simplex_tree,
+)
 from .characteristic_classes import extract_stiefel_whitney_w2, check_spin_structure, extract_pontryagin_p1, verify_hirzebruch_signature
 from .kirby_calculus import KirbyDiagram
 from .k_theory import WhiteheadGroup, compute_whitehead_group
+from .foundations import CONTRACT_VERSION, AnalyzerContract, CoverageMatrixEntry, COVERAGE_MATRIX, coverage_status_counts
+from .theorem_tags import infer_theorem_tag
+from .exact_algebra import coerce_int_matrix, normalize_word_token, validate_group_descriptor
+from .pi1_group_ring_scaffold import Pi1Evidence, GroupRingContext, Phase2Readiness, evaluate_phase2_readiness
 
 __all__ = [
     "ChainComplex",
@@ -20,12 +32,36 @@ __all__ = [
     "FundamentalGroup",
     "GroupPresentation",
     "extract_pi_1",
+    "extract_pi_1_with_traces",
     "simplify_presentation",
+    "infer_standard_group_descriptor",
+    "Pi1GeneratorTrace",
+    "Pi1PresentationWithTraces",
+    "HomologyGenerator",
+    "HomologyBasisResult",
+    "annot_edge",
+    "generator_cycles_from_simplices",
+    "greedy_h1_basis",
+    "compute_optimal_h1_basis_from_simplices",
+    "compute_optimal_h1_basis_from_simplex_tree",
     "extract_stiefel_whitney_w2",
     "check_spin_structure",
     "extract_pontryagin_p1",
     "verify_hirzebruch_signature",
     "KirbyDiagram",
     "WhiteheadGroup",
-    "compute_whitehead_group"
+    "compute_whitehead_group",
+    "CONTRACT_VERSION",
+    "AnalyzerContract",
+    "CoverageMatrixEntry",
+    "COVERAGE_MATRIX",
+    "coverage_status_counts",
+    "infer_theorem_tag",
+    "coerce_int_matrix",
+    "normalize_word_token",
+    "validate_group_descriptor",
+    "Pi1Evidence",
+    "GroupRingContext",
+    "Phase2Readiness",
+    "evaluate_phase2_readiness",
 ]
