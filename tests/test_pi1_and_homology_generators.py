@@ -61,6 +61,30 @@ def test_compute_optimal_h1_basis_from_simplices_filled_triangle_rank_zero():
     assert res.generators == []
 
 
+def test_compute_optimal_h1_basis_from_simplices_julia_path_handles_square_cycle(monkeypatch):
+    simplices = [
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (0, 3),
+    ]
+
+    monkeypatch.setattr(julia_engine, "available", True, raising=False)
+
+    def _fake_julia_optimal(*args, **kwargs):
+        assert args[0] == simplices
+        assert args[1] == 4
+        return [[(0, 1), (1, 2), (2, 3), (0, 3)]]
+
+    monkeypatch.setattr(julia_engine, "compute_optimal_h1_basis_from_simplices", _fake_julia_optimal, raising=False)
+
+    res = compute_optimal_h1_basis_from_simplices(simplices, num_vertices=4)
+    assert res.dimension == 1
+    assert res.rank == 1
+    assert len(res.generators) == 1
+    assert "Julia backend" in res.message
+
+
 def test_compute_optimal_h1_basis_python_fallback_when_julia_unavailable(monkeypatch):
     simplices = [
         (0, 1),

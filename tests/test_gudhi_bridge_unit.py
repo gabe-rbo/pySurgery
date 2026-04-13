@@ -13,12 +13,22 @@ class _FakeSimplexTree:
 class _SimplexTreeForExtract:
     def __init__(self, simplices):
         self._simplices = simplices
+        self.get_skeleton_calls = 0
 
     def dimension(self):
         return max((len(s) - 1 for s in self._simplices), default=0)
 
     def get_skeleton(self, _):
+        self.get_skeleton_calls += 1
         return [(s, 0.0) for s in self._simplices]
+
+
+class _SimplexTreeForTriangulation:
+    def __init__(self):
+        self.inserted = []
+
+    def insert(self, simplex):
+        self.inserted.append(tuple(simplex))
 
 
 def test_extract_complex_data_warns_and_falls_back_to_python_without_julia(monkeypatch):
@@ -36,6 +46,7 @@ def test_extract_complex_data_warns_and_falls_back_to_python_without_julia(monke
     assert boundaries[2].shape == (3, 1)
     assert dim_simplices[2] == [(0, 1, 2)]
     assert simplex_to_idx[1][(0, 1)] == 0
+    assert st.get_skeleton_calls == 1
 
 
 def test_extract_complex_data_uses_julia_payload_when_available(monkeypatch):
@@ -49,6 +60,7 @@ def test_extract_complex_data_uses_julia_payload_when_available(monkeypatch):
             {1: {"rows": np.array([0, 1], dtype=np.int64), "cols": np.array([0, 0], dtype=np.int64), "data": np.array([-1, 1], dtype=np.int64), "n_rows": 2, "n_cols": 1}},
             {0: 2, 1: 1},
             {0: [(0,), (1,)], 1: [(0, 1)]},
+            {0: {(0,): 0, (1,): 1}, 1: {(0, 1): 0}},
         )
 
     monkeypatch.setattr(gudhi_bridge.julia_engine, "compute_boundary_data_from_simplices", _fake_julia_boundary_builder)
@@ -58,6 +70,26 @@ def test_extract_complex_data_uses_julia_payload_when_available(monkeypatch):
     assert dim_simplices[1] == [(0, 1)]
     assert simplex_to_idx[0][(1,)] == 1
     assert boundaries[1].shape == (2, 1)
+    assert boundaries[1].toarray().tolist() == [[-1], [1]]
+
+
+def test_extract_complex_data_accepts_legacy_three_value_julia_return(monkeypatch):
+    st = _SimplexTreeForExtract([(0,), (1,), (0, 1)])
+    monkeypatch.setattr(gudhi_bridge.julia_engine, "available", True)
+
+    def _fake_julia_boundary_builder(simplex_entries, max_dim):
+        return (
+            {1: {"rows": np.array([0, 1], dtype=np.int64), "cols": np.array([0, 0], dtype=np.int64), "data": np.array([-1, 1], dtype=np.int64), "n_rows": 2, "n_cols": 1}},
+            {0: 2, 1: 1},
+            {0: [(0,), (1,)], 1: [(0, 1)]},
+        )
+
+    monkeypatch.setattr(gudhi_bridge.julia_engine, "compute_boundary_data_from_simplices", _fake_julia_boundary_builder)
+    boundaries, cells, dim_simplices, simplex_to_idx = gudhi_bridge.extract_complex_data(st)
+
+    assert cells == {0: 2, 1: 1}
+    assert dim_simplices[1] == [(0, 1)]
+    assert simplex_to_idx[1][(0, 1)] == 0
     assert boundaries[1].toarray().tolist() == [[-1], [1]]
 
 
@@ -114,4 +146,63 @@ def test_simplex_tree_intersection_form_handles_single_4cell_svd_fallback(monkey
     warning_text = "\n".join(str(w.message) for w in rec)
     assert "force svd" in warning_text
     assert "{e}" not in warning_text
+
+
+def test_triangulate_surface_prefers_julia_even_for_small_point_cloud(monkeypatch):
+    points = np.array(
+        [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float64,
+    )
+
+    class _FakeGudhi:
+        SimplexTree = _SimplexTreeForTriangulation
+
+    monkeypatch.setattr(gudhi_bridge, "gudhi", _FakeGudhi, raising=False)
+    monkeypatch.setattr(gudhi_bridge.julia_engine, "available", True)
+
+    calls = {"julia": 0, "python": 0}
+
+    def _fake_julia(p, tol):
+        calls["julia"] += 1
+        assert p.shape[0] == 3
+        return [(0, 1, 2)]
+
+    def _fake_python(*_args, **_kwargs):
+        calls["python"] += 1
+        raise AssertionError("Python fallback should not run when Julia succeeds")
+
+    monkeypatch.setattr(gudhi_bridge.julia_engine, "triangulate_surface_delaunay", _fake_julia)
+    monkeypatch.setattr(gudhi_bridge, "triangulate_surface_python", _fake_python)
+
+    st = gudhi_bridge.triangulate_surface(points)
+
+    assert calls == {"julia": 1, "python": 0}
+    assert (0, 1, 2) in st.inserted
+
+
+def test_triangulate_surface_falls_back_to_python_when_julia_fails(monkeypatch):
+    points = np.array(
+        [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float64,
+    )
+    expected = object()
+
+    monkeypatch.setattr(gudhi_bridge.julia_engine, "available", True)
+
+    def _fake_julia(*_args, **_kwargs):
+        raise RuntimeError("julia path failed")
+
+    def _fake_python(p, tolerance):
+        assert p.shape == points.shape
+        assert tolerance == 1e-10
+        return expected
+
+    monkeypatch.setattr(gudhi_bridge.julia_engine, "triangulate_surface_delaunay", _fake_julia)
+    monkeypatch.setattr(gudhi_bridge, "triangulate_surface_python", _fake_python)
+
+    with pytest.warns(UserWarning, match="Julia surface triangulation failed"):
+        out = gudhi_bridge.triangulate_surface(points)
+
+    assert out is expected
+
 

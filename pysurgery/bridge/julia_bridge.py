@@ -87,6 +87,43 @@ class JuliaBridge:
         factors = self.backend.exact_snf_sparse(jl_rows, jl_cols, jl_vals, shape[0], shape[1])
         return np.array(factors, dtype=np.int64)
 
+    def compute_sparse_rank_q(self, matrix) -> int:
+        """Compute matrix rank over Q using Julia backend from sparse COO data."""
+        self.require_julia()
+        if matrix is None or matrix.nnz == 0:
+            return 0
+        coo = matrix.tocoo()
+        rows = np.asarray(coo.row, dtype=np.int64)
+        cols = np.asarray(coo.col, dtype=np.int64)
+        vals = np.asarray(coo.data, dtype=np.int64)
+        rank = self.backend.rank_q_sparse(
+            self.jl.Array(rows),
+            self.jl.Array(cols),
+            self.jl.Array(vals),
+            int(matrix.shape[0]),
+            int(matrix.shape[1]),
+        )
+        return int(rank)
+
+    def compute_sparse_rank_mod_p(self, matrix, p: int) -> int:
+        """Compute matrix rank over Z/pZ using Julia backend from sparse COO data."""
+        self.require_julia()
+        if matrix is None or matrix.nnz == 0:
+            return 0
+        coo = matrix.tocoo()
+        rows = np.asarray(coo.row, dtype=np.int64)
+        cols = np.asarray(coo.col, dtype=np.int64)
+        vals = np.asarray(coo.data, dtype=np.int64)
+        rank = self.backend.rank_mod_p_sparse(
+            self.jl.Array(rows),
+            self.jl.Array(cols),
+            self.jl.Array(vals),
+            int(matrix.shape[0]),
+            int(matrix.shape[1]),
+            int(p),
+        )
+        return int(rank)
+
     def compute_sparse_cohomology_basis(self, d_np1, d_n, cn_size: int | None = None) -> list:
         """Executes the exact Julia sparse cohomology basis extraction Z^n / B^n."""
         self.require_julia()
@@ -133,6 +170,53 @@ class JuliaBridge:
         basis_py = []
         for vec in basis_jl:
             basis_py.append(np.array(vec, dtype=np.int64))
+        return basis_py
+
+    def compute_sparse_cohomology_basis_mod_p(self, d_np1, d_n, p: int, cn_size: int | None = None) -> list:
+        """Executes Julia sparse cohomology basis extraction over Z/pZ for prime p."""
+        self.require_julia()
+
+        if d_np1 is None or d_np1.nnz == 0:
+            d_np1_rows = np.array([], dtype=np.int64)
+            d_np1_cols = np.array([], dtype=np.int64)
+            d_np1_vals = np.array([], dtype=np.int64)
+            if cn_size is not None:
+                d_np1_m, d_np1_n = (cn_size, 0)
+            else:
+                d_np1_m, d_np1_n = (d_n.shape[1], 0) if d_n is not None else (0, 0)
+        else:
+            d_np1_coo = d_np1.tocoo()
+            d_np1_rows, d_np1_cols, d_np1_vals = d_np1_coo.row, d_np1_coo.col, d_np1_coo.data
+            d_np1_m, d_np1_n = d_np1.shape
+
+        if d_n is None or d_n.nnz == 0:
+            d_n_rows = np.array([], dtype=np.int64)
+            d_n_cols = np.array([], dtype=np.int64)
+            d_n_vals = np.array([], dtype=np.int64)
+            if cn_size is not None:
+                d_n_m, d_n_n = (0, cn_size)
+            else:
+                d_n_m, d_n_n = (0, d_np1_m) if d_np1 is not None else (0, 0)
+        else:
+            d_n_coo = d_n.tocoo()
+            d_n_rows, d_n_cols, d_n_vals = d_n_coo.row, d_n_coo.col, d_n_coo.data
+            d_n_m, d_n_n = d_n.shape
+
+        d_np1_rows = np.asarray(d_np1_rows, dtype=np.int64)
+        d_np1_cols = np.asarray(d_np1_cols, dtype=np.int64)
+        d_np1_vals = np.asarray(d_np1_vals, dtype=np.int64)
+        d_n_rows = np.asarray(d_n_rows, dtype=np.int64)
+        d_n_cols = np.asarray(d_n_cols, dtype=np.int64)
+        d_n_vals = np.asarray(d_n_vals, dtype=np.int64)
+        basis_jl = self.backend.sparse_cohomology_basis_mod_p(
+            self.jl.Array(d_np1_rows), self.jl.Array(d_np1_cols), self.jl.Array(d_np1_vals), d_np1_m, d_np1_n,
+            self.jl.Array(d_n_rows), self.jl.Array(d_n_cols), self.jl.Array(d_n_vals), d_n_m, d_n_n,
+            int(p),
+        )
+
+        basis_py = []
+        for vec in basis_jl:
+            basis_py.append(np.array(vec, dtype=np.int64) % int(p))
         return basis_py
         
     def group_ring_multiply(self, coeffs1: dict, coeffs2: dict, group_order: int) -> dict:
@@ -233,13 +317,27 @@ class JuliaBridge:
             )
         return parsed
 
-    def compute_boundary_data_from_simplices(self, simplex_entries: list, max_dim: int) -> tuple[dict, dict, dict]:
+    def compute_boundary_data_from_simplices(self, simplex_entries: list, max_dim: int) -> tuple[dict, dict, dict, dict]:
         """Build boundary COO payloads and simplex tables through Julia for large simplicial workloads."""
         self.require_julia()
-        boundaries_jl, cells_jl, dim_simplices_jl = self.backend.compute_boundary_data_from_simplices(
+        result = self.backend.compute_boundary_data_from_simplices(
             simplex_entries,
             int(max_dim),
         )
+
+        if len(result) == 4:
+            boundaries_jl, cells_jl, dim_simplices_jl, simplex_to_idx_jl = result
+        elif len(result) == 3:
+            boundaries_jl, cells_jl, dim_simplices_jl = result
+            simplex_to_idx_jl = {
+                k: {simplex: i for i, simplex in enumerate(simplices)}
+                for k, simplices in dict(dim_simplices_jl).items()
+            }
+        else:
+            raise ValueError(
+                "Julia boundary builder returned an unexpected number of values: "
+                f"{len(result)}"
+            )
 
         boundaries_py: dict[int, dict[str, object]] = {}
         for k, payload in dict(boundaries_jl).items():
@@ -258,7 +356,15 @@ class JuliaBridge:
             for k, simplices in dict(dim_simplices_jl).items()
             if len(simplices) > 0
         }
-        return boundaries_py, cells_py, dim_simplices_py
+        simplex_to_idx_py = {
+            int(k): {
+                tuple(int(x) for x in simplex): int(idx)
+                for simplex, idx in dict(idx_map).items()
+            }
+            for k, idx_map in dict(simplex_to_idx_jl).items()
+            if len(dict(idx_map)) > 0
+        }
+        return boundaries_py, cells_py, dim_simplices_py, simplex_to_idx_py
 
     def compute_boundary_mod2_matrix(self, source_simplices: list, target_simplices: list) -> dict:
         """Compute mod-2 boundary matrix through Julia for fast homology generator extraction."""

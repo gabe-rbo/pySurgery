@@ -261,7 +261,6 @@ def extract_pi_1_with_traces(cw: CWComplex, simplify: bool = True) -> Pi1Present
                         component_root[neighbor] = start
                         queue.append(neighbor)
 
-    raw_generators = [f"g_{i}" for i in range(n_edges) if i not in tree_edges]
     raw_gen_map = {i: f"g_{i}" for i in range(n_edges) if i not in tree_edges}
 
     # Build raw relations by reusing existing extractor with simplify disabled.

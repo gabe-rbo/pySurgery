@@ -20,8 +20,6 @@ except ImportError:
     HAS_GUDHI = False
 
 try:
-    from scipy.spatial import SphericalVoronoi, geometric_slerp
-    from scipy.spatial import geometric_slerp
     HAS_SCIPY_SPATIAL = True
 except ImportError:
     HAS_SCIPY_SPATIAL = False
@@ -40,9 +38,12 @@ def _warn_slow_boundary_fallback(reason: str) -> None:
     _SLOW_BOUNDARY_FALLBACK_WARNED = True
 
 
-def _extract_complex_data_python(simplex_tree):
+def _extract_complex_data_python(simplex_tree, simplices=None, max_dim=None):
     boundaries = {}
-    simplices = list(simplex_tree.get_skeleton(simplex_tree.dimension()))
+    if max_dim is None:
+        max_dim = simplex_tree.dimension()
+    if simplices is None:
+        simplices = list(simplex_tree.get_skeleton(max_dim))
 
     dim_simplices = {}
     for s, _ in simplices:
@@ -56,7 +57,7 @@ def _extract_complex_data_python(simplex_tree):
 
     simplex_to_idx = {k: {s: i for i, s in enumerate(dim_simplices[k])} for k in dim_simplices}
 
-    for k in range(1, simplex_tree.dimension() + 1):
+    for k in range(1, max_dim + 1):
         if k not in dim_simplices or k - 1 not in dim_simplices:
             continue
 
@@ -87,8 +88,8 @@ def extract_complex_data(simplex_tree):
 
     if julia_engine.available:
         try:
-            simplex_entries = [tuple(s) for s, _ in simplices]
-            boundary_payload, cells, dim_simplices = julia_engine.compute_boundary_data_from_simplices(
+            simplex_entries = [s for s, _ in simplices]
+            boundary_payload, cells, dim_simplices, simplex_to_idx = julia_engine.compute_boundary_data_from_simplices(
                 simplex_entries,
                 max_dim,
             )
@@ -99,16 +100,15 @@ def extract_complex_data(simplex_tree):
                     shape=(payload["n_rows"], payload["n_cols"]),
                     dtype=np.int64,
                 )
-            simplex_to_idx = {k: {s: i for i, s in enumerate(v)} for k, v in dim_simplices.items()}
             return boundaries, cells, dim_simplices, simplex_to_idx
         except Exception as e:
             _warn_slow_boundary_fallback(
                 f"Julia boundary assembly failed ({e!r})."
             )
-            return _extract_complex_data_python(simplex_tree)
+            return _extract_complex_data_python(simplex_tree, simplices=simplices, max_dim=max_dim)
 
     _warn_slow_boundary_fallback("Julia backend unavailable.")
-    return _extract_complex_data_python(simplex_tree)
+    return _extract_complex_data_python(simplex_tree, simplices=simplices, max_dim=max_dim)
 
 def simplex_tree_to_intersection_form(simplex_tree, allow_approx: bool = False) -> IntersectionForm:
     """
@@ -476,7 +476,7 @@ def triangulate_surface(points: np.ndarray, tolerance: float = 1e-10) -> gudhi.S
     -----
     - Automatically determines surface orientation via PCA
     - No parameter tuning required (unlike GUDHI's max_edge_length)
-    - Julia acceleration used when available for large point clouds (>5000 points)
+    - Julia acceleration is always preferred when available
     
     Examples
     --------
@@ -487,8 +487,8 @@ def triangulate_surface(points: np.ndarray, tolerance: float = 1e-10) -> gudhi.S
     """
     points = np.asarray(points, dtype=np.float64)
     
-    # Try Julia acceleration for large point clouds
-    if julia_engine.available and len(points) > 5000:
+    # Prefer Julia acceleration whenever available.
+    if julia_engine.available:
         try:
             triangles = julia_engine.triangulate_surface_delaunay(points, tolerance)
             

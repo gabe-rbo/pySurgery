@@ -52,6 +52,38 @@ def _rank_mod_p(A: np.ndarray, p: int) -> int:
     return rank
 
 
+def _matrix_rank_for_ring(matrix: csr_matrix, ring_kind: str, p: int | None = None) -> int:
+    """Compute matrix rank in the requested coefficient field, preferring Julia when available."""
+    if matrix is None or matrix.nnz == 0:
+        return 0
+
+    if ring_kind == "Q":
+        if julia_engine.available:
+            try:
+                return int(julia_engine.compute_sparse_rank_q(matrix))
+            except Exception as exc:
+                warnings.warn(
+                    "Topological Hint: Julia rank over Q failed in `ChainComplex.homology`; "
+                    f"falling back to NumPy dense rank ({exc!r})."
+                )
+        return int(np.linalg.matrix_rank(matrix.toarray().astype(float)))
+
+    if ring_kind == "ZMOD":
+        if p is None:
+            raise ValueError("Prime modulus p is required for Z/pZ rank computation.")
+        if julia_engine.available:
+            try:
+                return int(julia_engine.compute_sparse_rank_mod_p(matrix, int(p)))
+            except Exception as exc:
+                warnings.warn(
+                    "Topological Hint: Julia rank over Z/pZ failed in `ChainComplex.homology`; "
+                    f"falling back to Python elimination ({exc!r})."
+                )
+        return _rank_mod_p(matrix.toarray(), int(p))
+
+    raise ValueError(f"Unsupported rank ring kind '{ring_kind}'.")
+
+
 def _is_prime(n: int) -> bool:
     if n < 2:
         return False
@@ -248,9 +280,9 @@ class ChainComplex(BaseModel):
                 snf_n = get_sparse_snf_diagonal(dn)
                 rank_n = np.count_nonzero(snf_n)
             elif ring_kind == "Q":
-                rank_n = int(np.linalg.matrix_rank(dn.toarray().astype(float)))
+                rank_n = _matrix_rank_for_ring(dn, "Q")
             else:
-                rank_n = _rank_mod_p(dn.toarray(), int(p))
+                rank_n = _matrix_rank_for_ring(dn, "ZMOD", int(p))
         else:
             rank_n = 0
             
@@ -264,15 +296,15 @@ class ChainComplex(BaseModel):
                 torsion = [int(x) for x in snf_n_plus_1 if x > 1]
                 if not torsion and any(x == 1 for x in snf_n_plus_1):
                     warnings.warn(
-                        "Torsion in homology may be non-trivial but cannot be computed without "
-                        "exact integer arithmetic (Julia bridge unavailable). Install Julia for "
-                        "exact Z-torsion computation."
+                        "Torsion in homology may be non-trivial but the current exact sparse "
+                        "integer reduction did not fully resolve it. Install/enable Julia for "
+                        "more reliable exact Z-torsion computation."
                     )
             elif ring_kind == "Q":
-                rank_im_n_plus_1 = int(np.linalg.matrix_rank(dn_plus_1.toarray().astype(float)))
+                rank_im_n_plus_1 = _matrix_rank_for_ring(dn_plus_1, "Q")
                 torsion = []
             else:
-                rank_im_n_plus_1 = _rank_mod_p(dn_plus_1.toarray(), int(p))
+                rank_im_n_plus_1 = _matrix_rank_for_ring(dn_plus_1, "ZMOD", int(p))
                 torsion = []
         else:
             rank_im_n_plus_1 = 0
@@ -351,6 +383,22 @@ class ChainComplex(BaseModel):
             return out
 
         if ring_kind in {"Q", "ZMOD"}:
+            if julia_engine.available:
+                try:
+                    if ring_kind == "Q":
+                        return julia_engine.compute_sparse_cohomology_basis(dn_plus_1, dn, cn_size=cn_size)
+                    return julia_engine.compute_sparse_cohomology_basis_mod_p(
+                        dn_plus_1,
+                        dn,
+                        int(p),
+                        cn_size=cn_size,
+                    )
+                except Exception as exc:
+                    warnings.warn(
+                        "Topological Hint: Julia field cohomology basis backend failed in "
+                        f"`ChainComplex.cohomology_basis`; falling back to Python implementation ({exc!r})."
+                    )
+
             # Vector-space basis over a field.
             if dn_plus_1 is None or dn_plus_1.nnz == 0:
                 if ring_kind == "Q":

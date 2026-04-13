@@ -68,8 +68,8 @@ def _boundary_mod2_matrix(
     if not target or not source:
         return np.zeros((len(target), len(source)), dtype=np.int64)
 
-    # Try Julia acceleration for large workloads
-    if julia_engine.available and len(target) * len(source) > 10000:
+    # Prefer Julia acceleration whenever available.
+    if julia_engine.available:
         try:
             payload = julia_engine.compute_boundary_mod2_matrix(source, target)
             return sp.csr_matrix(
@@ -721,7 +721,6 @@ def compute_homology_basis_from_simplices(
             max_cycles=max_cycles,
         )
 
-    used_julia = False
     if julia_engine.available:
         try:
             out = julia_engine.compute_homology_basis_from_simplices(
@@ -747,7 +746,6 @@ def compute_homology_basis_from_simplices(
                         certified_cycle=bool(g.get("certified_cycle", True)),
                     )
                 )
-            used_julia = True
             return HomologyBasisResult(
                 dimension=dimension,
                 rank=len(gens),

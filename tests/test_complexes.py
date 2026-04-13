@@ -6,6 +6,7 @@ try:
 except ImportError:
     pass
 from pysurgery.core.complexes import ChainComplex, CWComplex
+from pysurgery.bridge.julia_bridge import julia_engine
 
 def test_sphere_homology():
     # S^2: 1 cell of dim 0, 1 cell of dim 2, trivial boundaries
@@ -81,6 +82,45 @@ def test_cohomology_basis_over_z2():
     b1 = c.cohomology_basis(1)
     assert len(b1) == 1
     assert int(b1[0][0]) in {0, 1}
+
+
+def test_cohomology_basis_over_q_prefers_julia(monkeypatch):
+    d1 = sp.csr_matrix(np.array([[2]], dtype=np.int64))
+    c = ChainComplex(boundaries={1: d1}, dimensions=[0, 1], cells={0: 1, 1: 1}, coefficient_ring="Q")
+
+    monkeypatch.setattr(julia_engine, "available", True)
+    called = {"count": 0}
+
+    def _fake_basis(d_np1, d_n, cn_size=None):
+        called["count"] += 1
+        assert cn_size == 1
+        return [np.array([1], dtype=np.int64)]
+
+    monkeypatch.setattr(julia_engine, "compute_sparse_cohomology_basis", _fake_basis)
+    b1 = c.cohomology_basis(1)
+    assert called["count"] == 1
+    assert len(b1) == 1
+    assert int(b1[0][0]) == 1
+
+
+def test_cohomology_basis_over_prime_mod_prefers_julia(monkeypatch):
+    d1 = sp.csr_matrix(np.array([[2]], dtype=np.int64))
+    c = ChainComplex(boundaries={1: d1}, dimensions=[0, 1], cells={0: 1, 1: 1}, coefficient_ring="Z/2Z")
+
+    monkeypatch.setattr(julia_engine, "available", True)
+    called = {"count": 0}
+
+    def _fake_basis_mod_p(d_np1, d_n, p, cn_size=None):
+        called["count"] += 1
+        assert p == 2
+        assert cn_size == 1
+        return [np.array([1], dtype=np.int64)]
+
+    monkeypatch.setattr(julia_engine, "compute_sparse_cohomology_basis_mod_p", _fake_basis_mod_p)
+    b1 = c.cohomology_basis(1)
+    assert called["count"] == 1
+    assert len(b1) == 1
+    assert int(b1[0][0]) == 1
 
 
 def test_cwcomplex_propagates_coefficient_ring():

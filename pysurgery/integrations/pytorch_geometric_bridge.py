@@ -1,8 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
-import warnings
 from pysurgery.core.complexes import CWComplex
-from pysurgery.bridge.julia_bridge import julia_engine
 import importlib.util
 
 HAS_TORCH = importlib.util.find_spec("torch") is not None

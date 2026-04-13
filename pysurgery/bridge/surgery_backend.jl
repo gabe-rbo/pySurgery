@@ -5,7 +5,7 @@ using LinearAlgebra
 using SparseArrays
 using Statistics
 
-export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, triangulate_surface_delaunay
+export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, triangulate_surface_delaunay
 
 const HAS_ABSTRACT_ALGEBRA = try
     @eval import AbstractAlgebra
@@ -163,6 +163,165 @@ function exact_sparse_cohomology_basis(
     return quotient_basis
 end
 
+function rank_q_sparse(rows, cols, vals, m::Int, n::Int)
+    isempty(rows) && return Int64(0)
+    row_idx = Int64.(rows) .+ 1
+    col_idx = Int64.(cols) .+ 1
+    A = sparse(row_idx, col_idx, Float64.(vals), m, n)
+    return Int64(rank(Matrix{Float64}(A)))
+end
+
+function _rank_mod_p_dense!(M::Matrix{Int64}, p::Int)
+    m, n = size(M)
+    row = 1
+    rk = 0
+    for col in 1:n
+        pivot = 0
+        for r in row:m
+            if mod(M[r, col], p) != 0
+                pivot = r
+                break
+            end
+        end
+        pivot == 0 && continue
+        if pivot != row
+            M[row, :], M[pivot, :] = copy(M[pivot, :]), copy(M[row, :])
+        end
+
+        pivot_val = mod(M[row, col], p)
+        inv_pivot = invmod(pivot_val, p)
+        for j in 1:n
+            M[row, j] = mod(M[row, j] * inv_pivot, p)
+        end
+
+        for r in 1:m
+            if r == row
+                continue
+            end
+            factor = mod(M[r, col], p)
+            factor == 0 && continue
+            for j in 1:n
+                M[r, j] = mod(M[r, j] - factor * M[row, j], p)
+            end
+        end
+
+        row += 1
+        rk += 1
+        row > m && break
+    end
+    return Int64(rk)
+end
+
+function rank_mod_p_sparse(rows, cols, vals, m::Int, n::Int, p::Int)
+    p <= 1 && error("modulus p must be > 1")
+    isempty(rows) && return Int64(0)
+    row_idx = Int64.(rows) .+ 1
+    col_idx = Int64.(cols) .+ 1
+    A = sparse(row_idx, col_idx, Int64.(vals), m, n)
+    dense = Matrix{Int64}(A)
+    return _rank_mod_p_dense!(dense, p)
+end
+
+function _rref_mod_p_dense(M::Matrix{Int64}, p::Int)
+    m, n = size(M)
+    row = 1
+    pivots = Int[]
+    for col in 1:n
+        pivot = 0
+        for r in row:m
+            if mod(M[r, col], p) != 0
+                pivot = r
+                break
+            end
+        end
+        pivot == 0 && continue
+        if pivot != row
+            M[row, :], M[pivot, :] = copy(M[pivot, :]), copy(M[row, :])
+        end
+
+        pivot_val = mod(M[row, col], p)
+        inv_pivot = invmod(pivot_val, p)
+        for j in 1:n
+            M[row, j] = mod(M[row, j] * inv_pivot, p)
+        end
+
+        for r in 1:m
+            if r == row
+                continue
+            end
+            factor = mod(M[r, col], p)
+            factor == 0 && continue
+            for j in 1:n
+                M[r, j] = mod(M[r, j] - factor * M[row, j], p)
+            end
+        end
+
+        push!(pivots, col)
+        row += 1
+        row > m && break
+    end
+    return M, pivots
+end
+
+function _nullspace_basis_mod_p_dense(A::Matrix{Int64}, p::Int)
+    _, n = size(A)
+    rref, pivots = _rref_mod_p_dense(copy(A), p)
+    pivot_set = Set(pivots)
+    basis = Vector{Vector{Int64}}()
+    for free in 1:n
+        in(free, pivot_set) && continue
+        v = zeros(Int64, n)
+        v[free] = 1
+        for (i, col) in enumerate(pivots)
+            v[col] = mod(-rref[i, free], p)
+        end
+        push!(basis, v)
+    end
+    return basis
+end
+
+function _independent_mod_p(v::Vector{Int64}, cols::Vector{Vector{Int64}}, p::Int)
+    vv = mod.(v, p)
+    if isempty(cols)
+        return any(x -> x != 0, vv)
+    end
+    M_prev = hcat(cols...)
+    M_new = hcat(M_prev, vv)
+    return _rank_mod_p_dense!(copy(M_new), p) > _rank_mod_p_dense!(copy(M_prev), p)
+end
+
+function sparse_cohomology_basis_mod_p(
+    d_np1_rows, d_np1_cols, d_np1_vals, d_np1_m, d_np1_n,
+    d_n_rows, d_n_cols, d_n_vals, d_n_m, d_n_n,
+    p::Int,
+)
+    p <= 1 && error("modulus p must be > 1")
+
+    np1_r = Int64.(d_np1_rows) .+ 1
+    np1_c = Int64.(d_np1_cols) .+ 1
+    np1_v = Int64.(d_np1_vals)
+    coboundary_mat = sparse(np1_c, np1_r, np1_v, d_np1_n, d_np1_m)
+    z_basis = _nullspace_basis_mod_p_dense(Matrix{Int64}(coboundary_mat), p)
+
+    n_r = Int64.(d_n_rows) .+ 1
+    n_c = Int64.(d_n_cols) .+ 1
+    n_v = Int64.(d_n_vals)
+    dn_mat = sparse(n_c, n_r, n_v, d_n_n, d_n_m)
+    dn_dense = Matrix{Int64}(dn_mat)
+    b_cols = [mod.(dn_dense[:, j], p) for j in 1:size(dn_dense, 2)]
+
+    reps = Vector{Vector{Int64}}()
+    span_cols = copy(b_cols)
+    for z in z_basis
+        if _independent_mod_p(z, span_cols, p)
+            zz = mod.(z, p)
+            push!(reps, zz)
+            push!(span_cols, zz)
+        end
+    end
+    return reps
+end
+
 function compute_boundary_data_from_simplices(simplex_entries, max_dim::Int)
     dim_simplices = Dict{Int, Vector{Tuple{Vararg{Int64}}}}()
     for d in 0:max_dim
@@ -226,7 +385,7 @@ function compute_boundary_data_from_simplices(simplex_entries, max_dim::Int)
         )
     end
 
-    return boundaries, cells, dim_simplices
+    return boundaries, cells, dim_simplices, simplex_to_idx
 end
 
 function group_ring_multiply(k1::Vector{String}, v1::Vector{Int}, k2::Vector{String}, v2::Vector{Int}, group_order::Int)
@@ -483,7 +642,7 @@ end
 end
 
 function _minimum_spanning_edges_h(edges::Vector{HEdge}, weights::Dict{HEdge,Float64}, num_vertices::Int)
-    order = sortperm(edges; by = weights)
+    order = sortperm(edges; by = e -> get(weights, e, 1.0))
     dsu = HDSU(max(num_vertices, 1))
     spanning = Set{HEdge}()
     for idx in order
