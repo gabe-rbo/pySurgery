@@ -67,11 +67,12 @@ pip install "pysurgery[all]"
 pySurgery can offload some exact integer workloads to Julia (recommended for very large sparse exact-$\mathbb{Z}$ computations).
 
 * Ensure `julia` is on your `PATH`
-* Install `AbstractAlgebra` in your Julia environment:
+* Install required Julia backend packages in your Julia environment:
 
 ```julia
 import Pkg
 Pkg.add("AbstractAlgebra")
+Pkg.add("PrecompileTools")
 ```
 
 ---

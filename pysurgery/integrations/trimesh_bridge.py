@@ -46,7 +46,7 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
     # Try Julia acceleration for large meshes
     if julia_engine.available and n_faces > 1000:
         try:
-            payload = julia_engine.compute_trimesh_boundary_data([tuple(f) for f in faces], n_vertices)
+            payload = julia_engine.compute_trimesh_boundary_data(faces, n_vertices)
             d1 = sp.csr_matrix(
                 (payload["d1_data"], (payload["d1_rows"], payload["d1_cols"])),
                 shape=(payload["n_vertices"], payload["n_edges"]),

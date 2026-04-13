@@ -79,7 +79,7 @@ def _extract_complex_data_python(simplex_tree, simplices=None, max_dim=None):
     cells = {d: len(dim_simplices[d]) for d in dim_simplices}
     return boundaries, cells, dim_simplices, simplex_to_idx
 
-def extract_complex_data(simplex_tree):
+def extract_complex_data(simplex_tree, *, include_metadata: bool = True):
     """
     Extracts boundary matrices, cells, and simplex mappings from a GUDHI SimplexTree.
     """
@@ -89,10 +89,19 @@ def extract_complex_data(simplex_tree):
     if julia_engine.available:
         try:
             simplex_entries = [s for s, _ in simplices]
-            boundary_payload, cells, dim_simplices, simplex_to_idx = julia_engine.compute_boundary_data_from_simplices(
-                simplex_entries,
-                max_dim,
-            )
+            if include_metadata:
+                boundary_payload, cells, dim_simplices, simplex_to_idx = julia_engine.compute_boundary_data_from_simplices(
+                    simplex_entries,
+                    max_dim,
+                )
+            else:
+                boundary_payload, cells = julia_engine.compute_boundary_payload_from_simplices(
+                    simplex_entries,
+                    max_dim,
+                    include_metadata=False,
+                )
+                cells = {int(k): int(v) for k, v in dict(cells).items()}
+                dim_simplices, simplex_to_idx = {}, {}
             boundaries = {}
             for k, payload in boundary_payload.items():
                 boundaries[k] = sp.csr_matrix(
@@ -109,6 +118,12 @@ def extract_complex_data(simplex_tree):
 
     _warn_slow_boundary_fallback("Julia backend unavailable.")
     return _extract_complex_data_python(simplex_tree, simplices=simplices, max_dim=max_dim)
+
+
+def extract_boundary_chain_data(simplex_tree):
+    """Lightweight extraction for callers that only need boundary operators and cell counts."""
+    boundaries, cells, _, _ = extract_complex_data(simplex_tree, include_metadata=False)
+    return boundaries, cells
 
 def simplex_tree_to_intersection_form(simplex_tree, allow_approx: bool = False) -> IntersectionForm:
     """
