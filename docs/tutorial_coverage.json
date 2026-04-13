@@ -23,7 +23,7 @@
       "kind": "theorem_tag",
       "target": "4d.freedman.simply_connected",
       "notebooks": [
-        "examples/02_intersection_forms.ipynb",
+        "examples/05_omni_dimensional_homeomorphisms.ipynb",
         "examples/08_certificate_workflows.ipynb"
       ],
       "required_snippets": ["analyze_homeomorphism_4d", "definite_lattice_isometry_certificate"]
