@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import collections
 import heapq
+import itertools
 import warnings
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Literal, Optional, Tuple
 
 import numpy as np
+import scipy.sparse as sp
 
 from .generator_models import HomologyBasisResult, HomologyGenerator
 from ..bridge.julia_bridge import julia_engine
@@ -27,6 +29,297 @@ from ..bridge.julia_bridge import julia_engine
 Edge = Tuple[int, int]
 Triangle = Tuple[int, int, int]
 Cycle = List[Edge]
+
+
+def _all_simplices_by_dim(simplices: Iterable[Tuple[int, ...]]) -> dict[int, list[tuple[int, ...]]]:
+    by_dim: dict[int, list[tuple[int, ...]]] = {}
+    for s in simplices:
+        t = tuple(sorted(int(x) for x in s))
+        if len(t) == 0:
+            continue
+        # Work with the simplicial closure so boundaries are represented on all faces.
+        for r in range(1, len(t) + 1):
+            d = r - 1
+            for face in itertools.combinations(t, r):
+                by_dim.setdefault(d, []).append(tuple(face))
+    for d in list(by_dim.keys()):
+        by_dim[d] = list(dict.fromkeys(by_dim[d]))
+    return by_dim
+
+
+def _infer_num_vertices(simplices: Iterable[Tuple[int, ...]], num_vertices: int) -> int:
+    if num_vertices > 0:
+        return int(num_vertices)
+    max_v = -1
+    for s in simplices:
+        for x in s:
+            max_v = max(max_v, int(x))
+    return max_v + 1 if max_v >= 0 else 0
+
+
+def _boundary_mod2_matrix(
+    source: list[tuple[int, ...]],
+    target: list[tuple[int, ...]],
+) -> np.ndarray:
+    """
+    Builds mod-2 boundary matrix with optional Julia acceleration.
+    Falls back to pure Python if Julia unavailable or fails.
+    """
+    if not target or not source:
+        return np.zeros((len(target), len(source)), dtype=np.int64)
+
+    # Try Julia acceleration for large workloads
+    if julia_engine.available and len(target) * len(source) > 10000:
+        try:
+            payload = julia_engine.compute_boundary_mod2_matrix(source, target)
+            return sp.csr_matrix(
+                (payload["data"], (payload["rows"], payload["cols"])),
+                shape=(payload["m"], payload["n"]),
+                dtype=np.int64,
+            ).toarray()
+        except Exception as e:
+            warnings.warn(
+                f"Topological Hint: Julia mod2 boundary assembly failed ({e!r}). "
+                "Falling back to pure Python."
+            )
+
+    # Python fallback
+    t_idx = {t: i for i, t in enumerate(target)}
+    mat = np.zeros((len(target), len(source)), dtype=np.int64)
+    for j, s in enumerate(source):
+        for i_drop in range(len(s)):
+            face = s[:i_drop] + s[i_drop + 1 :]
+            row = t_idx.get(face)
+            if row is not None:
+                mat[row, j] ^= 1
+    return mat
+
+
+def _rref_mod2(A: np.ndarray) -> tuple[np.ndarray, list[int]]:
+    M = (A.astype(np.int64) & 1).copy()
+    m, n = M.shape
+    row = 0
+    pivots: list[int] = []
+    for col in range(n):
+        pivot = None
+        for r in range(row, m):
+            if M[r, col] == 1:
+                pivot = r
+                break
+        if pivot is None:
+            continue
+        if pivot != row:
+            M[[row, pivot], :] = M[[pivot, row], :]
+        for r in range(m):
+            if r != row and M[r, col] == 1:
+                M[r, :] ^= M[row, :]
+        pivots.append(col)
+        row += 1
+        if row == m:
+            break
+    return M, pivots
+
+
+def _nullspace_basis_mod2(A: np.ndarray) -> list[np.ndarray]:
+    # A is m x n over F2; basis vectors are in F2^n.
+    _, n = A.shape
+    rref, pivots = _rref_mod2(A)
+    pivot_set = set(pivots)
+    free_cols = [j for j in range(n) if j not in pivot_set]
+    basis: list[np.ndarray] = []
+    for free in free_cols:
+        v = np.zeros(n, dtype=np.int64)
+        v[free] = 1
+        for i, col in enumerate(pivots):
+            v[col] = rref[i, free] & 1
+        basis.append(v)
+    return basis
+
+
+def _rank_mod2(A: np.ndarray) -> int:
+    _, pivots = _rref_mod2(A)
+    return len(pivots)
+
+
+def _components_h0_generators(
+    edges: list[Edge],
+    num_vertices: int,
+    point_cloud: Optional[np.ndarray] = None,
+) -> HomologyBasisResult:
+    if num_vertices <= 0:
+        return HomologyBasisResult(
+            dimension=0,
+            rank=0,
+            generators=[],
+            optimal=True,
+            exact=True,
+            message="No vertices found; H0 is trivial.",
+        )
+
+    parent = list(range(num_vertices))
+    rank = [0] * num_vertices
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def unite(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if rank[ra] < rank[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        if rank[ra] == rank[rb]:
+            rank[ra] += 1
+
+    for u, v in edges:
+        if 0 <= u < num_vertices and 0 <= v < num_vertices:
+            unite(u, v)
+
+    comps: dict[int, list[int]] = {}
+    for v in range(num_vertices):
+        r = find(v)
+        comps.setdefault(r, []).append(v)
+
+    gens: list[HomologyGenerator] = []
+    for verts in comps.values():
+        rep = min(verts)
+        weight = 0.0
+        if point_cloud is not None and len(verts) > 1:
+            centroid = point_cloud[np.array(verts)].mean(axis=0)
+            weight = float(np.linalg.norm(point_cloud[rep] - centroid))
+        gens.append(
+            HomologyGenerator(
+                dimension=0,
+                support_edges=[],
+                support_simplices=[(int(rep),)],
+                weight=weight,
+                certified_cycle=True,
+            )
+        )
+    gens.sort(key=lambda g: g.support_simplices[0][0] if g.support_simplices else -1)
+    return HomologyBasisResult(
+        dimension=0,
+        rank=len(gens),
+        generators=gens,
+        optimal=True,
+        exact=True,
+        message="Computed H0 generators as connected-component representatives.",
+    )
+
+
+def _weight_k_chain(chain: np.ndarray, k_simplices: list[tuple[int, ...]], point_cloud: Optional[np.ndarray]) -> float:
+    active = [k_simplices[i] for i, bit in enumerate(chain) if bit & 1]
+    if not active:
+        return 0.0
+    if point_cloud is None:
+        return float(len(active))
+    total = 0.0
+    for simplex in active:
+        if len(simplex) <= 1:
+            total += 1.0
+            continue
+        # Sum edge lengths inside each simplex as a geometric proxy.
+        s = 0.0
+        for i in range(len(simplex)):
+            for j in range(i + 1, len(simplex)):
+                u, v = simplex[i], simplex[j]
+                s += float(np.linalg.norm(point_cloud[u] - point_cloud[v]))
+        total += s
+    return float(total)
+
+
+def _independent_mod_image(v: np.ndarray, basis_cols: list[np.ndarray]) -> bool:
+    if not basis_cols:
+        return bool(np.any(v & 1))
+    M = np.column_stack([*(b & 1 for b in basis_cols), v & 1]).astype(np.int64)
+    r_prev = _rank_mod2(M[:, :-1])
+    r_new = _rank_mod2(M)
+    return r_new > r_prev
+
+
+def _hk_generators_mod2(
+    simplices: Iterable[Tuple[int, ...]],
+    num_vertices: int,
+    dimension: int,
+    point_cloud: Optional[np.ndarray],
+    mode: Literal["valid", "optimal"],
+) -> HomologyBasisResult:
+    simplices_list = [tuple(int(x) for x in s) for s in simplices]
+    by_dim = _all_simplices_by_dim(simplices_list)
+    if dimension == 0:
+        edges = [tuple(sorted(e)) for e in by_dim.get(1, []) if len(e) == 2]
+        return _components_h0_generators(edges, _infer_num_vertices(simplices_list, num_vertices), point_cloud=point_cloud)
+
+    k_simplices = by_dim.get(dimension, [])
+    km1_simplices = by_dim.get(dimension - 1, [])
+    kp1_simplices = by_dim.get(dimension + 1, [])
+    if not k_simplices:
+        return HomologyBasisResult(
+            dimension=dimension,
+            rank=0,
+            generators=[],
+            optimal=(mode == "optimal"),
+            exact=True,
+            message=f"No {dimension}-simplices found; H_{dimension} generators are empty.",
+        )
+
+    d_k = _boundary_mod2_matrix(k_simplices, km1_simplices)
+    d_kp1 = _boundary_mod2_matrix(kp1_simplices, k_simplices)
+    z_basis = _nullspace_basis_mod2(d_k)
+    if not z_basis:
+        return HomologyBasisResult(
+            dimension=dimension,
+            rank=0,
+            generators=[],
+            optimal=(mode == "optimal"),
+            exact=True,
+            message=f"Kernel of d_{dimension} is trivial over Z/2.",
+        )
+
+    b_cols = [d_kp1[:, j].astype(np.int64) & 1 for j in range(d_kp1.shape[1])]
+    z_candidates = z_basis[:]
+    if mode == "optimal":
+        z_candidates = sorted(z_candidates, key=lambda v: _weight_k_chain(v, k_simplices, point_cloud))
+
+    quotient_basis: list[np.ndarray] = []
+    span_cols = b_cols[:]
+    for z in z_candidates:
+        if _independent_mod_image(z, span_cols):
+            quotient_basis.append(z)
+            span_cols.append(z)
+
+    gens: list[HomologyGenerator] = []
+    for z in quotient_basis:
+        support = [k_simplices[i] for i, bit in enumerate(z) if bit & 1]
+        support_edges: list[Edge] = []
+        if dimension == 1:
+            support_edges = [tuple(sorted((int(a), int(b)))) for (a, b) in support if len((a, b)) == 2]
+        w = _weight_k_chain(z, k_simplices, point_cloud)
+        gens.append(
+            HomologyGenerator(
+                dimension=dimension,
+                support_edges=support_edges,
+                support_simplices=[tuple(int(x) for x in s) for s in support],
+                weight=float(w),
+                certified_cycle=True,
+            )
+        )
+
+    return HomologyBasisResult(
+        dimension=dimension,
+        rank=len(gens),
+        generators=gens,
+        optimal=(mode == "optimal"),
+        exact=True,
+        message=(
+            f"Computed H_{dimension} representatives over Z/2 as ker(d_{dimension}) / im(d_{dimension + 1})"
+            + (" using greedy small-support selection." if mode == "optimal" else ".")
+        ),
+    )
 
 
 def _edge_weight(u: int, v: int, points: Optional[np.ndarray]) -> float:
@@ -177,6 +470,17 @@ def _path_edges(path_vertices: List[int]) -> List[Edge]:
     return [tuple(sorted((path_vertices[i], path_vertices[i + 1]))) for i in range(len(path_vertices) - 1)]
 
 
+def _cycle_weight(cycle: Cycle, edge_weights: Dict[Edge, float], point_cloud: Optional[np.ndarray]) -> float:
+    total = 0.0
+    for u, v in cycle:
+        e = tuple(sorted((u, v)))
+        if e in edge_weights:
+            total += edge_weights[e]
+        else:
+            total += _edge_weight(u, v, point_cloud)
+    return float(total)
+
+
 def generator_cycles_from_simplices(
     simplices: Iterable[Tuple[int, ...]],
     num_vertices: int,
@@ -187,6 +491,27 @@ def generator_cycles_from_simplices(
     max_cycles: Optional[int] = None,
 ) -> List[Cycle]:
     edges, _, vertex_ids = _normalize_edges_triangles(simplices)
+    return _generator_cycles_from_normalized_edges(
+        edges,
+        vertex_ids,
+        num_vertices,
+        point_cloud=point_cloud,
+        max_roots=max_roots,
+        root_stride=root_stride,
+        max_cycles=max_cycles,
+    )
+
+
+def _generator_cycles_from_normalized_edges(
+    edges: list[Edge],
+    vertex_ids: set[int],
+    num_vertices: int,
+    point_cloud: Optional[np.ndarray] = None,
+    *,
+    max_roots: Optional[int] = None,
+    root_stride: int = 1,
+    max_cycles: Optional[int] = None,
+) -> List[Cycle]:
     if not edges:
         return []
 
@@ -250,6 +575,24 @@ def greedy_h1_basis(
     point_cloud: Optional[np.ndarray] = None,
 ) -> List[Cycle]:
     edges, triangles, vertex_ids = _normalize_edges_triangles(simplices)
+    return _greedy_h1_basis_from_normalized(
+        cycles,
+        edges,
+        triangles,
+        vertex_ids,
+        num_vertices,
+        point_cloud=point_cloud,
+    )
+
+
+def _greedy_h1_basis_from_normalized(
+    cycles: List[Cycle],
+    edges: list[Edge],
+    triangles: list[Triangle],
+    vertex_ids: set[int],
+    num_vertices: int,
+    point_cloud: Optional[np.ndarray] = None,
+) -> List[Cycle]:
     if not edges:
         for cyc in cycles:
             edges.extend(cyc)
@@ -262,7 +605,7 @@ def greedy_h1_basis(
     edge_weights = {tuple(sorted(e)): _edge_weight(e[0], e[1], point_cloud) for e in edges}
     simplex_annotations, vec_dim = annot_edge(list(edges) + list(triangles), num_vertices, edge_weights=edge_weights)
 
-    cycles_sorted = sorted(cycles, key=lambda cyc: sum(_edge_weight(u, v, point_cloud) for (u, v) in cyc))
+    cycles_sorted = sorted(cycles, key=lambda cyc: _cycle_weight(cyc, edge_weights, point_cloud))
     basis: list[Cycle] = []
     pivots: Dict[int, np.ndarray] = {}
     for cyc in cycles_sorted:
@@ -282,7 +625,7 @@ def compute_optimal_h1_basis_from_simplices(
     max_cycles: Optional[int] = None,
 ) -> HomologyBasisResult:
     simplices_list = [tuple(int(x) for x in s) for s in simplices]
-    basis: list[Cycle]
+    basis: Optional[list[Cycle]] = None
     used_julia = False
 
     if julia_engine.available:
@@ -303,20 +646,25 @@ def compute_optimal_h1_basis_from_simplices(
                 "`compute_optimal_h1_basis_from_simplices`; falling back to Python implementation "
                 f"({exc!r})."
             )
-            basis = []
-    else:
-        basis = []
-
-    if not basis:
-        cycles = generator_cycles_from_simplices(
-            simplices_list,
+    if basis is None:
+        edges, triangles, vertex_ids = _normalize_edges_triangles(simplices_list)
+        cycles = _generator_cycles_from_normalized_edges(
+            edges,
+            vertex_ids,
             num_vertices,
             point_cloud=point_cloud,
             max_roots=max_roots,
             root_stride=root_stride,
             max_cycles=max_cycles,
         )
-        basis = greedy_h1_basis(cycles, simplices_list, num_vertices, point_cloud=point_cloud)
+        basis = _greedy_h1_basis_from_normalized(
+            cycles,
+            edges,
+            triangles,
+            vertex_ids,
+            num_vertices,
+            point_cloud=point_cloud,
+        )
 
     gens: list[HomologyGenerator] = []
     for cyc in basis:
@@ -341,6 +689,119 @@ def compute_optimal_h1_basis_from_simplices(
             "Computed by shortest-path generator set + greedy independent basis over Z2 annotations"
             + (" (Julia backend)." if used_julia else " (Python backend).")
         ),
+    )
+
+
+def compute_homology_basis_from_simplices(
+    simplices: Iterable[Tuple[int, ...]],
+    num_vertices: int,
+    dimension: int,
+    point_cloud: Optional[np.ndarray] = None,
+    *,
+    mode: Literal["valid", "optimal"] = "valid",
+    max_roots: Optional[int] = None,
+    root_stride: int = 1,
+    max_cycles: Optional[int] = None,
+) -> HomologyBasisResult:
+    if dimension < 0:
+        raise ValueError("dimension must be >= 0")
+    if mode not in {"valid", "optimal"}:
+        raise ValueError("mode must be 'valid' or 'optimal'")
+
+    simplices_list = [tuple(int(x) for x in s) for s in simplices]
+
+    # Keep H1 optimal path backward-compatible and data-grounded.
+    if dimension == 1 and mode == "optimal":
+        return compute_optimal_h1_basis_from_simplices(
+            simplices_list,
+            num_vertices,
+            point_cloud=point_cloud,
+            max_roots=max_roots,
+            root_stride=root_stride,
+            max_cycles=max_cycles,
+        )
+
+    used_julia = False
+    if julia_engine.available:
+        try:
+            out = julia_engine.compute_homology_basis_from_simplices(
+                simplices_list,
+                int(num_vertices),
+                int(dimension),
+                mode=mode,
+                point_cloud=point_cloud,
+                max_roots=max_roots,
+                root_stride=int(root_stride),
+                max_cycles=max_cycles,
+            )
+            gens: list[HomologyGenerator] = []
+            for g in out:
+                simp = [tuple(int(x) for x in s) for s in g.get("support_simplices", [])]
+                edg = [tuple(sorted((int(e[0]), int(e[1])))) for e in g.get("support_edges", [])]
+                gens.append(
+                    HomologyGenerator(
+                        dimension=int(g.get("dimension", dimension)),
+                        support_edges=edg,
+                        support_simplices=simp,
+                        weight=float(g.get("weight", 0.0)),
+                        certified_cycle=bool(g.get("certified_cycle", True)),
+                    )
+                )
+            used_julia = True
+            return HomologyBasisResult(
+                dimension=dimension,
+                rank=len(gens),
+                generators=gens,
+                optimal=(mode == "optimal"),
+                exact=True,
+                message=(
+                    f"Computed H_{dimension} representatives over Z/2 via Julia backend"
+                    + (" (greedy small-support mode)." if mode == "optimal" else ".")
+                ),
+            )
+        except Exception as exc:
+            warnings.warn(
+                "Julia homology-generator backend failed in `compute_homology_basis_from_simplices`; "
+                f"falling back to Python implementation ({exc!r})."
+            )
+
+    py_res = _hk_generators_mod2(
+        simplices_list,
+        num_vertices=num_vertices,
+        dimension=dimension,
+        point_cloud=point_cloud,
+        mode=mode,
+    )
+    py_res.message = py_res.message + " (Python backend)."
+    return py_res
+
+
+def compute_homology_basis_from_simplex_tree(
+    simplex_tree: object,
+    dimension: int,
+    point_cloud: Optional[np.ndarray] = None,
+    *,
+    mode: Literal["valid", "optimal"] = "valid",
+    max_roots: Optional[int] = None,
+    root_stride: int = 1,
+    max_cycles: Optional[int] = None,
+) -> HomologyBasisResult:
+    simplices = [
+        tuple(s[0])
+        for s in simplex_tree.get_skeleton(max(dimension + 1, 1))
+        if len(s[0]) in {dimension + 1, dimension + 2}
+    ]
+    vertices = [int(s[0][0]) for s in simplex_tree.get_skeleton(0)]
+    num_vertices = (max(vertices) + 1) if vertices else 0
+    return compute_homology_basis_from_simplices(
+        simplices,
+        num_vertices,
+        dimension,
+        point_cloud=point_cloud,
+        mode=mode,
+        max_roots=max_roots,
+        root_stride=root_stride,
+        max_cycles=max_cycles,
     )
 
 

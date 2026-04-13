@@ -1,6 +1,8 @@
 import numpy as np
+import warnings
 from itertools import combinations
 from typing import Dict, List, Tuple
+from ..bridge.julia_bridge import julia_engine
 
 def _numpy_alexander_whitney_cup(
     alpha: np.ndarray, 
@@ -122,6 +124,8 @@ def alexander_whitney_cup(
     
     Formula: (alpha U beta)([v_0, ..., v_{p+q}]) = alpha([v_0, ..., v_p]) * beta([v_p, ..., v_{p+q}])
     
+    Uses Julia backend acceleration when available, with a pure-Python fallback.
+    
     Parameters
     ----------
     alpha : np.ndarray
@@ -148,6 +152,17 @@ def alexander_whitney_cup(
     # This prevents object-overhead in memory when dealing with millions of simplices.
     if len(simplices_p_plus_q) == 0:
         return np.zeros(0, dtype=np.int64)
+    
+    if i == 0 and julia_engine.available:
+        try:
+            return julia_engine.compute_alexander_whitney_cup(
+                alpha, beta, p, q, simplices_p_plus_q, simplex_to_idx_p, simplex_to_idx_q, modulus=modulus
+            )
+        except Exception as e:
+            warnings.warn(
+                f"Topological Hint: Julia cup product acceleration failed ({e!r}). "
+                "Falling back to slower pure-Python evaluation."
+            )
         
     # Standardize input for fast memory layout
     simplices_arr = np.array(simplices_p_plus_q, dtype=np.int64)

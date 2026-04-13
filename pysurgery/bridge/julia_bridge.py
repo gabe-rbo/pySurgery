@@ -191,4 +191,149 @@ class JuliaBridge:
             basis_py.append([tuple((int(e[0]), int(e[1]))) for e in cyc])
         return basis_py
 
+    def compute_homology_basis_from_simplices(
+        self,
+        simplices: list,
+        num_vertices: int,
+        dimension: int,
+        *,
+        mode: str = "valid",
+        point_cloud: np.ndarray | None = None,
+        max_roots: int | None = None,
+        root_stride: int = 1,
+        max_cycles: int | None = None,
+    ) -> list[dict]:
+        """Compute H_k generator representatives from simplices via Julia backend over Z/2."""
+        self.require_julia()
+        pts = point_cloud if point_cloud is not None else self.jl.nothing
+        mr = max_roots if max_roots is not None else self.jl.nothing
+        mc = max_cycles if max_cycles is not None else self.jl.nothing
+        out = self.backend.homology_generators_from_simplices(
+            simplices,
+            int(num_vertices),
+            int(dimension),
+            str(mode),
+            pts,
+            mr,
+            int(root_stride),
+            mc,
+        )
+        parsed: list[dict] = []
+        for g in out:
+            support_simplices = [tuple(int(x) for x in simplex) for simplex in g["support_simplices"]]
+            support_edges = [tuple((int(e[0]), int(e[1]))) for e in g["support_edges"]]
+            parsed.append(
+                {
+                    "dimension": int(g["dimension"]),
+                    "support_simplices": support_simplices,
+                    "support_edges": support_edges,
+                    "weight": float(g["weight"]),
+                    "certified_cycle": bool(g["certified_cycle"]),
+                }
+            )
+        return parsed
+
+    def compute_boundary_data_from_simplices(self, simplex_entries: list, max_dim: int) -> tuple[dict, dict, dict]:
+        """Build boundary COO payloads and simplex tables through Julia for large simplicial workloads."""
+        self.require_julia()
+        boundaries_jl, cells_jl, dim_simplices_jl = self.backend.compute_boundary_data_from_simplices(
+            simplex_entries,
+            int(max_dim),
+        )
+
+        boundaries_py: dict[int, dict[str, object]] = {}
+        for k, payload in dict(boundaries_jl).items():
+            kk = int(k)
+            boundaries_py[kk] = {
+                "rows": np.asarray(payload["rows"], dtype=np.int64),
+                "cols": np.asarray(payload["cols"], dtype=np.int64),
+                "data": np.asarray(payload["data"], dtype=np.int64),
+                "n_rows": int(payload["n_rows"]),
+                "n_cols": int(payload["n_cols"]),
+            }
+
+        cells_py = {int(k): int(v) for k, v in dict(cells_jl).items()}
+        dim_simplices_py = {
+            int(k): [tuple(int(x) for x in simplex) for simplex in simplices]
+            for k, simplices in dict(dim_simplices_jl).items()
+            if len(simplices) > 0
+        }
+        return boundaries_py, cells_py, dim_simplices_py
+
+    def compute_boundary_mod2_matrix(self, source_simplices: list, target_simplices: list) -> dict:
+        """Compute mod-2 boundary matrix through Julia for fast homology generator extraction."""
+        self.require_julia()
+        payload = self.backend.compute_boundary_mod2_matrix(source_simplices, target_simplices)
+        return {
+            "rows": np.asarray(payload["rows"], dtype=np.int64),
+            "cols": np.asarray(payload["cols"], dtype=np.int64),
+            "data": np.asarray(payload["data"], dtype=np.int64),
+            "m": int(payload["m"]),
+            "n": int(payload["n"]),
+        }
+
+    def compute_alexander_whitney_cup(
+        self,
+        alpha: np.ndarray,
+        beta: np.ndarray,
+        p: int,
+        q: int,
+        simplices_p_plus_q: list,
+        simplex_to_idx_p: dict,
+        simplex_to_idx_q: dict,
+        modulus: int | None = None,
+    ) -> np.ndarray:
+        """Compute Alexander-Whitney cup product through Julia for fast intersection form extraction."""
+        self.require_julia()
+        result = self.backend.compute_alexander_whitney_cup(
+            self.jl.Array(np.asarray(alpha, dtype=np.int64)),
+            self.jl.Array(np.asarray(beta, dtype=np.int64)),
+            int(p),
+            int(q),
+            simplices_p_plus_q,
+            simplex_to_idx_p,
+            simplex_to_idx_q,
+            modulus if modulus is not None else self.jl.nothing,
+        )
+        return np.asarray(result, dtype=np.int64)
+
+    def compute_trimesh_boundary_data(self, faces: list, n_vertices: int) -> dict:
+        """Compute trimesh boundary operators (d1, d2) through Julia."""
+        self.require_julia()
+        payload = self.backend.compute_trimesh_boundary_data(faces, int(n_vertices))
+        return {
+            "d1_rows": np.asarray(payload["d1_rows"], dtype=np.int64),
+            "d1_cols": np.asarray(payload["d1_cols"], dtype=np.int64),
+            "d1_data": np.asarray(payload["d1_data"], dtype=np.int64),
+            "n_vertices": int(payload["n_vertices"]),
+            "n_edges": int(payload["n_edges"]),
+            "d2_rows": np.asarray(payload["d2_rows"], dtype=np.int64),
+            "d2_cols": np.asarray(payload["d2_cols"], dtype=np.int64),
+            "d2_data": np.asarray(payload["d2_data"], dtype=np.int64),
+            "n_faces": int(payload["n_faces"]),
+        }
+
+    def triangulate_surface_delaunay(self, points: np.ndarray, tolerance: float = 1e-10) -> list:
+        """
+        Triangulate a 2D surface from a point cloud using Delaunay triangulation.
+
+        Parameters
+        ----------
+        points : np.ndarray
+            Point cloud of shape (n_points, 3)
+        tolerance : float
+            Tolerance for detecting degenerate cases
+
+        Returns
+        -------
+        list
+            List of triangles, where each triangle is a sorted list of 3 vertex indices
+        """
+        self.require_julia()
+        points = np.asarray(points, dtype=np.float64)
+        triangles = self.backend.triangulate_surface_delaunay(points, float(tolerance))
+        # Convert Julia arrays to Python lists
+        return [list(tri) for tri in triangles]
+
+
 julia_engine = JuliaBridge()

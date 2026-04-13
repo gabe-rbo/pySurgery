@@ -10,6 +10,8 @@ from .core.homology_generators import (
     greedy_h1_basis,
     compute_optimal_h1_basis_from_simplices,
     compute_optimal_h1_basis_from_simplex_tree,
+    compute_homology_basis_from_simplices,
+    compute_homology_basis_from_simplex_tree,
 )
 from .core.characteristic_classes import extract_stiefel_whitney_w2, check_spin_structure, extract_pontryagin_p1, verify_hirzebruch_signature
 from .core.kirby_calculus import KirbyDiagram
@@ -76,6 +78,8 @@ __all__ = [
     "greedy_h1_basis",
     "compute_optimal_h1_basis_from_simplices",
     "compute_optimal_h1_basis_from_simplex_tree",
+    "compute_homology_basis_from_simplices",
+    "compute_homology_basis_from_simplex_tree",
     "extract_stiefel_whitney_w2",
     "check_spin_structure",
     "extract_pontryagin_p1",

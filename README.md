@@ -91,7 +91,7 @@ A step-by-step interactive curriculum is provided in `examples/` (Jupyter notebo
 9. `09_branch_matrix_and_failure_modes.ipynb` — success/impediment/inconclusive/surgery-required branch matrix
 10. `10_witness_builder_reference.ipynb` — witness-builder API reference and dispatcher coverage
 11. `11_capstone_end_to_end_workflow.ipynb` — one full problem-solving pipeline using the library end-to-end
-12. `12_topological_denoising_via_surgery.ipynb` — noisy torus denoising by index-1 surgery, with generator pushforward visuals
+12. `12_torus_surgery.ipynb` — torus triangulation, homology extraction, and surgery-style 2D witness diagnostics
 
 ---
 
@@ -342,4 +342,3 @@ If you’re unsure where to start, open an issue describing your use-case and da
 ## License
 
 MIT License. See `LICENSE`.
-

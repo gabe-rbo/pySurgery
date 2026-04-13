@@ -1,6 +1,8 @@
 import numpy as np
 import scipy.sparse as sp
+import warnings
 from pysurgery.core.complexes import CWComplex
+from pysurgery.bridge.julia_bridge import julia_engine
 
 try:
     import trimesh
@@ -14,6 +16,8 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
     This extracts the 0-cells (vertices), 1-cells (edges), and 2-cells (faces)
     and constructs the exact boundary operators (attaching maps) over Z.
     
+    Uses Julia acceleration for large face meshes, with pure-Python fallback.
+
     Parameters
     ----------
     mesh : trimesh.Trimesh
@@ -35,13 +39,34 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
     if len(mesh.faces) == 0:
         raise ValueError("Mesh has no 2-cells (faces); unsupported for current 2-skeleton conversion.")
 
-    # 0-cells: Vertices
     n_vertices = len(mesh.vertices)
-    
-    # 2-cells: Faces
     faces = np.asarray(mesh.faces, dtype=np.int64)
     n_faces = len(faces)
 
+    # Try Julia acceleration for large meshes
+    if julia_engine.available and n_faces > 1000:
+        try:
+            payload = julia_engine.compute_trimesh_boundary_data([tuple(f) for f in faces], n_vertices)
+            d1 = sp.csr_matrix(
+                (payload["d1_data"], (payload["d1_rows"], payload["d1_cols"])),
+                shape=(payload["n_vertices"], payload["n_edges"]),
+                dtype=np.int64,
+            )
+            d2 = sp.csr_matrix(
+                (payload["d2_data"], (payload["d2_rows"], payload["d2_cols"])),
+                shape=(payload["n_edges"], payload["n_faces"]),
+                dtype=np.int64,
+            )
+            cells = {0: payload["n_vertices"], 1: payload["n_edges"], 2: payload["n_faces"]}
+            attaching_maps = {1: d1, 2: d2}
+            return CWComplex(cells=cells, attaching_maps=attaching_maps)
+        except Exception as e:
+            warnings.warn(
+                f"Topological Hint: Julia trimesh boundary assembly failed ({e!r}). "
+                "Falling back to pure Python."
+            )
+
+    # Python fallback (original implementation)
     # 1-cells: build unique undirected edges from polygon face cycles
     edge_to_idx = {}
     edges = []
@@ -63,7 +88,6 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
     cells = {0: n_vertices, 1: n_edges, 2: n_faces}
     
     # Boundary 1: d_1 (Edges -> Vertices)
-    # For each edge (v1, v2), boundary is v2 - v1
     d1_rows = []
     d1_cols = []
     d1_data = []
@@ -76,7 +100,6 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
     d1 = sp.csr_matrix((d1_data, (d1_rows, d1_cols)), shape=(n_vertices, n_edges), dtype=np.int64)
     
     # Boundary 2: d_2 (Faces -> Edges)
-    # For each polygon face, boundary is the signed sum of its oriented boundary edges.
     d2_rows = []
     d2_cols = []
     d2_data = []
