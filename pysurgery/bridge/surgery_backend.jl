@@ -4,6 +4,7 @@ module SurgeryBackend
 using LinearAlgebra
 using SparseArrays
 using Statistics
+using Combinatorics
 using PythonCall: pyconvert, Py
 import PrecompileTools
 
@@ -11,6 +12,21 @@ export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, ran
 
 const HAS_ABSTRACT_ALGEBRA = try
     @eval import AbstractAlgebra
+    true
+catch
+    false
+end
+
+const HAS_GRAPHS = try
+    @eval using Graphs
+    @eval using SimpleWeightedGraphs
+    true
+catch
+    false
+end
+
+const HAS_DELAUNAY = try
+    @eval using DelaunayTriangulation
     true
 catch
     false
@@ -294,41 +310,123 @@ function compute_trimesh_boundary_data_flat(face_vertices::AbstractVector{Int64}
     return Dict("d1_rows" => d1_rows, "d1_cols" => d1_cols, "d1_data" => d1_data, "n_vertices" => Int64(n_vertices), "n_edges" => Int64(length(edges)), "d2_rows" => d2_rows, "d2_cols" => d2_cols, "d2_data" => d2_data, "n_faces" => Int64(n_faces))
 end
 
-PrecompileTools.@setup_workload begin
-    r, c, v = Int64[0, 1], Int64[0, 1], Int64[1, 1]; fv, fo = Int64[0, 1, 2], Int64[0, 3]; mf = ones(2, 2); mi = ones(Int64, 2, 2)
-    PrecompileTools.@compile_workload begin
-        exact_snf_sparse(r, c, v, 2, 2); rank_q_sparse(r, c, v, 2, 2); rank_mod_p_sparse(r, c, v, 2, 2, 2)
-        _compute_boundary_data_internal_flat(fv, fo, 2); exact_sparse_cohomology_basis(r, c, v, 2, 2, r, c, v, 2, 2)
-        multisignature(mf, 2); integral_lattice_isometry(mi, mi)
+
+
+function _to_vertices_simplex(s)
+    if s isa Tuple
+        return [Int64(x) for x in s]
+    elseif s isa AbstractVector
+        return [Int64(x) for x in s]
+    elseif s isa Py
+        # Convert Py list to Julia Vector
+        return pyconvert(Vector{Int64}, s)
+    else
+        return Int64[]
     end
 end
 
-function _to_vertices_simplex(s)
-    if s isa Tuple; return [Int(x) for x in s]
-    elseif s isa AbstractVector; return [Int(x) for x in s]
-    else; return Int[]; end
+function _components_h0_generators(edges::Vector{Tuple{Int64, Int64}}, nv::Int, pts=nothing)
+    # nv is total vertices
+    parent = collect(1:nv)
+    function find(x)
+        while parent[x] != x
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        end
+        return x
+    end
+    function unite(a, b)
+        ra, rb = find(a), find(b)
+        if ra != rb
+            parent[rb] = ra
+        end
+    end
+    
+    for (u, v) in edges
+        if u+1 <= nv && v+1 <= nv
+            unite(u+1, v+1)
+        end
+    end
+    
+    components = Dict{Int, Int64}()
+    for i in 1:nv
+        r = find(i)
+        if !haskey(components, r)
+            components[r] = i-1
+        end
+    end
+    
+    results = []
+    for (r, rep) in components
+        weight = 0.0
+        push!(results, Dict(
+            "dimension" => 0,
+            "support_simplices" => [[Int64(rep)]],
+            "support_edges" => [],
+            "weight" => weight,
+            "certified_cycle" => true
+        ))
+    end
+    # Sort for deterministic output
+    return sort(results, by = x -> x["support_simplices"][1][1])
 end
 
 function _compute_boundary_data_internal(simplex_entries, max_dim::Int)
-    dim_simplices = Dict{Int, Vector{Tuple{Vararg{Int64}}}}(); for d in 0:max_dim; dim_simplices[d] = Tuple{Vararg{Int64}}[]; end
-    for s in simplex_entries; vs = _to_vertices_simplex(s); isempty(vs) && continue; sort!(vs); d = length(vs) - 1; 0 <= d <= max_dim && push!(dim_simplices[d], Tuple(Int64.(vs))); end
-    cells = Dict{Int, Int64}(); simplex_to_idx = Dict{Int, Dict{Tuple{Vararg{Int64}}, Int64}}()
-    for d in 0:max_dim
-        simplices_d = dim_simplices[d]; sort!(simplices_d); cells[d] = Int64(length(simplices_d))
-        idx_map = Dict{Tuple{Vararg{Int64}}, Int64}(); for (i, simplex) in enumerate(simplices_d); idx_map[simplex] = Int64(i - 1); end; simplex_to_idx[d] = idx_map
+    # Ensure we have all dimensions from 0 to max_dim
+    dim_simplices = Dict{Int, Set{Tuple{Vararg{Int64}}}}()
+    for d in 0:max_dim; dim_simplices[d] = Set{Tuple{Vararg{Int64}}}(); end
+    
+    for s in simplex_entries
+        vs = _to_vertices_simplex(s)
+        isempty(vs) && continue
+        t = Tuple(sort(vec(collect(Int64.(vs)))))
+        # Add all faces to ensure complete skeleton
+        for r in 1:length(t)
+            d = r - 1
+            if d <= max_dim
+                for face in combinations(t, r)
+                    push!(dim_simplices[d], Tuple(sort(collect(Int64.(face)))))
+                end
+            end
+        end
     end
+    
+    # Convert sets to sorted vectors
+    sorted_dim_simplices = Dict{Int, Vector{Tuple{Vararg{Int64}}}}()
+    cells = Dict{Int, Int64}()
+    simplex_to_idx = Dict{Int, Dict{Tuple{Vararg{Int64}}, Int64}}()
+    
+    for d in 0:max_dim
+        v = sort(collect(dim_simplices[d]))
+        sorted_dim_simplices[d] = v
+        cells[d] = Int64(length(v))
+        idx_map = Dict{Tuple{Vararg{Int64}}, Int64}()
+        for (i, simplex) in enumerate(v)
+            idx_map[simplex] = Int64(i - 1)
+        end
+        simplex_to_idx[d] = idx_map
+    end
+    
     boundaries = Dict{Int, Dict{String, Any}}()
     for k in 1:max_dim
-        n_rows, n_cols = Int64(get(cells, k - 1, 0)), Int64(get(cells, k, 0)); (n_rows == 0 || n_cols == 0) && continue
-        rows, cols, data = Int64[], Int64[], Int64[]; prev_dim_map = simplex_to_idx[k - 1]
-        for (j, simplex) in enumerate(dim_simplices[k])
-            verts = collect(simplex); for i in eachindex(verts)
-                face = Tuple(vcat(verts[1:(i - 1)], verts[(i + 1):end])); haskey(prev_dim_map, face) && (push!(rows, prev_dim_map[face]); push!(cols, Int64(j - 1)); push!(data, isodd(i - 1) ? -1 : 1))
+        n_rows, n_cols = Int64(get(cells, k - 1, 0)), Int64(get(cells, k, 0))
+        (n_rows == 0 || n_cols == 0) && continue
+        rows, cols, data = Int64[], Int64[], Int64[]
+        prev_dim_map = simplex_to_idx[k - 1]
+        for (j, simplex) in enumerate(sorted_dim_simplices[k])
+            verts = collect(simplex)
+            for i in eachindex(verts)
+                face = Tuple(vcat(verts[1:(i - 1)], verts[(i + 1):end]))
+                if haskey(prev_dim_map, face)
+                    push!(rows, prev_dim_map[face])
+                    push!(cols, Int64(j - 1))
+                    push!(data, isodd(i - 1) ? -1 : 1)
+                end
             end
         end
         boundaries[k] = Dict("rows" => rows, "cols" => cols, "data" => data, "n_rows" => n_rows, "n_cols" => n_cols)
     end
-    return boundaries, cells, dim_simplices, simplex_to_idx
+    return boundaries, cells, sorted_dim_simplices, simplex_to_idx
 end
 
 function compute_boundary_payload_from_simplices(simplex_entries, max_dim::Int, include_metadata::Bool=true)
@@ -355,10 +453,10 @@ end
 function compute_boundary_mod2_matrix(source_simplices, target_simplices)
     source, target = [_to_vertices_simplex(s) for s in source_simplices], [_to_vertices_simplex(t) for t in target_simplices]
     m, n = length(target), length(source); if m == 0 || n == 0; return Dict("rows" => Int64[], "cols" => Int64[], "data" => Int64[], "m" => Int64(m), "n" => Int64(n)); end
-    t_idx = Dict{Tuple{Vararg{Int}}, Int}(); for (i, t) in enumerate(target); t_idx[Tuple(sort(t))] = i - 1; end
+    t_idx = Dict{Tuple{Vararg{Int}}, Int}(); for (i, t) in enumerate(target); t_idx[Tuple(sort(collect(t)))] = i - 1; end
     rows, cols, data = Int64[], Int64[], Int64[]
     for (j, s) in enumerate(source); for i_drop in eachindex(s)
-        face = Tuple(sort(Int.(vcat(s[1:(i_drop-1)], s[(i_drop+1):end])))); haskey(t_idx, face) && (push!(rows, t_idx[face]); push!(cols, j - 1); push!(data, 1))
+        face = Tuple(sort(collect(Int.(vcat(s[1:(i_drop-1)], s[(i_drop+1):end]))))); haskey(t_idx, face) && (push!(rows, t_idx[face]); push!(cols, j - 1); push!(data, 1))
     end; end
     return Dict("rows" => rows, "cols" => cols, "data" => data, "m" => Int64(m), "n" => Int64(n))
 end
@@ -374,19 +472,557 @@ function compute_alexander_whitney_cup(alpha::AbstractVector, beta::AbstractVect
     return res
 end
 
+function _cycle_annotation(cycle::Vector{Int64}, annotations::Dict{Tuple{Int64, Int64}, Vector{Int8}}, m::Int)
+    res = zeros(Int8, m)
+    for i in 1:length(cycle)
+        u, v = cycle[i], cycle[mod(i, length(cycle)) + 1]
+        e = u < v ? (u, v) : (v, u)
+        if haskey(annotations, e)
+            res .⊻= annotations[e]
+        end
+    end
+    return res
+end
+
+function _is_independent_wrt(ann::Vector{Int8}, pivots::Dict{Int, Vector{Int8}})
+    curr = copy(ann)
+    m = length(curr)
+    for i in 1:m
+        if curr[i] & 1 != 0
+            if haskey(pivots, i)
+                curr .⊻= pivots[i]
+            else
+                return true, i, curr
+            end
+        end
+    end
+    return false, -1, curr
+end
+
 function optgen_from_simplices(simplices, num_vertices::Int, pts=nothing, max_roots=nothing, root_stride::Int=1, max_cycles=nothing)
-    # Placeholder for the complex H1 logic, preserving core structure
-    return Vector{HCycle}()
+    if !HAS_GRAPHS
+        error("Graphs.jl or SimpleWeightedGraphs.jl unavailable.")
+    end
+    
+    # 1. Extract edges and triangles
+    edges_set = Set{Tuple{Int64, Int64}}()
+    triangles = Vector{Tuple{Int64, Int64, Int64}}()
+    
+    for s in simplices
+        vs = _to_vertices_simplex(s)
+        if length(vs) == 2
+            push!(edges_set, Tuple(sort(vec(Int64.(collect(vs))))))
+        elseif length(vs) == 3
+            push!(triangles, Tuple(sort(vec(Int64.(collect(vs))))))
+        end
+    end
+    
+    edges_list = collect(edges_set)
+    nv = num_vertices
+    if nv <= 0
+        nv = isempty(edges_list) ? 0 : maximum([maximum(e) for e in edges_list]) + 1
+    end
+    
+    # Weights
+    edge_weights = Dict{Tuple{Int64, Int64}, Float64}()
+    for e in edges_list
+        u, v = e[1] + 1, e[2] + 1
+        edge_weights[e] = (pts !== nothing) ? norm(pts[u, :] .- pts[v, :]) : 1.0
+    end
+    
+    # 2. Minimum Spanning Tree (Kruskal)
+    g_full = SimpleWeightedGraph(nv)
+    for e in edges_list
+        add_edge!(g_full, e[1]+1, e[2]+1, edge_weights[e])
+    end
+    mst_edges = kruskal_mst(g_full)
+    spanning_set = Set{Tuple{Int64, Int64}}()
+    for e in mst_edges
+        push!(spanning_set, Tuple(sort(collect((Int64(src(e)-1), Int64(dst(e)-1))))))
+    end
+    
+    non_tree = [e for e in edges_list if !(e in spanning_set)]
+    m_dim = length(non_tree)
+    
+    # 3. Edge Annotations
+    annotations = Dict{Tuple{Int64, Int64}, Vector{Int8}}()
+    for e in spanning_set; annotations[e] = zeros(Int8, m_dim); end
+    for (i, e) in enumerate(non_tree)
+        v = zeros(Int8, m_dim)
+        v[i] = 1
+        annotations[e] = v
+    end
+    
+    valid_indices = collect(1:m_dim)
+    for (u, v, w) in triangles
+        e1, e2, e3 = (u, v), (v, w), (u, w)
+        boundary = zeros(Int8, m_dim)
+        haskey(annotations, e1) && (boundary .⊻= annotations[e1])
+        haskey(annotations, e2) && (boundary .⊻= annotations[e2])
+        haskey(annotations, e3) && (boundary .⊻= annotations[e3])
+        
+        pivot_idx = -1
+        for idx in valid_indices
+            if boundary[idx] & 1 != 0
+                pivot_idx = idx
+                break
+            end
+        end
+        
+        if pivot_idx != -1
+            for (e, vec) in annotations
+                if vec[pivot_idx] & 1 != 0
+                    annotations[e] .⊻= boundary
+                end
+            end
+            filter!(x -> x != pivot_idx, valid_indices)
+        end
+    end
+    
+    final_annotations = Dict{Tuple{Int64, Int64}, Vector{Int8}}()
+    for (e, vec) in annotations
+        final_annotations[e] = vec[valid_indices]
+    end
+    m_final = length(valid_indices)
+    
+    # 4. Cycle Candidates (Shortest Paths)
+    # Adjacency for Dijkstra
+    adj = Dict{Int64, Vector{Tuple{Int64, Float64}}}()
+    for e in edges_list
+        u, v = e
+        push!(get!(adj, u, []), (v, edge_weights[e]))
+        push!(get!(adj, v, []), (u, edge_weights[e]))
+    end
+    
+    all_cycles = Vector{Vector{Int64}}()
+    roots = collect(0:nv-1)
+    if max_roots !== nothing
+        # Simple root selection strategy
+        roots = roots[1:min(nv, max_roots)]
+    end
+    
+    for root in roots
+        ds = dijkstra_shortest_paths(g_full, root + 1)
+        # For each edge (u, v) not in SPT, form cycle
+        # SPT edges are those where parent[v] == u
+        spt_edges = Set{Tuple{Int64, Int64}}()
+        for v in 1:nv
+            p = ds.parents[v]
+            if p != 0 && p != v
+                push!(spt_edges, Tuple(sort(collect((Int64(v-1), Int64(p-1))))))
+            end
+        end
+        
+        for e in edges_list
+            if !(e in spt_edges)
+                u_node, v_node = e[1], e[2]
+                # Reconstruct path root->u and root->v
+                path_u = Int64[]
+                curr = u_node + 1
+                while curr != 0
+                    push!(path_u, curr - 1)
+                    curr = ds.parents[curr] == curr ? 0 : ds.parents[curr]
+                end
+                path_v = Int64[]
+                curr = v_node + 1
+                while curr != 0
+                    push!(path_v, curr - 1)
+                    curr = ds.parents[curr] == curr ? 0 : ds.parents[curr]
+                end
+                
+                # Find LCA
+                lca = -1
+                idx_u, idx_v = length(path_u), length(path_v)
+                while idx_u > 0 && idx_v > 0 && path_u[idx_u] == path_v[idx_v]
+                    lca = path_u[idx_u]
+                    idx_u -= 1
+                    idx_v -= 1
+                end
+                
+                if lca != -1
+                    cycle = vcat(reverse(path_u[1:idx_u+1]), path_v[1:idx_v+1])
+                    push!(all_cycles, cycle)
+                end
+            end
+        end
+    end
+    
+    # 5. Greedy Basis Selection
+    cycle_weights = Float64[]
+    for cyc in all_cycles
+        w_sum = 0.0
+        for i in 1:length(cyc)
+            u, v = cyc[i], cyc[mod(i, length(cyc)) + 1]
+            if u != v
+                e = u < v ? (u, v) : (v, u)
+                w_sum += get(edge_weights, e, 1.0)
+            end
+        end
+        push!(cycle_weights, w_sum)
+    end
+    sorted_idx = sortperm(cycle_weights)
+    
+    basis = []
+    pivots = Dict{Int, Vector{Int8}}()
+    for idx in sorted_idx
+        cyc = all_cycles[idx]
+        ann = _cycle_annotation(cyc, final_annotations, m_final)
+        is_indep, p_col, reduced = _is_independent_wrt(ann, pivots)
+        if is_indep
+            # Reformat cycle for Python (list of edges)
+            py_cycle = []
+            for i in 1:length(cyc)
+                u, v = cyc[i], cyc[mod(i, length(cyc)) + 1]
+                push!(py_cycle, [u, v])
+            end
+            
+            push!(basis, Dict(
+                "dimension" => 1,
+                "support_simplices" => [[Int64(v)] for v in cyc],
+                "support_edges" => py_cycle,
+                "weight" => Float64(cycle_weights[idx]),
+                "certified_cycle" => true
+            ))
+            pivots[p_col] = reduced
+            if max_cycles !== nothing && length(basis) >= max_cycles
+                break
+            end
+        end
+    end
+    
+    return basis
+end
+
+function _rref_mod2!(M::Matrix{Int8})
+    m, n = size(M)
+    row = 1
+    pivots = Int[]
+    for col in 1:n
+        pivot = 0
+        for r in row:m
+            if M[r, col] & 1 != 0
+                pivot = r
+                break
+            end
+        end
+        pivot == 0 && continue
+        if pivot != row
+            M[row, :], M[pivot, :] = M[pivot, :], M[row, :]
+        end
+        for r in 1:m
+            if r != row && M[r, col] & 1 != 0
+                M[r, :] .⊻= M[row, :]
+            end
+        end
+        push!(pivots, col)
+        row += 1
+        row > m && break
+    end
+    return M, pivots
+end
+
+function _nullspace_basis_mod2(A::Matrix{Int8})
+    m, n = size(A)
+    # A is boundary matrix. We want nullspace of d_k.
+    M_rref, pivots = _rref_mod2!(copy(A))
+    pivot_set = Set(pivots)
+    basis = Vector{Vector{Int8}}()
+    for free_col in 1:n
+        if !(free_col in pivot_set)
+            v = zeros(Int8, n)
+            v[free_col] = 1
+            for (i, p_col) in enumerate(pivots)
+                v[p_col] = M_rref[i, free_col] & 1
+            end
+            push!(basis, v)
+        end
+    end
+    return basis
+end
+
+function _weight_k_chain(chain::Vector{Int8}, k_simplices::Matrix{Int64}, pts::Union{Nothing, AbstractMatrix{Float64}})
+    active_indices = findall(x -> x & 1 != 0, chain)
+    if isempty(active_indices); return 0.0; end
+    if pts === nothing; return Float64(length(active_indices)); end
+    
+    total = 0.0
+    for idx in active_indices
+        simplex = k_simplices[:, idx]
+        # Sum edge lengths
+        s = 0.0
+        for i in 1:length(simplex)
+            for j in (i+1):length(simplex)
+                u, v = Int(simplex[i]) + 1, Int(simplex[j]) + 1
+                s += norm(pts[u, :] .- pts[v, :])
+            end
+        end
+        total += s
+    end
+    return total
+end
+
+function _rank_mod2(M::Matrix{Int8})
+    m, n = size(M)
+    (m == 0 || n == 0) && return 0
+    temp = copy(M)
+    row = 1
+    rank = 0
+    for col in 1:n
+        pivot = 0
+        for r in row:m
+            if temp[r, col] & 1 != 0
+                pivot = r
+                break
+            end
+        end
+        pivot == 0 && continue
+        if pivot != row
+            temp[row, :], temp[pivot, :] = temp[pivot, :], temp[row, :]
+        end
+        for r in 1:m
+            if r != row && temp[r, col] & 1 != 0
+                temp[r, :] .⊻= temp[row, :]
+            end
+        end
+        rank += 1
+        row += 1
+        row > m && break
+    end
+    return rank
+end
+
+function _independent_mod_image(v::Vector{Int8}, basis_cols::Vector{Vector{Int8}})
+    if isempty(basis_cols); return any(x -> x & 1 != 0, v); end
+    # Combine basis and candidate into a matrix
+    M_new = hcat(basis_cols..., v)
+    M_prev = hcat(basis_cols...)
+    return _rank_mod2(M_new) > _rank_mod2(M_prev)
 end
 
 function homology_generators_from_simplices(simplices, num_vertices::Int, dimension::Int, mode::String="valid", pts=nothing, mr=nothing, rs::Int=1, mc=nothing)
-    # Placeholder for homology logic, preserving core structure
-    return Vector{Dict{String, Any}}()
+    if dimension == 0
+        edges = Tuple{Int64, Int64}[]
+        for s in simplices
+            vs = _to_vertices_simplex(s)
+            if length(vs) == 2
+                push!(edges, Tuple(sort(collect(Int64.(vs)))))
+            end
+        end
+        nv = num_vertices
+        if nv <= 0
+            # Infer nv from simplices
+            max_v = -1
+            for s in simplices
+                vs = _to_vertices_simplex(s)
+                for v in vs; max_v = max(max_v, v); end
+            end
+            nv = max_v + 1
+        end
+        return _components_h0_generators(edges, nv, pts)
+    end
+
+    # 1. Assembly skeletons
+    # Extract boundaries
+    # _compute_boundary_data_internal(simplices, max_dim)
+    boundaries, cells, dim_simplices, simplex_to_idx = _compute_boundary_data_internal(simplices, dimension + 1)
+    
+    if !haskey(cells, dimension) || cells[dimension] == 0
+        return []
+    end
+    
+    k_simplices = dim_simplices[dimension]
+    # k_simplices is Vector{Tuple{Vararg{Int64}}}
+    # Convert to Matrix for weight function compatibility
+    k_simplices_mat = Matrix{Int64}(undef, dimension + 1, length(k_simplices))
+    for (i, s) in enumerate(k_simplices)
+        k_simplices_mat[:, i] .= collect(s)
+    end
+    
+    # d_k : C_k -> C_{k-1}
+    dk_mat = if haskey(boundaries, dimension)
+        dk_data = boundaries[dimension]
+        sparse(dk_data["rows"] .+ 1, dk_data["cols"] .+ 1, Int8.(abs.(dk_data["data"])), dk_data["n_rows"], dk_data["n_cols"])
+    else
+        sparse(Int64[], Int64[], Int8[], 0, cells[dimension])
+    end
+    
+    # d_kp1 : C_{k+1} -> C_k
+    dkp1_mat = if haskey(boundaries, dimension + 1)
+        data = boundaries[dimension+1]
+        sparse(data["rows"] .+ 1, data["cols"] .+ 1, Int8.(abs.(data["data"])), data["n_rows"], data["n_cols"])
+    else
+        sparse(Int64[], Int64[], Int8[], cells[dimension], 0)
+    end
+    
+    # Nullspace of d_k
+    z_basis = _nullspace_basis_mod2(Matrix{Int8}(dk_mat))
+    if isempty(z_basis); return []; end
+    
+    # Image of d_{k+1}
+    # dkp1_mat is sparse, convert to dense for rank checks
+    b_cols = [Vector{Int8}(dkp1_mat[:, j]) for j in 1:size(dkp1_mat, 2)]
+    
+    # Candidates for quotient basis
+    z_candidates = z_basis
+    if mode == "optimal"
+        # Sort by weight
+        weights = [_weight_k_chain(z, k_simplices_mat, pts) for z in z_candidates]
+        z_candidates = z_candidates[sortperm(weights)]
+    end
+    
+    quotient_basis = Vector{Vector{Int8}}()
+    span_cols = copy(b_cols)
+    for z in z_candidates
+        if _independent_mod_image(z, span_cols)
+            push!(quotient_basis, z)
+            push!(span_cols, z)
+        end
+    end
+    
+    # 2. Package result for Python
+    results = []
+    for z in quotient_basis
+        active_idx = findall(x -> x & 1 != 0, z)
+        supp_simplices = [collect(k_simplices[idx]) for idx in active_idx]
+        
+        supp_edges = if dimension == 1
+            [collect(k_simplices[idx]) for idx in active_idx]
+        else
+            []
+        end
+        
+        weight = _weight_k_chain(z, k_simplices_mat, pts)
+        
+        push!(results, Dict(
+            "dimension" => Int64(dimension),
+            "support_simplices" => supp_simplices,
+            "support_edges" => supp_edges,
+            "weight" => Float64(weight),
+            "certified_cycle" => true
+        ))
+    end
+    
+    return results
 end
 
 function triangulate_surface_delaunay(points::AbstractMatrix{Float64}, tolerance::Real=1e-10)
-    # Placeholder for triangulation logic
-    return Vector{Vector{Int64}}()
+    if !HAS_DELAUNAY
+        error("DelaunayTriangulation.jl is not available. Please install it to use Julia-accelerated triangulation.")
+    end
+    
+    n_pts, dim = size(points)
+    if dim != 3
+        error("Points must be 3D coordinates (shape: n_points × 3)")
+    end
+    if n_pts < 3
+        error("At least 3 points required for triangulation")
+    end
+    
+    # 1. PCA Projection to 2D
+    centroid = mean(points, dims=1)
+    centered = points .- centroid
+    
+    # SVD for PCA
+    F = svd(centered)
+    
+    # Check if the surface is too "thick"
+    if length(F.S) >= 3 && F.S[3] > tolerance
+        @warn "Topological Hint: Point cloud has significant variance in normal direction ($(F.S[3])). Surface may not be truly 2D."
+    end
+    
+    # Project onto the first two principal components
+    # F.V contains principal directions as columns
+    v1 = F.V[:, 1]
+    v2 = F.V[:, 2]
+    
+    # projected = centered * [v1 v2]
+    projected_2d = centered * [v1 v2]
+    
+    # 2. Delaunay Triangulation
+    # DelaunayTriangulation.jl expects points as a collection of Tuples or a Matrix with points as columns
+    pts_tuples = [(projected_2d[i, 1], projected_2d[i, 2]) for i in 1:n_pts]
+    
+    triangulation = triangulate(pts_tuples)
+    
+    # 3. Extract faces (triangles)
+    faces = Vector{Vector{Int64}}()
+    for tri in each_solid_triangle(triangulation)
+        u, v, w = indices(tri)
+        # Return 0-indexed for Python consistency
+        push!(faces, [Int64(u-1), Int64(v-1), Int64(w-1)])
+    end
+    
+    return faces
+end
+
+PrecompileTools.@setup_workload begin
+    # 1. Sparse Integer Matrix Setup (COO format) - 3x3 boundary-like with 1, -1, 0
+    # Chain complex boundaries are strictly integer based.
+    r_idx = Int64[0, 1, 2, 0]
+    c_idx = Int64[1, 2, 0, 2]
+    v_val = Int64[1, -1, 1, 1]
+    m_sz, n_sz = 3, 3
+    
+    # 2. Alexander-Whitney Cup Product dummy data
+    # Must use strictly typed Dict{Tuple{Vararg{Int}}, Int}
+    s_to_idx_p = Dict{Tuple{Vararg{Int}}, Int64}((0, 1) => 0, (1, 2) => 1, (2, 0) => 2)
+    s_to_idx_q = Dict{Tuple{Vararg{Int}}, Int64}((1, 2) => 0, (2, 3) => 1, (3, 1) => 2)
+    alpha_vec = Int64[1, 0, 1]
+    beta_vec = Int64[0, 1, 0]
+    simplices_pq = [[0, 1, 2, 3]]
+    
+    # 3. Flat simplices for boundary computation (two triangles sharing an edge)
+    fv = Int64[0, 1, 2, 1, 2, 3] 
+    fo = Int64[0, 3, 6]
+    
+    # 4. Miscellaneous: Group theory and Signatures
+    mf = ones(Float64, 2, 2)
+    mi = Int64[2 1; 1 2] # Positive definite for lattice isometry
+    gens = ["a", "b"]
+    rels = ["a^2", "b^3", "a*b*a^-1*b^-1"]
+    
+    # 5. New function dummies
+    pts_3d = Float64[0 0 0; 1 0 0; 0 1 0; 0 0 1]
+    simplices_h1 = [[0, 1], [1, 2], [2, 0], [0, 1, 2]]
+
+    PrecompileTools.@compile_workload begin
+        # --- Heavy Paths: Sparse Rank, SNF, and Cohomology ---
+        # These operations over Z trigger expensive type inference in SparseArrays and AbstractAlgebra.
+        exact_snf_sparse(r_idx, c_idx, v_val, m_sz, n_sz)
+        rank_q_sparse(r_idx, c_idx, v_val, m_sz, n_sz)
+        rank_mod_p_sparse(r_idx, c_idx, v_val, m_sz, n_sz, 2)
+        exact_sparse_cohomology_basis(r_idx, c_idx, v_val, m_sz, n_sz, r_idx, c_idx, v_val, m_sz, n_sz)
+        sparse_cohomology_basis_mod_p(r_idx, c_idx, v_val, m_sz, n_sz, r_idx, c_idx, v_val, m_sz, n_sz, 2)
+        
+        # Trigger core SparseMatrixCSC{Int, Int} inference directly
+        _ = sparse(r_idx .+ 1, c_idx .+ 1, v_val, m_sz, n_sz)
+        
+        # --- Boundary & Simplicial Pathways ---
+        _compute_boundary_data_internal_flat(fv, fo, 2)
+        compute_boundary_payload_from_flat_simplices(fv, fo, 2)
+        compute_boundary_mod2_matrix([[0, 1, 2]], [[0, 1], [1, 2], [2, 0]])
+        
+        # --- Alexander-Whitney Cup Product ---
+        # Using strictly typed Dicts to avoid PyDict overhead during warm-up
+        try
+            compute_alexander_whitney_cup(alpha_vec, beta_vec, 1, 1, simplices_pq, s_to_idx_p, s_to_idx_q)
+        catch
+        end
+        
+        # --- Group Algebra & Lattice Isometry ---
+        abelianize_group(gens, rels)
+        hermitian_signature(mf)
+        multisignature(mf, 3)
+        integral_lattice_isometry(mi, mi)
+        
+        # --- New High-Performance Topo Functions ---
+        try
+            triangulate_surface_delaunay(pts_3d)
+            homology_generators_from_simplices(simplices_h1, 3, 1)
+            optgen_from_simplices(simplices_h1, 3)
+        catch
+        end
+    end
 end
 
 end # module SurgeryBackend

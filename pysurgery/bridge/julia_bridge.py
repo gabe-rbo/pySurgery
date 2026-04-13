@@ -308,8 +308,9 @@ class JuliaBridge:
         mc = int(max_cycles) if max_cycles is not None else self.jl.nothing
         out = self.backend.optgen_from_simplices(simplices, int(num_vertices), pts, mr, int(root_stride), mc)
         basis_py = []
-        for cyc in out:
-            basis_py.append([tuple((int(e[0]), int(e[1]))) for e in cyc])
+        for g in out:
+            # g is a dict: {"dimension", "support_simplices", "support_edges", "weight", "certified_cycle"}
+            basis_py.append([tuple((int(e[0]), int(e[1]))) for e in g["support_edges"]])
         return basis_py
 
     def compute_homology_basis_from_simplices(

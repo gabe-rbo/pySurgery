@@ -73,6 +73,10 @@ pySurgery can offload some exact integer workloads to Julia (recommended for ver
 import Pkg
 Pkg.add("AbstractAlgebra")
 Pkg.add("PrecompileTools")
+Pkg.add("Graphs")
+Pkg.add("SimpleWeightedGraphs")
+Pkg.add("DelaunayTriangulation")
+Pkg.add("Combinatorics")
 ```
 
 ---

@@ -296,9 +296,8 @@ class ChainComplex(BaseModel):
                 torsion = [int(x) for x in snf_n_plus_1 if x > 1]
                 if not torsion and any(x == 1 for x in snf_n_plus_1):
                     warnings.warn(
-                        "Torsion in homology may be non-trivial but the current exact sparse "
-                        "integer reduction did not fully resolve it. Install/enable Julia for "
-                        "more reliable exact Z-torsion computation."
+                        "Torsion certification may be incomplete for this complex; the sparse integer reduction returned"
+                        " only unit factors, so torsion could not be fully resolved."
                     )
             elif ring_kind == "Q":
                 rank_im_n_plus_1 = _matrix_rank_for_ring(dn_plus_1, "Q")
