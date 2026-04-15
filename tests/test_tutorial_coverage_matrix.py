@@ -21,4 +21,3 @@ def test_tutorial_coverage_validator_detects_missing_snippet(tmp_path: Path):
 
     errors = validate_tutorial_coverage(bad, root)
     assert any("missing snippet" in err.lower() for err in errors)
-

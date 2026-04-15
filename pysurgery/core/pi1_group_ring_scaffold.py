@@ -64,7 +64,9 @@ def build_group_ring_context(descriptor: str | None) -> GroupRingContext | None:
     )
 
 
-def evaluate_phase2_readiness(pi1: FundamentalGroup | None, descriptor: str | None) -> Phase2Readiness:
+def evaluate_phase2_readiness(
+    pi1: FundamentalGroup | None, descriptor: str | None
+) -> Phase2Readiness:
     """Evaluate whether inputs satisfy current phase-2 group-ring prerequisites."""
     pi1_evidence = build_pi1_evidence(pi1)
     context = build_group_ring_context(descriptor)
@@ -73,12 +75,26 @@ def evaluate_phase2_readiness(pi1: FundamentalGroup | None, descriptor: str | No
     if context is None:
         gaps.append("Missing pi_1 group descriptor")
     elif not context.valid_descriptor:
-        gaps.append(f"Descriptor not supported by current grammar ({context.descriptor_message})")
+        gaps.append(
+            f"Descriptor not supported by current grammar ({context.descriptor_message})"
+        )
 
-    if pi1 is not None and pi1_evidence is not None and pi1_evidence.inferred_descriptor is None and descriptor is None:
-        gaps.append("Could not infer a conservative standard descriptor from pi_1 presentation")
+    if (
+        pi1 is not None
+        and pi1_evidence is not None
+        and pi1_evidence.inferred_descriptor is None
+        and descriptor is None
+    ):
+        gaps.append(
+            "Could not infer a conservative standard descriptor from pi_1 presentation"
+        )
 
-    if context is not None and context.family not in {"trivial", "infinite_cyclic", "finite_cyclic", "product"}:
+    if context is not None and context.family not in {
+        "trivial",
+        "infinite_cyclic",
+        "finite_cyclic",
+        "product",
+    }:
         gaps.append("Descriptor family lacks phase-2 computational support")
 
     return Phase2Readiness(
@@ -87,4 +103,3 @@ def evaluate_phase2_readiness(pi1: FundamentalGroup | None, descriptor: str | No
         pi1_evidence=pi1_evidence,
         group_ring_context=context,
     )
-

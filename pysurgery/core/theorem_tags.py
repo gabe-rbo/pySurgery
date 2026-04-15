@@ -38,5 +38,3 @@ def infer_theorem_tag(theorem: str | None) -> str | None:
     if "s-cobord" in low or "surgery" in low:
         return "highdim.scobordism.surgery"
     return "unscoped.unknown"
-
-

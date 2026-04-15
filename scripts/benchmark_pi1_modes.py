@@ -78,8 +78,14 @@ def run_case(cw: CWComplex, *, mode: str, force_python: bool) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark pi1 raw/optimized generator extraction.")
-    parser.add_argument("--force-python", action="store_true", help="Disable Julia backend for this benchmark run.")
+    parser = argparse.ArgumentParser(
+        description="Benchmark pi1 raw/optimized generator extraction."
+    )
+    parser.add_argument(
+        "--force-python",
+        action="store_true",
+        help="Disable Julia backend for this benchmark run.",
+    )
     args = parser.parse_args()
 
     cw = build_torus_4x4_chain_complex()
@@ -89,7 +95,9 @@ def main() -> None:
     ]
 
     print("pi1 benchmark results")
-    print("mode\tbackend\truntime_s\traw_count\toptimized_count\tselected_count\tavg_trace_len")
+    print(
+        "mode\tbackend\truntime_s\traw_count\toptimized_count\tselected_count\tavg_trace_len"
+    )
     for r in rows:
         print(
             f"{r['mode']}\t{r['backend']}\t{r['runtime_s']:.6f}\t"
@@ -99,5 +107,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

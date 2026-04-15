@@ -1,8 +1,15 @@
 import numpy as np
 import pytest
 import scipy.sparse as sp
+
 try:
-    from tests.discrete_surface_data import build_tetrahedron, build_octahedron, build_icosahedron, build_torus, to_complex
+    from tests.discrete_surface_data import (
+        build_tetrahedron,
+        build_octahedron,
+        build_icosahedron,
+        build_torus,
+        to_complex,
+    )
     from pysurgery.homeomorphism import analyze_homeomorphism_2d
 except ImportError:
     pass
@@ -25,25 +32,31 @@ from pysurgery.core.k_theory import WhiteheadGroup
 from pysurgery.structure_set import NormalInvariantsResult, SurgeryExactSequenceResult
 from pysurgery.wall_groups import ObstructionResult
 
+
 def test_analyze_homeomorphism_4d_indefinite():
     matrix1 = np.array([[0, 1], [1, 0]])
     form1 = IntersectionForm(matrix=matrix1, dimension=4)
-    
+
     matrix2 = np.array([[0, 1], [1, 0]])
     form2 = IntersectionForm(matrix=matrix2, dimension=4)
-    
-    is_homeo, reason = analyze_homeomorphism_4d(form1, form2, ks1=0, ks2=0, simply_connected=True)
+
+    is_homeo, reason = analyze_homeomorphism_4d(
+        form1, form2, ks1=0, ks2=0, simply_connected=True
+    )
     assert is_homeo
     assert "SUCCESS" in reason
+
 
 def test_analyze_homeomorphism_4d_impediment():
     matrix1 = np.array([[0, 1], [1, 0]])
     form1 = IntersectionForm(matrix=matrix1, dimension=4)
-    
+
     matrix2 = np.array([[1, 0], [0, -1]])
     form2 = IntersectionForm(matrix=matrix2, dimension=4)
-    
-    is_homeo, reason = analyze_homeomorphism_4d(form1, form2, ks1=0, ks2=0, simply_connected=True)
+
+    is_homeo, reason = analyze_homeomorphism_4d(
+        form1, form2, ks1=0, ks2=0, simply_connected=True
+    )
     assert not is_homeo
     assert "Parity mismatch" in reason
 
@@ -51,7 +64,9 @@ def test_analyze_homeomorphism_4d_impediment():
 def test_analyze_homeomorphism_4d_definite_exact_match_is_homeomorphic():
     form1 = IntersectionForm(matrix=np.array([[1, 0], [0, 1]]), dimension=4)
     form2 = IntersectionForm(matrix=np.array([[1, 0], [0, 1]]), dimension=4)
-    is_homeo, reason = analyze_homeomorphism_4d(form1, form2, ks1=0, ks2=0, simply_connected=True)
+    is_homeo, reason = analyze_homeomorphism_4d(
+        form1, form2, ks1=0, ks2=0, simply_connected=True
+    )
     assert is_homeo is True
     assert "SUCCESS" in reason
 
@@ -60,7 +75,9 @@ def test_analyze_homeomorphism_4d_definite_search_finds_larger_isometry_witness(
     form1 = IntersectionForm(matrix=np.array([[1, 0], [0, 1]]), dimension=4)
     u = np.array([[3, 2], [2, 1]])
     form2 = IntersectionForm(matrix=u.T @ np.array([[1, 0], [0, 1]]) @ u, dimension=4)
-    res = analyze_homeomorphism_4d_result(form1, form2, ks1=0, ks2=0, simply_connected=True)
+    res = analyze_homeomorphism_4d_result(
+        form1, form2, ks1=0, ks2=0, simply_connected=True
+    )
     assert res.status == "success"
     assert res.is_homeomorphic is True
     assert "lattice isomorphism certificate" in res.reasoning
@@ -69,8 +86,12 @@ def test_analyze_homeomorphism_4d_definite_search_finds_larger_isometry_witness(
 def test_analyze_homeomorphism_4d_definite_search_handles_unimodular_isometry_with_large_entries():
     form1 = IntersectionForm(matrix=np.array([[1, 0], [0, 1]]), dimension=4)
     u = np.array([[5, 2], [2, 1]], dtype=np.int64)
-    form2 = IntersectionForm(matrix=u.T @ np.array([[1, 0], [0, 1]], dtype=np.int64) @ u, dimension=4)
-    res = analyze_homeomorphism_4d_result(form1, form2, ks1=0, ks2=0, simply_connected=True)
+    form2 = IntersectionForm(
+        matrix=u.T @ np.array([[1, 0], [0, 1]], dtype=np.int64) @ u, dimension=4
+    )
+    res = analyze_homeomorphism_4d_result(
+        form1, form2, ks1=0, ks2=0, simply_connected=True
+    )
     assert res.status == "success"
     assert res.is_homeomorphic is True
     assert "lattice isomorphism certificate" in res.reasoning
@@ -79,7 +100,9 @@ def test_analyze_homeomorphism_4d_definite_search_handles_unimodular_isometry_wi
 def test_analyze_homeomorphism_4d_accepts_decision_ready_definite_certificate_when_search_misses():
     form1 = IntersectionForm(matrix=np.array([[1, 0], [0, 1]]), dimension=4)
     u = np.array([[8, 3], [3, 1]], dtype=np.int64)
-    form2 = IntersectionForm(matrix=u.T @ np.array([[1, 0], [0, 1]], dtype=np.int64) @ u, dimension=4)
+    form2 = IntersectionForm(
+        matrix=u.T @ np.array([[1, 0], [0, 1]], dtype=np.int64) @ u, dimension=4
+    )
     cert = {
         "provided": True,
         "source": "test",
@@ -97,13 +120,18 @@ def test_analyze_homeomorphism_4d_accepts_decision_ready_definite_certificate_wh
     )
     assert res.status == "success"
     assert res.is_homeomorphic is True
-    assert res.certificates.get("isometry_search_mode") in {"bounded_search", "external_certificate"}
+    assert res.certificates.get("isometry_search_mode") in {
+        "bounded_search",
+        "external_certificate",
+    }
 
 
 def test_analyze_homeomorphism_4d_rejects_invalid_decision_ready_certificate():
     form1 = IntersectionForm(matrix=np.array([[1, 0], [0, 1]]), dimension=4)
     u = np.array([[5, 2], [2, 1]], dtype=np.int64)
-    form2 = IntersectionForm(matrix=u.T @ np.array([[1, 0], [0, 1]], dtype=np.int64) @ u, dimension=4)
+    form2 = IntersectionForm(
+        matrix=u.T @ np.array([[1, 0], [0, 1]], dtype=np.int64) @ u, dimension=4
+    )
     bad = {
         "provided": True,
         "source": "test",
@@ -130,25 +158,29 @@ def test_analyze_homeomorphism_2d_homology_failure_fallback():
             raise RuntimeError("boom")
 
     from pysurgery.homeomorphism import analyze_homeomorphism_2d
+
     is_homeo, reason = analyze_homeomorphism_2d(BrokenComplex(), BrokenComplex())
     assert is_homeo is None
     assert "INCONCLUSIVE" in reason
 
     with pytest.warns(UserWarning) as rec:
-        is_homeo2, reason2 = analyze_homeomorphism_2d(BrokenComplex(), BrokenComplex(), allow_approx=True)
+        is_homeo2, reason2 = analyze_homeomorphism_2d(
+            BrokenComplex(), BrokenComplex(), allow_approx=True
+        )
     assert is_homeo2 is None
     assert "INCONCLUSIVE" in reason2
     warning_text = "\n".join(str(w.message) for w in rec)
     assert "boom" in warning_text
     assert "{e}" not in warning_text
 
+
 def test_surgery_to_remove_impediments():
-    matrix1 = np.array([[1, 0], [0, 1]]) # sig = 2
+    matrix1 = np.array([[1, 0], [0, 1]])  # sig = 2
     form1 = IntersectionForm(matrix=matrix1, dimension=4)
-    
+
     can_remove, reason = surgery_to_remove_impediments(form1, 10)
     assert can_remove
-    
+
     can_remove, reason = surgery_to_remove_impediments(form1, 4)
     assert can_remove
 
@@ -272,7 +304,9 @@ def test_high_dim_heuristic_whitehead_data_is_not_used_as_a_certified_success():
         cells={0: 1, 1: 0, 2: 0, 3: 0, 4: 0, 5: 1},
     )
 
-    wh = WhiteheadGroup(rank=0, description="heuristic Wh(pi_1)=0", computable=True, exact=False)
+    wh = WhiteheadGroup(
+        rank=0, description="heuristic Wh(pi_1)=0", computable=True, exact=False
+    )
     res = analyze_homeomorphism_high_dim_result(
         c,
         c,
@@ -281,7 +315,10 @@ def test_high_dim_heuristic_whitehead_data_is_not_used_as_a_certified_success():
         whitehead_group=wh,
     )
     assert res.status == "inconclusive"
-    assert "Exact Whitehead torsion certificate" in res.reasoning or "heuristic" in res.reasoning
+    assert (
+        "Exact Whitehead torsion certificate" in res.reasoning
+        or "heuristic" in res.reasoning
+    )
 
 
 def test_high_dim_accepts_trivialized_pi1_presentation_and_records_certificates():
@@ -412,7 +449,12 @@ def test_high_dim_phase5_homotopy_hook_passthrough_is_recorded():
         c,
         dim=5,
         homotopy_equivalence_witness={"map": "f", "degree": 1},
-        homotopy_witness_hook={"provided": True, "source": "test", "exact": False, "summary": "manual hook"},
+        homotopy_witness_hook={
+            "provided": True,
+            "source": "test",
+            "exact": False,
+            "summary": "manual hook",
+        },
     )
     hook = res.certificates.get("homotopy_witness_hook")
     assert isinstance(hook, dict)
@@ -446,13 +488,24 @@ def test_high_dim_exact_homotopy_hook_completes_nontrivial_pi_classification():
         pi_group="Z/3",
         whitehead_group=wh,
         wall_obstruction=wall,
-        homotopy_witness_hook={"provided": True, "source": "test", "exact": True, "summary": "exact hook"},
+        homotopy_witness_hook={
+            "provided": True,
+            "source": "test",
+            "exact": True,
+            "summary": "exact hook",
+        },
     )
     assert res.status == "success"
     assert res.is_homeomorphic is True
     dag = res.certificates.get("decision_dag")
-    assert any(stage.get("id") == "homotopy_completion" and stage.get("outcome") == "passed" for stage in dag.get("stages", []))
-    assert any(stage.get("id") == "final_classification" and stage.get("outcome") == "passed" for stage in dag.get("stages", []))
+    assert any(
+        stage.get("id") == "homotopy_completion" and stage.get("outcome") == "passed"
+        for stage in dag.get("stages", [])
+    )
+    assert any(
+        stage.get("id") == "final_classification" and stage.get("outcome") == "passed"
+        for stage in dag.get("stages", [])
+    )
 
 
 def test_high_dim_nonexact_homotopy_hook_remains_inconclusive():
@@ -481,13 +534,22 @@ def test_high_dim_nonexact_homotopy_hook_remains_inconclusive():
         pi_group="Z/3",
         whitehead_group=wh,
         wall_obstruction=wall,
-        homotopy_witness_hook={"provided": True, "source": "test", "exact": False, "summary": "heuristic hook"},
+        homotopy_witness_hook={
+            "provided": True,
+            "source": "test",
+            "exact": False,
+            "summary": "heuristic hook",
+        },
     )
     assert res.status == "inconclusive"
     assert res.is_homeomorphic is None
     assert "decision-ready" in res.reasoning
     dag = res.certificates.get("decision_dag")
-    assert any(stage.get("id") == "final_classification" and stage.get("outcome") == "inconclusive" for stage in dag.get("stages", []))
+    assert any(
+        stage.get("id") == "final_classification"
+        and stage.get("outcome") == "inconclusive"
+        for stage in dag.get("stages", [])
+    )
 
 
 def test_high_dim_legacy_wrapper_forwards_homotopy_hook_inputs():
@@ -516,7 +578,12 @@ def test_high_dim_legacy_wrapper_forwards_homotopy_hook_inputs():
         pi_group="Z/3",
         whitehead_group=wh,
         wall_obstruction=wall,
-        homotopy_witness_hook={"provided": True, "source": "legacy", "exact": True, "summary": "exact legacy hook"},
+        homotopy_witness_hook={
+            "provided": True,
+            "source": "legacy",
+            "exact": True,
+            "summary": "exact legacy hook",
+        },
     )
     assert is_homeo is True
     assert "SUCCESS" in reason
@@ -609,7 +676,9 @@ def test_high_dim_product_group_branch_uses_wall_group_ring_theorem_tag_and_asse
         dimensions=[0, 1, 2, 3, 4, 5],
         cells={0: 1, 1: 0, 2: 0, 3: 0, 4: 0, 5: 1},
     )
-    wh = WhiteheadGroup(rank=0, description="Wh(Z_2 x Z_3)=0", computable=True, exact=True)
+    wh = WhiteheadGroup(
+        rank=0, description="Wh(Z_2 x Z_3)=0", computable=True, exact=True
+    )
     wall = ObstructionResult(
         dimension=5,
         pi="Z_2 x Z_3",
@@ -653,7 +722,9 @@ def test_3d_recognition_certificate_can_complete_non_poincare_branch():
         validated=True,
         summary="certified geometrization witness",
     )
-    res = analyze_homeomorphism_3d_result(c, c, pi1_1=pi, pi1_2=pi, recognition_certificate=cert)
+    res = analyze_homeomorphism_3d_result(
+        c, c, pi1_1=pi, pi1_2=pi, recognition_certificate=cert
+    )
     assert res.status == "success"
     assert res.is_homeomorphic is True
     assert res.theorem == "Geometrization / 3-manifold recognition"
@@ -674,7 +745,12 @@ def test_3d_nondecision_ready_recognition_certificate_remains_inconclusive():
         c,
         pi1_1=pi,
         pi1_2=pi,
-        recognition_certificate={"provided": True, "source": "external", "exact": True, "validated": False},
+        recognition_certificate={
+            "provided": True,
+            "source": "external",
+            "exact": True,
+            "validated": False,
+        },
     )
     assert res.status == "inconclusive"
     assert "decision-ready" in res.reasoning
@@ -688,7 +764,9 @@ def test_high_dim_product_group_requires_decision_ready_assembly_certificate_for
         dimensions=[0, 1, 2, 3, 4, 5],
         cells={0: 1, 1: 0, 2: 0, 3: 0, 4: 0, 5: 1},
     )
-    wh = WhiteheadGroup(rank=0, description="Wh(Z_2 x Z_3)=0", computable=True, exact=True)
+    wh = WhiteheadGroup(
+        rank=0, description="Wh(Z_2 x Z_3)=0", computable=True, exact=True
+    )
     wall = ObstructionResult(
         dimension=5,
         pi="Z_2 x Z_3",
@@ -1058,7 +1136,7 @@ def test_s2_models_homeomorphism():
         c1 = to_complex(build_tetrahedron())
         c2 = to_complex(build_octahedron())
         c3 = to_complex(build_icosahedron())
-        
+
         # They should all be homeomorphic to each other
         is_homeo_1, _ = analyze_homeomorphism_2d(c1, c2)
         is_homeo_2, _ = analyze_homeomorphism_2d(c2, c3)
@@ -1067,13 +1145,13 @@ def test_s2_models_homeomorphism():
     except NameError:
         pytest.skip("GUDHI not available")
 
+
 def test_s2_vs_torus_homeomorphism():
     try:
         c1 = to_complex(build_tetrahedron())
         c2 = to_complex(build_torus())
-        
+
         is_homeo, _ = analyze_homeomorphism_2d(c1, c2)
         assert not is_homeo
     except NameError:
         pytest.skip("GUDHI not available")
-

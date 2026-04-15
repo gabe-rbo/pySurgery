@@ -17,7 +17,9 @@ class LeanCheckResult(BaseModel):
     command: str
 
 
-def run_lean_check(lean_code: str, lean_cmd: str = "lean", timeout_sec: int = 20) -> LeanCheckResult:
+def run_lean_check(
+    lean_code: str, lean_cmd: str = "lean", timeout_sec: int = 20
+) -> LeanCheckResult:
     """Optionally run local Lean on generated code and return structured diagnostics."""
     exe = shutil.which(lean_cmd)
     if exe is None:
@@ -49,26 +51,33 @@ def run_lean_check(lean_code: str, lean_cmd: str = "lean", timeout_sec: int = 20
         command=f"{exe} {lean_path}",
     )
 
-def generate_lean_isomorphism_certificate(Q1: np.ndarray, Q2: np.ndarray, P: np.ndarray, theorem_name: str = "homeo_cert") -> str:
+
+def generate_lean_isomorphism_certificate(
+    Q1: np.ndarray, Q2: np.ndarray, P: np.ndarray, theorem_name: str = "homeo_cert"
+) -> str:
     """
     Generates a Lean 4 proof script verifying that P is an Algebraic Isomorphism Certificate
     between the intersection forms Q1 and Q2.
-    
+
     This fulfills the Formal Verification requirement for Surgery Theory.
-    
+
     Returns
     -------
     str
         The Lean 4 source code.
     """
-    
+
     Q1 = np.asarray(Q1)
     Q2 = np.asarray(Q2)
     P = np.asarray(P)
 
     if Q1.ndim != 2 or Q2.ndim != 2 or P.ndim != 2:
         raise ValueError("Lean export expects 2D matrices.")
-    if Q1.shape[0] != Q1.shape[1] or Q2.shape[0] != Q2.shape[1] or P.shape[0] != P.shape[1]:
+    if (
+        Q1.shape[0] != Q1.shape[1]
+        or Q2.shape[0] != Q2.shape[1]
+        or P.shape[0] != P.shape[1]
+    ):
         raise ValueError("Lean export expects square matrices.")
     if Q1.shape != Q2.shape or Q1.shape != P.shape:
         raise ValueError("Q1, Q2, and P must have identical square shape.")
@@ -87,9 +96,9 @@ def generate_lean_isomorphism_certificate(Q1: np.ndarray, Q2: np.ndarray, P: np.
             row_str = "![" + ", ".join(vals) + "]"
             rows.append(row_str)
         return "![" + ",\n  ".join(rows) + "]"
-        
+
     n = Q1.shape[0]
-    
+
     tactic = "native_decide" if n > 4 else "decide"
 
     lean_code = f"""import Mathlib

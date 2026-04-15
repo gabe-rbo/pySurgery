@@ -6,7 +6,11 @@ Test suite for the surface triangulation functionality.
 import numpy as np
 import sys
 
-from pysurgery.integrations.gudhi_bridge import triangulate_surface, triangulate_surface_python
+from pysurgery.integrations.gudhi_bridge import (
+    triangulate_surface,
+    triangulate_surface_python,
+)
+
 
 def test_triangulate_sphere():
     """Test triangulation of a sphere (simplest 2D surface)."""
@@ -46,6 +50,7 @@ def test_triangulate_sphere():
     print("  ✓ Sphere triangulation passed!")
     return True
 
+
 def test_triangulate_torus():
     """Test triangulation of a torus (more complex 2D surface)."""
     print("Testing torus triangulation...")
@@ -53,8 +58,8 @@ def test_triangulate_torus():
     # Generate points on a torus: (R + r*cos(v)) * (cos(u), sin(u)) in x-y, r*sin(v) in z
     R, r = 3.0, 1.0
     n_points = 100
-    u = np.linspace(0, 2*np.pi, int(np.sqrt(n_points)))
-    v = np.linspace(0, 2*np.pi, int(np.sqrt(n_points)))
+    u = np.linspace(0, 2 * np.pi, int(np.sqrt(n_points)))
+    v = np.linspace(0, 2 * np.pi, int(np.sqrt(n_points)))
     u_grid, v_grid = np.meshgrid(u, v)
     u_flat = u_grid.flatten()
     v_flat = v_grid.flatten()
@@ -83,6 +88,7 @@ def test_triangulate_torus():
 
     print("  ✓ Torus triangulation passed!")
     return True
+
 
 def test_triangulate_plane():
     """Test triangulation of points on a plane (degenerate 2D surface in 3D)."""
@@ -117,12 +123,13 @@ def test_triangulate_plane():
     print("  ✓ Planar triangulation passed!")
     return True
 
+
 def test_triangulate_public_api():
     """Test the public triangulate_surface API (Python fallback)."""
     print("Testing public triangulate_surface API...")
 
     # Simple sphere
-    u = np.linspace(0, 2*np.pi, 20)
+    u = np.linspace(0, 2 * np.pi, 20)
     v = np.linspace(0, np.pi, 20)
     u_grid, v_grid = np.meshgrid(u, v)
     x = np.sin(v_grid) * np.cos(u_grid)
@@ -142,6 +149,7 @@ def test_triangulate_public_api():
     print("  ✓ Public API test passed!")
     return True
 
+
 if __name__ == "__main__":
     try:
         test_triangulate_sphere()
@@ -153,6 +161,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n✗ Test failed: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
-

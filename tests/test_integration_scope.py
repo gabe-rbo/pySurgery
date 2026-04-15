@@ -47,4 +47,3 @@ def test_pyg_scope_edge_index_shape_check(monkeypatch):
     data = _FakePyGData(edge_index=edge_index, num_nodes=2)
     with pytest.raises(ValueError):
         pytorch_geometric_bridge.pyg_to_cw_complex(data)
-

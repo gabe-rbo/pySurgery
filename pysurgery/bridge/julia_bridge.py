@@ -7,11 +7,13 @@ import numpy as np
 
 HAS_JULIACALL = importlib.util.find_spec("juliacall") is not None
 
+
 class JuliaBridge:
     """
     Zero-Copy Bridge to execute high-performance Julia algebraic topology operations.
     Replaces subprocess mocks with native memory sharing via `juliacall`.
     """
+
     _instance = None
     _lock = threading.RLock()
 
@@ -38,14 +40,19 @@ class JuliaBridge:
 
         self._available = False
         if not HAS_JULIACALL:
-            self.error = "juliacall is not installed. Install via `pip install juliacall`."
+            self.error = (
+                "juliacall is not installed. Install via `pip install juliacall`."
+            )
             self._initialized = True
             return
-            
+
         try:
             from juliacall import Main as jl_main
+
             self.jl = jl_main
-            backend_script = os.path.join(os.path.dirname(__file__), "surgery_backend.jl")
+            backend_script = os.path.join(
+                os.path.dirname(__file__), "surgery_backend.jl"
+            )
             self.jl.include(backend_script)
             self.backend = self.jl.SurgeryBackend
             self._available = True
@@ -155,6 +162,7 @@ class JuliaBridge:
 
     def _full_warmup_workloads(self) -> list[tuple[str, callable]]:
         """Return the extended warm-up workload set for all heavy kernels."""
+
         def _sparse_rank_q_workload():
             import scipy.sparse as sp
 
@@ -302,8 +310,11 @@ class JuliaBridge:
     def require_julia(self):
         """Raise a structured error when Julia backend is unavailable."""
         from pysurgery.core.exceptions import SurgeryError
+
         if not self.available:
-            raise SurgeryError(f"High-performance exact algebra requires Julia: {self.error}")
+            raise SurgeryError(
+                f"High-performance exact algebra requires Julia: {self.error}"
+            )
 
     def _coo_cache_key(self, matrix) -> tuple:
         """Build a stable cache key for sparse COO triplet conversion."""
@@ -312,7 +323,13 @@ class JuliaBridge:
             data_ptr = int(matrix.data.__array_interface__["data"][0])
         except Exception:
             data_ptr = None
-        return (id(matrix), int(matrix.shape[0]), int(matrix.shape[1]), int(matrix.nnz), data_ptr)
+        return (
+            id(matrix),
+            int(matrix.shape[0]),
+            int(matrix.shape[1]),
+            int(matrix.nnz),
+            data_ptr,
+        )
 
     def _coo_triplets_cached(self, matrix) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return cached COO triplets `(rows, cols, vals)` for a sparse matrix."""
@@ -353,9 +370,13 @@ class JuliaBridge:
         """Compute the signature of a symmetric real matrix via Julia backend."""
         self.require_julia()
         # Direct zero-copy passing to Julia via PyArray
-        return int(self.backend.hermitian_signature(np.asarray(matrix_array, dtype=np.float64)))
+        return int(
+            self.backend.hermitian_signature(np.asarray(matrix_array, dtype=np.float64))
+        )
 
-    def compute_sparse_snf(self, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray, shape: tuple) -> np.ndarray:
+    def compute_sparse_snf(
+        self, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray, shape: tuple
+    ) -> np.ndarray:
         """Executes the highly optimized Julia Sparse SNF backend."""
         self.require_julia()
         # Direct zero-copy passing of NumPy arrays
@@ -364,7 +385,7 @@ class JuliaBridge:
             np.asarray(cols, dtype=np.int64),
             np.asarray(vals, dtype=np.int64),
             int(shape[0]),
-            int(shape[1])
+            int(shape[1]),
         )
         return np.array(factors, dtype=np.int64)
 
@@ -399,10 +420,12 @@ class JuliaBridge:
         )
         return int(rank)
 
-    def compute_sparse_cohomology_basis(self, d_np1, d_n, cn_size: int | None = None) -> list:
+    def compute_sparse_cohomology_basis(
+        self, d_np1, d_n, cn_size: int | None = None
+    ) -> list:
         """Executes the exact Julia sparse cohomology basis extraction Z^n / B^n."""
         self.require_julia()
-        
+
         if d_np1 is None or d_np1.nnz == 0:
             d_np1_rows = np.array([], dtype=np.int64)
             d_np1_cols = np.array([], dtype=np.int64)
@@ -411,7 +434,7 @@ class JuliaBridge:
         else:
             d_np1_rows, d_np1_cols, d_np1_vals = self._coo_triplets_cached(d_np1)
             d_np1_m, d_np1_n = d_np1.shape
-            
+
         if d_n is None or d_n.nnz == 0:
             d_n_rows = np.array([], dtype=np.int64)
             d_n_cols = np.array([], dtype=np.int64)
@@ -420,20 +443,30 @@ class JuliaBridge:
         else:
             d_n_rows, d_n_cols, d_n_vals = self._coo_triplets_cached(d_n)
             d_n_m, d_n_n = d_n.shape
-            
+
         # Julia now returns a flat Matrix{Int64}
         basis_mat = self.backend.exact_sparse_cohomology_basis(
-            d_np1_rows, d_np1_cols, d_np1_vals, int(d_np1_m), int(d_np1_n),
-            d_n_rows, d_n_cols, d_n_vals, int(d_n_m), int(d_n_n)
+            d_np1_rows,
+            d_np1_cols,
+            d_np1_vals,
+            int(d_np1_m),
+            int(d_np1_n),
+            d_n_rows,
+            d_n_cols,
+            d_n_vals,
+            int(d_n_m),
+            int(d_n_n),
         )
-        
+
         # Convert columns to list of vectors
         basis_py = []
         for j in range(basis_mat.shape[1]):
             basis_py.append(np.array(basis_mat[:, j], dtype=np.int64))
         return basis_py
 
-    def compute_sparse_cohomology_basis_mod_p(self, d_np1, d_n, p: int, cn_size: int | None = None) -> list:
+    def compute_sparse_cohomology_basis_mod_p(
+        self, d_np1, d_n, p: int, cn_size: int | None = None
+    ) -> list:
         """Executes Julia sparse cohomology basis extraction over Z/pZ for prime p."""
         self.require_julia()
 
@@ -456,8 +489,16 @@ class JuliaBridge:
             d_n_m, d_n_n = d_n.shape
 
         basis_mat = self.backend.sparse_cohomology_basis_mod_p(
-            d_np1_rows, d_np1_cols, d_np1_vals, int(d_np1_m), int(d_np1_n),
-            d_n_rows, d_n_cols, d_n_vals, int(d_n_m), int(d_n_n),
+            d_np1_rows,
+            d_np1_cols,
+            d_np1_vals,
+            int(d_np1_m),
+            int(d_np1_n),
+            d_n_rows,
+            d_n_cols,
+            d_n_vals,
+            int(d_n_m),
+            int(d_n_n),
             int(p),
         )
 
@@ -483,24 +524,31 @@ class JuliaBridge:
             bool(include_metadata),
         )
 
-    def group_ring_multiply(self, coeffs1: dict, coeffs2: dict, group_order: int) -> dict:
+    def group_ring_multiply(
+        self, coeffs1: dict, coeffs2: dict, group_order: int
+    ) -> dict:
         """Multiply sparse group-ring coefficient dictionaries in the Julia backend."""
         self.require_julia()
         # Direct passing of dictionaries; Julia side now uses pyconvert for speed.
-        res_keys, res_vals = self.backend.group_ring_multiply(coeffs1, coeffs2, int(group_order))
+        res_keys, res_vals = self.backend.group_ring_multiply(
+            coeffs1, coeffs2, int(group_order)
+        )
         return {str(k): int(v) for k, v in zip(res_keys, res_vals)}
-        
+
     def compute_multisignature(self, matrix: np.ndarray, p: int) -> int:
         """Evaluates L_{4k}(Z_p) obstruction by computing multisignature."""
         self.require_julia()
-        return int(self.backend.multisignature(np.asarray(matrix, dtype=np.float64), int(p)))
+        return int(
+            self.backend.multisignature(np.asarray(matrix, dtype=np.float64), int(p))
+        )
 
-    def integral_lattice_isometry(self, matrix1: np.ndarray, matrix2: np.ndarray) -> np.ndarray | None:
+    def integral_lattice_isometry(
+        self, matrix1: np.ndarray, matrix2: np.ndarray
+    ) -> np.ndarray | None:
         """Find U in GL_n(Z) with U^T * matrix1 * U = matrix2 for definite forms."""
         self.require_julia()
         candidate = self.backend.integral_lattice_isometry(
-            np.asarray(matrix1, dtype=np.int64),
-            np.asarray(matrix2, dtype=np.int64)
+            np.asarray(matrix1, dtype=np.int64), np.asarray(matrix2, dtype=np.int64)
         )
         if candidate is None:
             return None
@@ -528,10 +576,16 @@ class JuliaBridge:
     ) -> list:
         """Compute an optimal H1 basis via Julia backend (Algorithms 8+7 composition)."""
         self.require_julia()
-        pts = np.asarray(point_cloud, dtype=np.float64) if point_cloud is not None else self.jl.nothing
+        pts = (
+            np.asarray(point_cloud, dtype=np.float64)
+            if point_cloud is not None
+            else self.jl.nothing
+        )
         mr = int(max_roots) if max_roots is not None else self.jl.nothing
         mc = int(max_cycles) if max_cycles is not None else self.jl.nothing
-        out = self.backend.optgen_from_simplices(simplices, int(num_vertices), pts, mr, int(root_stride), mc)
+        out = self.backend.optgen_from_simplices(
+            simplices, int(num_vertices), pts, mr, int(root_stride), mc
+        )
         basis_py = []
         for g in out:
             # g is a dict: {"dimension", "support_simplices", "support_edges", "weight", "certified_cycle"}
@@ -552,7 +606,11 @@ class JuliaBridge:
     ) -> list[dict]:
         """Compute H_k generator representatives from simplices via Julia backend over Z/2."""
         self.require_julia()
-        pts = np.asarray(point_cloud, dtype=np.float64) if point_cloud is not None else self.jl.nothing
+        pts = (
+            np.asarray(point_cloud, dtype=np.float64)
+            if point_cloud is not None
+            else self.jl.nothing
+        )
         mr = int(max_roots) if max_roots is not None else self.jl.nothing
         mc = int(max_cycles) if max_cycles is not None else self.jl.nothing
         out = self.backend.homology_generators_from_simplices(
@@ -567,7 +625,9 @@ class JuliaBridge:
         )
         parsed: list[dict] = []
         for g in out:
-            support_simplices = [tuple(int(x) for x in simplex) for simplex in g["support_simplices"]]
+            support_simplices = [
+                tuple(int(x) for x in simplex) for simplex in g["support_simplices"]
+            ]
             support_edges = [tuple((int(e[0]), int(e[1]))) for e in g["support_edges"]]
             parsed.append(
                 {
@@ -606,13 +666,19 @@ class JuliaBridge:
                     "edge_index": int(tr["edge_index"]),
                     "component_root": int(tr["component_root"]),
                     "vertex_path": [int(x) for x in tr["vertex_path"]],
-                    "directed_edge_path": [(int(e[0]), int(e[1])) for e in tr["directed_edge_path"]],
-                    "undirected_edge_path": [(int(e[0]), int(e[1])) for e in tr["undirected_edge_path"]],
+                    "directed_edge_path": [
+                        (int(e[0]), int(e[1])) for e in tr["directed_edge_path"]
+                    ],
+                    "undirected_edge_path": [
+                        (int(e[0]), int(e[1])) for e in tr["undirected_edge_path"]
+                    ],
                 }
             )
         return parsed
 
-    def compute_boundary_data_from_simplices(self, simplex_entries: list, max_dim: int) -> tuple[dict, dict, dict, dict]:
+    def compute_boundary_data_from_simplices(
+        self, simplex_entries: list, max_dim: int
+    ) -> tuple[dict, dict, dict, dict]:
         """Build boundary COO payloads and simplex tables through Julia for large simplicial workloads."""
         result = self.compute_boundary_payload_from_simplices(
             simplex_entries,
@@ -634,13 +700,15 @@ class JuliaBridge:
             }
 
         cells_py = {int(k): int(v) for k, v in dict(cells_jl).items()}
-        
+
         # dim_simplices_jl is now returning matrices for each dimension
         dim_simplices_py = {}
         for k, matrix in dict(dim_simplices_jl).items():
             kk = int(k)
             # matrix is (d+1, N)
-            dim_simplices_py[kk] = [tuple(int(x) for x in matrix[:, j]) for j in range(matrix.shape[1])]
+            dim_simplices_py[kk] = [
+                tuple(int(x) for x in matrix[:, j]) for j in range(matrix.shape[1])
+            ]
 
         simplex_to_idx_py = {
             int(k): {
@@ -652,10 +720,14 @@ class JuliaBridge:
         }
         return boundaries_py, cells_py, dim_simplices_py, simplex_to_idx_py
 
-    def compute_boundary_mod2_matrix(self, source_simplices: list, target_simplices: list) -> dict:
+    def compute_boundary_mod2_matrix(
+        self, source_simplices: list, target_simplices: list
+    ) -> dict:
         """Compute mod-2 boundary matrix through Julia for fast homology generator extraction."""
         self.require_julia()
-        payload = self.backend.compute_boundary_mod2_matrix(source_simplices, target_simplices)
+        payload = self.backend.compute_boundary_mod2_matrix(
+            source_simplices, target_simplices
+        )
         return {
             "rows": np.asarray(payload["rows"], dtype=np.int64),
             "cols": np.asarray(payload["cols"], dtype=np.int64),
@@ -720,12 +792,13 @@ class JuliaBridge:
             "n_faces": int(payload["n_faces"]),
         }
 
-    def triangulate_surface_delaunay(self, points: np.ndarray, tolerance: float = 1e-10) -> list:
+    def triangulate_surface_delaunay(
+        self, points: np.ndarray, tolerance: float = 1e-10
+    ) -> list:
         """Triangulate a 2D surface from a point cloud using Delaunay triangulation."""
         self.require_julia()
         triangles = self.backend.triangulate_surface_delaunay(
-            np.asarray(points, dtype=np.float64),
-            float(tolerance)
+            np.asarray(points, dtype=np.float64), float(tolerance)
         )
         return [list(tri) for tri in triangles]
 

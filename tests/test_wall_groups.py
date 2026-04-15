@@ -6,17 +6,20 @@ from pysurgery.core.quadratic_forms import QuadraticForm
 from pysurgery.core.fundamental_group import GroupPresentation
 from pysurgery.core.exceptions import SurgeryObstructionError
 
+
 def test_wall_group_L_4k_1():
-    e8_matrix = np.array([
-        [2, -1, 0, 0, 0, 0, 0, 0],
-        [-1, 2, -1, 0, 0, 0, 0, 0],
-        [0, -1, 2, -1, 0, 0, 0, -1],
-        [0, 0, -1, 2, -1, 0, 0, 0],
-        [0, 0, 0, -1, 2, -1, 0, 0],
-        [0, 0, 0, 0, -1, 2, -1, 0],
-        [0, 0, 0, 0, 0, -1, 2, 0],
-        [0, 0, -1, 0, 0, 0, 0, 2]
-    ])
+    e8_matrix = np.array(
+        [
+            [2, -1, 0, 0, 0, 0, 0, 0],
+            [-1, 2, -1, 0, 0, 0, 0, 0],
+            [0, -1, 2, -1, 0, 0, 0, -1],
+            [0, 0, -1, 2, -1, 0, 0, 0],
+            [0, 0, 0, -1, 2, -1, 0, 0],
+            [0, 0, 0, 0, -1, 2, -1, 0],
+            [0, 0, 0, 0, 0, -1, 2, 0],
+            [0, 0, -1, 0, 0, 0, 0, 2],
+        ]
+    )
     form = IntersectionForm(matrix=e8_matrix, dimension=4)
     wg = WallGroupL(dimension=4, pi="1")
     obstruction = wg.compute_obstruction(form)
@@ -29,6 +32,7 @@ def test_wall_group_signature_must_be_divisible_by_8():
     with pytest.raises(SurgeryObstructionError):
         wg.compute_obstruction(form)
 
+
 def test_wall_group_L_4k_plus_2():
     matrix = np.array([[0, 1], [1, 0]])
     q_form = QuadraticForm(matrix=matrix, dimension=2, q_refinement=[1, 1])
@@ -36,16 +40,19 @@ def test_wall_group_L_4k_plus_2():
     obstruction = wg.compute_obstruction(q_form)
     assert obstruction == 1
 
+
 def test_wall_group_L_Z():
     wg = WallGroupL(dimension=5, pi="Z")
     assert wg.compute_obstruction() == 0
 
+
 def test_wall_group_L_Zp():
-    matrix = np.array([[1, 0], [0, 1]]) # rank 2, signature 2
+    matrix = np.array([[1, 0], [0, 1]])  # rank 2, signature 2
     form = IntersectionForm(matrix=matrix, dimension=4)
     wg = WallGroupL(dimension=4, pi="Z_3")
-    
+
     from pysurgery.bridge.julia_bridge import julia_engine
+
     if julia_engine.available:
         try:
             wg.compute_obstruction(form)
@@ -87,7 +94,9 @@ def test_wall_group_typed_result_uncomputable_product_case():
 
 
 def test_wall_group_product_surrogate_tracks_factor_obstruction_state_with_inputs():
-    form = IntersectionForm(matrix=np.array([[0, 1], [1, 0]], dtype=np.int64), dimension=4)
+    form = IntersectionForm(
+        matrix=np.array([[0, 1], [1, 0]], dtype=np.int64), dimension=4
+    )
     wg = WallGroupL(dimension=4, pi="Z x Z_2 x Z_2")
     res = wg.compute_obstruction_result(form)
     assert not res.exact
@@ -173,5 +182,3 @@ def test_wall_direct_sum_scalar_ops_and_roundtrip_to_obstruction_result():
     assert rt.exact
     assert rt.zero_certified
     assert rt.obstructs is False
-
-

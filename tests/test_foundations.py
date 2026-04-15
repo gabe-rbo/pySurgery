@@ -1,4 +1,9 @@
-from pysurgery.core.foundations import COVERAGE_MATRIX, CONTRACT_VERSION, coverage_status_counts, get_contract
+from pysurgery.core.foundations import (
+    COVERAGE_MATRIX,
+    CONTRACT_VERSION,
+    coverage_status_counts,
+    get_contract,
+)
 
 
 def test_coverage_matrix_has_entries_and_contract_version():
@@ -33,7 +38,9 @@ def test_highdim_pi1_entry_is_exact_with_completion_certificate_requirement():
     entry = next(
         e
         for e in COVERAGE_MATRIX
-        if e.dimension_class == "n>=5" and e.pi_family == "pi=1" and e.theorem_tag == "highdim.scobordism.surgery"
+        if e.dimension_class == "n>=5"
+        and e.pi_family == "pi=1"
+        and e.theorem_tag == "highdim.scobordism.surgery"
     )
     assert entry.status == "exact"
     assert any("completion" in req.lower() for req in entry.required_inputs)
@@ -66,5 +73,3 @@ def test_4d_entry_is_exact_and_mentions_definite_certificate_path():
     )
     assert entry.status == "exact"
     assert any("certificate" in req.lower() for req in entry.required_inputs)
-
-

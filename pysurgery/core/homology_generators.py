@@ -31,7 +31,9 @@ Triangle = Tuple[int, int, int]
 Cycle = List[Edge]
 
 
-def _all_simplices_by_dim(simplices: Iterable[Tuple[int, ...]]) -> dict[int, list[tuple[int, ...]]]:
+def _all_simplices_by_dim(
+    simplices: Iterable[Tuple[int, ...]],
+) -> dict[int, list[tuple[int, ...]]]:
     """Build simplicial closure grouped by dimension from input simplices."""
     by_dim: dict[int, list[tuple[int, ...]]] = {}
     for s in simplices:
@@ -217,7 +219,11 @@ def _components_h0_generators(
     )
 
 
-def _weight_k_chain(chain: np.ndarray, k_simplices: list[tuple[int, ...]], point_cloud: Optional[np.ndarray]) -> float:
+def _weight_k_chain(
+    chain: np.ndarray,
+    k_simplices: list[tuple[int, ...]],
+    point_cloud: Optional[np.ndarray],
+) -> float:
     """Compute a geometric/algebraic proxy weight for an active k-chain."""
     active = [k_simplices[i] for i, bit in enumerate(chain) if bit & 1]
     if not active:
@@ -261,7 +267,11 @@ def _hk_generators_mod2(
     by_dim = _all_simplices_by_dim(simplices_list)
     if dimension == 0:
         edges = [tuple(sorted(e)) for e in by_dim.get(1, []) if len(e) == 2]
-        return _components_h0_generators(edges, _infer_num_vertices(simplices_list, num_vertices), point_cloud=point_cloud)
+        return _components_h0_generators(
+            edges,
+            _infer_num_vertices(simplices_list, num_vertices),
+            point_cloud=point_cloud,
+        )
 
     k_simplices = by_dim.get(dimension, [])
     km1_simplices = by_dim.get(dimension - 1, [])
@@ -292,7 +302,9 @@ def _hk_generators_mod2(
     b_cols = [d_kp1[:, j].astype(np.int64) & 1 for j in range(d_kp1.shape[1])]
     z_candidates = z_basis[:]
     if mode == "optimal":
-        z_candidates = sorted(z_candidates, key=lambda v: _weight_k_chain(v, k_simplices, point_cloud))
+        z_candidates = sorted(
+            z_candidates, key=lambda v: _weight_k_chain(v, k_simplices, point_cloud)
+        )
 
     quotient_basis: list[np.ndarray] = []
     span_cols = b_cols[:]
@@ -306,7 +318,11 @@ def _hk_generators_mod2(
         support = [k_simplices[i] for i, bit in enumerate(z) if bit & 1]
         support_edges: list[Edge] = []
         if dimension == 1:
-            support_edges = [tuple(sorted((int(a), int(b)))) for (a, b) in support if len((a, b)) == 2]
+            support_edges = [
+                tuple(sorted((int(a), int(b))))
+                for (a, b) in support
+                if len((a, b)) == 2
+            ]
         w = _weight_k_chain(z, k_simplices, point_cloud)
         gens.append(
             HomologyGenerator(
@@ -338,7 +354,9 @@ def _edge_weight(u: int, v: int, points: Optional[np.ndarray]) -> float:
     return float(np.linalg.norm(points[u] - points[v]))
 
 
-def _normalize_edges_triangles(simplices: Iterable[Tuple[int, ...]]) -> tuple[list[Edge], list[Triangle], set[int]]:
+def _normalize_edges_triangles(
+    simplices: Iterable[Tuple[int, ...]],
+) -> tuple[list[Edge], list[Triangle], set[int]]:
     """Extract normalized edge/triangle lists plus observed vertex ids."""
     edges: list[Edge] = []
     triangles: list[Triangle] = []
@@ -356,7 +374,9 @@ def _normalize_edges_triangles(simplices: Iterable[Tuple[int, ...]]) -> tuple[li
     return list(dict.fromkeys(edges)), list(dict.fromkeys(triangles)), vertex_ids
 
 
-def _minimum_spanning_edges(edges: list[Edge], weights: Dict[Edge, float], num_vertices: int) -> set[Edge]:
+def _minimum_spanning_edges(
+    edges: list[Edge], weights: Dict[Edge, float], num_vertices: int
+) -> set[Edge]:
     """Return Kruskal minimum-spanning-forest edges of the 1-skeleton."""
     parent = list(range(max(num_vertices, 1)))
     rank = [0] * max(num_vertices, 1)
@@ -394,7 +414,9 @@ def annot_edge(
 ) -> tuple[Dict[Edge, np.ndarray], int]:
     """Compute edge annotations for cycle-space independence over Z/2."""
     edges, triangles, _ = _normalize_edges_triangles(simplices)
-    weights = {e: float(edge_weights.get(e, 1.0)) if edge_weights else 1.0 for e in edges}
+    weights = {
+        e: float(edge_weights.get(e, 1.0)) if edge_weights else 1.0 for e in edges
+    }
 
     spanning = _minimum_spanning_edges(edges, weights, num_vertices)
     non_tree = [e for e in edges if e not in spanning]
@@ -434,7 +456,9 @@ def annot_edge(
     return {e: vec[valid] for e, vec in annotations.items()}, len(valid)
 
 
-def _shortest_path_tree(root: int, adjacency: Dict[int, List[Tuple[int, float]]]) -> tuple[Dict[int, int], set[Edge]]:
+def _shortest_path_tree(
+    root: int, adjacency: Dict[int, List[Tuple[int, float]]]
+) -> tuple[Dict[int, int], set[Edge]]:
     """Build a shortest-path tree from one root using Dijkstra."""
     dist = {root: 0.0}
     parent = {root: -1}
@@ -483,10 +507,15 @@ def _path_between(u: int, v: int, parent: Dict[int, int]) -> List[int]:
 
 def _path_edges(path_vertices: List[int]) -> List[Edge]:
     """Convert a vertex path to normalized undirected edges."""
-    return [tuple(sorted((path_vertices[i], path_vertices[i + 1]))) for i in range(len(path_vertices) - 1)]
+    return [
+        tuple(sorted((path_vertices[i], path_vertices[i + 1])))
+        for i in range(len(path_vertices) - 1)
+    ]
 
 
-def _cycle_weight(cycle: Cycle, edge_weights: Dict[Edge, float], point_cloud: Optional[np.ndarray]) -> float:
+def _cycle_weight(
+    cycle: Cycle, edge_weights: Dict[Edge, float], point_cloud: Optional[np.ndarray]
+) -> float:
     """Compute cycle weight using supplied edge weights or geometric fallback."""
     total = 0.0
     for u, v in cycle:
@@ -565,7 +594,9 @@ def _generator_cycles_from_normalized_edges(
     return cycles
 
 
-def _cycle_annotation(cycle: Cycle, simplex_annotations: Dict[Edge, np.ndarray], vec_len: int) -> np.ndarray:
+def _cycle_annotation(
+    cycle: Cycle, simplex_annotations: Dict[Edge, np.ndarray], vec_len: int
+) -> np.ndarray:
     """Assemble the annotation vector of a cycle by XOR-combining edge labels."""
     ann = np.zeros(vec_len, dtype=np.int64)
     for e in cycle:
@@ -625,10 +656,16 @@ def _greedy_h1_basis_from_normalized(
     if num_vertices <= 0 and vertex_ids:
         num_vertices = max(vertex_ids) + 1
 
-    edge_weights = {tuple(sorted(e)): _edge_weight(e[0], e[1], point_cloud) for e in edges}
-    simplex_annotations, vec_dim = annot_edge(list(edges) + list(triangles), num_vertices, edge_weights=edge_weights)
+    edge_weights = {
+        tuple(sorted(e)): _edge_weight(e[0], e[1], point_cloud) for e in edges
+    }
+    simplex_annotations, vec_dim = annot_edge(
+        list(edges) + list(triangles), num_vertices, edge_weights=edge_weights
+    )
 
-    cycles_sorted = sorted(cycles, key=lambda cyc: _cycle_weight(cyc, edge_weights, point_cloud))
+    cycles_sorted = sorted(
+        cycles, key=lambda cyc: _cycle_weight(cyc, edge_weights, point_cloud)
+    )
     basis: list[Cycle] = []
     pivots: Dict[int, np.ndarray] = {}
     for cyc in cycles_sorted:
@@ -666,7 +703,10 @@ def compute_optimal_h1_basis_from_simplices(
                 root_stride=int(root_stride),
                 max_cycles=max_cycles,
             )
-            basis = [[tuple(sorted((int(u), int(v)))) for (u, v) in cyc] for cyc in basis_julia]
+            basis = [
+                [tuple(sorted((int(u), int(v)))) for (u, v) in cyc]
+                for cyc in basis_julia
+            ]
             used_julia = True
         except Exception as exc:
             warnings.warn(
@@ -768,8 +808,13 @@ def compute_homology_basis_from_simplices(
             )
             gens: list[HomologyGenerator] = []
             for g in out:
-                simp = [tuple(int(x) for x in s) for s in g.get("support_simplices", [])]
-                edg = [tuple(sorted((int(e[0]), int(e[1])))) for e in g.get("support_edges", [])]
+                simp = [
+                    tuple(int(x) for x in s) for s in g.get("support_simplices", [])
+                ]
+                edg = [
+                    tuple(sorted((int(e[0]), int(e[1]))))
+                    for e in g.get("support_edges", [])
+                ]
                 gens.append(
                     HomologyGenerator(
                         dimension=int(g.get("dimension", dimension)),
@@ -846,7 +891,9 @@ def compute_optimal_h1_basis_from_simplex_tree(
     max_cycles: Optional[int] = None,
 ) -> HomologyBasisResult:
     """Compute an optimal H1 basis directly from a simplex-tree object."""
-    simplices = [tuple(s[0]) for s in simplex_tree.get_skeleton(2) if len(s[0]) in (2, 3)]
+    simplices = [
+        tuple(s[0]) for s in simplex_tree.get_skeleton(2) if len(s[0]) in (2, 3)
+    ]
     vertices = [int(s[0][0]) for s in simplex_tree.get_skeleton(0)]
     num_vertices = (max(vertices) + 1) if vertices else 0
     return compute_optimal_h1_basis_from_simplices(
@@ -857,4 +904,3 @@ def compute_optimal_h1_basis_from_simplex_tree(
         root_stride=root_stride,
         max_cycles=max_cycles,
     )
-

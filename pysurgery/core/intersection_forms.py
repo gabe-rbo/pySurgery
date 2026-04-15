@@ -8,13 +8,14 @@ from .exceptions import (
     DimensionError,
     IsotropicError,
     NonPrimitiveError,
-    UnimodularityError
+    UnimodularityError,
 )
+
 
 class IntersectionForm(BaseModel):
     """
     Representation of a symmetric bilinear form Q on H_{2k}(M, Z).
-    
+
     Attributes
     ----------
     matrix : np.ndarray
@@ -22,6 +23,7 @@ class IntersectionForm(BaseModel):
     dimension : int
         The dimension of the manifold (n = 4k).
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     matrix: np.ndarray
@@ -35,7 +37,9 @@ class IntersectionForm(BaseModel):
         if not np.allclose(self.matrix, self.matrix.T):
             raise NonSymmetricError("Intersection form matrix must be symmetric.")
         if self.dimension % 2 != 0:
-            raise DimensionError("Intersection forms on H_{2k}(M) are usually defined for even-dimensional manifolds.")
+            raise DimensionError(
+                "Intersection forms on H_{2k}(M) are usually defined for even-dimensional manifolds."
+            )
 
     def _eigen_tol(self, eigenvalues: np.ndarray) -> float:
         """Return a scale-aware tolerance for eigenvalue sign/rank decisions."""
@@ -47,7 +51,7 @@ class IntersectionForm(BaseModel):
     def signature(self) -> int:
         """
         Compute the signature of the intersection form (rank+ - rank-).
-        
+
         Returns
         -------
         sig : int
@@ -65,7 +69,7 @@ class IntersectionForm(BaseModel):
         """
         Check if the form is even (Q(x, x) is even for all x).
         For an integral symmetric matrix, this is true if the diagonal elements are even.
-        
+
         Returns
         -------
         even : bool
@@ -102,7 +106,7 @@ class IntersectionForm(BaseModel):
             "rank": self.rank(),
             "signature": self.signature(),
             "type": self.type(),
-            "even": self.is_even()
+            "even": self.is_even(),
         }
 
     def determinant(self) -> int:
@@ -112,7 +116,7 @@ class IntersectionForm(BaseModel):
         sym_matrix = sp.Matrix(self.matrix.astype(int))
         return int(sym_matrix.det())
 
-    def perform_algebraic_surgery(self, x: np.ndarray) -> 'IntersectionForm':
+    def perform_algebraic_surgery(self, x: np.ndarray) -> "IntersectionForm":
         """
         Perform algebraic surgery on the manifold by surgering out the isotropic class x.
         This corresponds to finding a class y with Q(x, y) = 1, and restricting the form to {x, y}^perp.
@@ -120,13 +124,17 @@ class IntersectionForm(BaseModel):
         """
         x = np.asarray(x, dtype=int).flatten()
         if x.shape[0] != self.matrix.shape[0]:
-            raise DimensionError(f"Surgery class 'x' must be a vector in the H_2 basis. "
-                                 f"Expected size {self.matrix.shape[0]}, got {x.shape[0]}.")
-            
+            raise DimensionError(
+                f"Surgery class 'x' must be a vector in the H_2 basis. "
+                f"Expected size {self.matrix.shape[0]}, got {x.shape[0]}."
+            )
+
         if np.dot(x, self.matrix @ x) != 0:
-            raise IsotropicError(f"Surgery class 'x' must be isotropic (Q(x,x) = 0). Its self-intersection is {np.dot(x, self.matrix @ x)}. "
-                                 "Topological translation: The normal bundle of the embedded sphere twists (like a Möbius strip), physically blocking the attachment of the surgery handle $D^3 \\times S^1$.")
-            
+            raise IsotropicError(
+                f"Surgery class 'x' must be isotropic (Q(x,x) = 0). Its self-intersection is {np.dot(x, self.matrix @ x)}. "
+                "Topological translation: The normal bundle of the embedded sphere twists (like a Möbius strip), physically blocking the attachment of the surgery handle $D^3 \\times S^1$."
+            )
+
         nonzero_components = x[x != 0]
         if len(nonzero_components) == 0:
             raise NonPrimitiveError(
@@ -134,11 +142,13 @@ class IntersectionForm(BaseModel):
                 "Topological translation: The zero class has no geometric surgery representative."
             )
         if int(np.gcd.reduce(nonzero_components.astype(np.int64))) != 1:
-            raise NonPrimitiveError("Surgery class 'x' is not primitive (GCD of non-zero coordinates > 1). "
-                                    "Topological translation: The class is a mathematical multiple of a basis element. Attempting surgery on it would create irremediable singularities in the resulting space.")
-            
+            raise NonPrimitiveError(
+                "Surgery class 'x' is not primitive (GCD of non-zero coordinates > 1). "
+                "Topological translation: The class is a mathematical multiple of a basis element. Attempting surgery on it would create irremediable singularities in the resulting space."
+            )
+
         x_TQ = x.T @ self.matrix
-        
+
         # We need y such that x_TQ @ y = 1.
         def ext_gcd(a, b):
             if b == 0:
@@ -149,7 +159,7 @@ class IntersectionForm(BaseModel):
                 x0, x1 = x1, x0 - q * x1
                 y0, y1 = y1, y0 - q * y1
             return a, x0, y0
-            
+
         def ext_gcd_array(arr):
             if len(arr) == 1:
                 return arr[0], [1]
@@ -159,11 +169,13 @@ class IntersectionForm(BaseModel):
 
         g, y_list = ext_gcd_array(x_TQ.tolist())
         if g not in (1, -1):
-            raise UnimodularityError("Intersection form is not unimodular (determinant != +/-1). "
-                                     "Topological translation: The Extended Euclidean Algorithm failed to find a dual class 'y' where Q(x,y)=1. The space is not a closed manifold (Poincaré Duality has failed).")
-        
+            raise UnimodularityError(
+                "Intersection form is not unimodular (determinant != +/-1). "
+                "Topological translation: The Extended Euclidean Algorithm failed to find a dual class 'y' where Q(x,y)=1. The space is not a closed manifold (Poincaré Duality has failed)."
+            )
+
         y = np.array(y_list, dtype=int) * g
-        
+
         m = self.matrix.shape[0]
         y_TQ = y.T @ self.matrix
         constraints = sp.Matrix(np.vstack([x_TQ, y_TQ]))
@@ -183,9 +195,11 @@ class IntersectionForm(BaseModel):
             basis_vectors.append((int_vec // gcd_val).tolist())
 
         basis_matrix = np.array(basis_vectors, dtype=int)
-        
+
         if basis_matrix.shape[0] == 0:
-            return self.__class__(matrix=np.zeros((0, 0), dtype=int), dimension=self.dimension)
+            return self.__class__(
+                matrix=np.zeros((0, 0), dtype=int), dimension=self.dimension
+            )
 
         expected_rank = max(0, m - 2)
         if basis_matrix.shape[0] != expected_rank:
@@ -203,5 +217,5 @@ class IntersectionForm(BaseModel):
             basis_matrix = np.array(reduced, dtype=int)
 
         new_matrix = basis_matrix @ self.matrix @ basis_matrix.T
-        
+
         return self.__class__(matrix=new_matrix, dimension=self.dimension)

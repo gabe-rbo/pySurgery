@@ -4,6 +4,7 @@ from .exceptions import GroupRingError
 from .exact_algebra import normalize_word_token
 from ..bridge.julia_bridge import julia_engine
 
+
 class GroupRingElement:
     """
     Element of the group ring Z[G].
@@ -55,25 +56,35 @@ class GroupRingElement:
         self.inverse_law = inverse_law
         self.mul_table = mul_table
 
-    def __add__(self, other: 'GroupRingElement') -> 'GroupRingElement':
+    def __add__(self, other: "GroupRingElement") -> "GroupRingElement":
         """Add two elements from the same group ring."""
         if self.group_order != other.group_order:
-            raise GroupRingError(f"Cannot add elements from different group rings. Group orders |G|={self.group_order} and |H|={other.group_order} do not match.")
+            raise GroupRingError(
+                f"Cannot add elements from different group rings. Group orders |G|={self.group_order} and |H|={other.group_order} do not match."
+            )
         if self.group_law is not other.group_law:
-            raise GroupRingError("Cannot add elements with different group-law definitions.")
+            raise GroupRingError(
+                "Cannot add elements with different group-law definitions."
+            )
         res = self.coeffs.copy()
         for g, c in other.coeffs.items():
             res[g] = res.get(g, 0) + c
-        return GroupRingElement(res, self.group_order, self.group_law, self.inverse_law, self.mul_table)
+        return GroupRingElement(
+            res, self.group_order, self.group_law, self.inverse_law, self.mul_table
+        )
 
-    def __mul__(self, other: 'GroupRingElement') -> 'GroupRingElement':
+    def __mul__(self, other: "GroupRingElement") -> "GroupRingElement":
         """Multiply two group-ring elements using exact backend or cyclic fallback."""
         if self.group_order != other.group_order:
             raise GroupRingError("Cannot multiply elements from different group rings.")
         if self.group_law is not other.group_law:
-            raise GroupRingError("Cannot multiply elements with different group-law definitions.")
+            raise GroupRingError(
+                "Cannot multiply elements with different group-law definitions."
+            )
         if self.mul_table is not other.mul_table:
-            raise GroupRingError("Cannot multiply elements with different finite-group multiplication tables.")
+            raise GroupRingError(
+                "Cannot multiply elements with different finite-group multiplication tables."
+            )
 
         if self.group_law is not None:
             res: Dict[str, int] = {}
@@ -81,7 +92,9 @@ class GroupRingElement:
                 for g2, c2 in other.coeffs.items():
                     g = self._normalize_key(self.group_law(g1, g2))
                     res[g] = res.get(g, 0) + c1 * c2
-            return GroupRingElement(res, self.group_order, self.group_law, self.inverse_law, self.mul_table)
+            return GroupRingElement(
+                res, self.group_order, self.group_law, self.inverse_law, self.mul_table
+            )
 
         if self.mul_table is not None:
             res: Dict[str, int] = {}
@@ -90,16 +103,30 @@ class GroupRingElement:
                 for g2, c2 in other.coeffs.items():
                     g = self._normalize_key(row.get(self._normalize_key(g2), ""))
                     if not g:
-                        raise GroupRingError(f"Missing multiplication table entry for ({g1}, {g2}).")
+                        raise GroupRingError(
+                            f"Missing multiplication table entry for ({g1}, {g2})."
+                        )
                     res[g] = res.get(g, 0) + c1 * c2
-            return GroupRingElement(res, self.group_order, self.group_law, self.inverse_law, self.mul_table)
+            return GroupRingElement(
+                res, self.group_order, self.group_law, self.inverse_law, self.mul_table
+            )
 
         if self.group_order is None:
-            raise GroupRingError("Group order must be specified for exact ring multiplication, unless group_law is provided.")
+            raise GroupRingError(
+                "Group order must be specified for exact ring multiplication, unless group_law is provided."
+            )
 
         if julia_engine.available:
-            res_coeffs = julia_engine.group_ring_multiply(self.coeffs, other.coeffs, self.group_order)
-            return GroupRingElement(res_coeffs, self.group_order, self.group_law, self.inverse_law, self.mul_table)
+            res_coeffs = julia_engine.group_ring_multiply(
+                self.coeffs, other.coeffs, self.group_order
+            )
+            return GroupRingElement(
+                res_coeffs,
+                self.group_order,
+                self.group_law,
+                self.inverse_law,
+                self.mul_table,
+            )
 
         warnings.warn(
             "Group-ring multiplication fallback in `GroupRingElement.__mul__`: Julia backend unavailable; "
@@ -116,35 +143,43 @@ class GroupRingElement:
                     p = (p1 + p2) % self.group_order
                     key = "1" if p == 0 else f"g_{p}"
                     res[key] = res.get(key, 0) + c1 * c2
-            return GroupRingElement(res, self.group_order, self.group_law, self.inverse_law, self.mul_table)
+            return GroupRingElement(
+                res, self.group_order, self.group_law, self.inverse_law, self.mul_table
+            )
         except GroupRingError as e:
             raise GroupRingError(
                 "Non-cyclic exact Group Ring multiplication requires Julia bridge. "
                 f"Details: {e!r}"
             )
 
-    def involution(self) -> 'GroupRingElement':
+    def involution(self) -> "GroupRingElement":
         """
         The standard involution bar: Z[G] -> Z[G] mapping g to g^-1.
         Used to define Hermitian forms over group rings.
         """
         if self.inverse_law is None and self.group_order is None:
-            raise GroupRingError("Involution a -> a_bar requires either an explicit inverse law or a cyclic group order. "
-                                 "This is mathematically mandatory for defining Hermitian forms over group rings.")
-        
+            raise GroupRingError(
+                "Involution a -> a_bar requires either an explicit inverse law or a cyclic group order. "
+                "This is mathematically mandatory for defining Hermitian forms over group rings."
+            )
+
         result = {}
         for g, c in self.coeffs.items():
             gn = self._normalize_key(g)
-            if gn == '1':
-                result['1'] = result.get('1', 0) + c
+            if gn == "1":
+                result["1"] = result.get("1", 0) + c
             elif self.inverse_law is not None:
                 inv_g = self._normalize_key(self.inverse_law(gn))
                 result[inv_g] = result.get(inv_g, 0) + c
-            elif gn.startswith('g'):
+            elif gn.startswith("g"):
                 try:
-                    power = int(gn.split('_')[1] if '_' in gn else gn[1:])
+                    power = int(gn.split("_")[1] if "_" in gn else gn[1:])
                     inv_power = (self.group_order - power) % self.group_order
-                    inv_g = '1' if inv_power == 0 else (f'g_{inv_power}' if '_' in gn else f'g{inv_power}')
+                    inv_g = (
+                        "1"
+                        if inv_power == 0
+                        else (f"g_{inv_power}" if "_" in gn else f"g{inv_power}")
+                    )
                     result[inv_g] = result.get(inv_g, 0) + c
                 except (ValueError, IndexError, GroupRingError):
                     raise GroupRingError(
@@ -154,4 +189,6 @@ class GroupRingElement:
                 raise GroupRingError(
                     f"Cannot compute involution for non-cyclic generator '{gn}' without explicit inverse law."
                 )
-        return GroupRingElement(result, self.group_order, self.group_law, self.inverse_law, self.mul_table)
+        return GroupRingElement(
+            result, self.group_order, self.group_law, self.inverse_law, self.mul_table
+        )

@@ -77,7 +77,9 @@ def test_structure_set_exact_sequence_carries_typed_wall_obstruction_states():
         message="",
         assumptions=[],
     )
-    out = s.evaluate_exact_sequence_result(l_n_obstruction=l5, l_n_plus_1_obstruction=l6)
+    out = s.evaluate_exact_sequence_result(
+        l_n_obstruction=l5, l_n_plus_1_obstruction=l6
+    )
     assert out.l_n_obstruction is not None
     assert out.l_n_plus_1_obstruction is not None
     assert out.l_n_state["available"] is True
@@ -135,7 +137,13 @@ def test_structure_set_reports_conflict_when_explicit_state_disagrees_with_obstr
 
 def test_structure_set_nontrivial_branch_preserves_typed_states():
     s = StructureSet(dimension=7, fundamental_group="Z")
-    state = LObstructionState(available=True, computable=True, exact=True, obstructs=False, zero_certified=True)
+    state = LObstructionState(
+        available=True,
+        computable=True,
+        exact=True,
+        obstructs=False,
+        zero_certified=True,
+    )
     out = s.evaluate_exact_sequence_result(l_n_state=state)
     assert out.computable
     assert out.l_n_state.zero_certified is True
@@ -143,11 +151,23 @@ def test_structure_set_nontrivial_branch_preserves_typed_states():
 
 def test_structure_set_nontrivial_branch_can_be_exact_with_full_typed_channels():
     s = StructureSet(dimension=9, fundamental_group="Z x Z_3")
-    l_n_state = LObstructionState(available=True, computable=True, exact=True, obstructs=False, zero_certified=True)
-    l_n_plus_1_state = LObstructionState(available=True, computable=True, exact=True, obstructs=False, zero_certified=True)
-    out = s.evaluate_exact_sequence_result(l_n_state=l_n_state, l_n_plus_1_state=l_n_plus_1_state)
+    l_n_state = LObstructionState(
+        available=True,
+        computable=True,
+        exact=True,
+        obstructs=False,
+        zero_certified=True,
+    )
+    l_n_plus_1_state = LObstructionState(
+        available=True,
+        computable=True,
+        exact=True,
+        obstructs=False,
+        zero_certified=True,
+    )
+    out = s.evaluate_exact_sequence_result(
+        l_n_state=l_n_state, l_n_plus_1_state=l_n_plus_1_state
+    )
     assert out.computable
     assert out.exact
     assert not out.partial
-
-

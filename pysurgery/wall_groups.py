@@ -52,10 +52,10 @@ class ObstructionResult(BaseModel):
 
         value = int(self.value)
         if self.modulus is None:
-            self.zero_certified = (value == 0)
+            self.zero_certified = value == 0
         else:
             mod = abs(int(self.modulus))
-            self.zero_certified = (mod != 0 and (value % mod) == 0)
+            self.zero_certified = mod != 0 and (value % mod) == 0
         self.obstructs = not self.zero_certified
 
     def legacy_output(self) -> Union[int, str]:
@@ -117,7 +117,9 @@ class LDirectSumElement(BaseModel):
                 mod = abs(int(modulus))
                 if mod != 0:
                     v %= mod
-            zero_certified = (v == 0) if modulus is None else (int(v) % int(modulus) == 0)
+            zero_certified = (
+                (v == 0) if modulus is None else (int(v) % int(modulus) == 0)
+            )
             out.append(
                 LDirectSummand(
                     shift=shift,
@@ -153,11 +155,21 @@ class LDirectSumElement(BaseModel):
                         multiplicity=int(s.get("multiplicity", 1)),
                         dimension=int(s.get("dimension", obstruction.dimension)),
                         pi=str(s.get("pi", obstruction.pi)),
-                        symbol=str(s.get("symbol", l_group_symbol(int(s.get("dimension", obstruction.dimension)), str(s.get("pi", obstruction.pi))))),
+                        symbol=str(
+                            s.get(
+                                "symbol",
+                                l_group_symbol(
+                                    int(s.get("dimension", obstruction.dimension)),
+                                    str(s.get("pi", obstruction.pi)),
+                                ),
+                            )
+                        ),
                         computable=bool(s.get("computable", obstruction.computable)),
                         exact=bool(s.get("exact", obstruction.exact)),
                         value=None if s.get("value") is None else int(s.get("value")),
-                        modulus=None if s.get("modulus") is None else int(s.get("modulus")),
+                        modulus=None
+                        if s.get("modulus") is None
+                        else int(s.get("modulus")),
                         obstructs=s.get("obstructs"),
                         zero_certified=bool(s.get("zero_certified", False)),
                         message=str(s.get("message", "")),
@@ -188,11 +200,15 @@ class LDirectSumElement(BaseModel):
             exact=obstruction.exact,
         )
 
-    def _normalized_contributions(self) -> dict[tuple[int, int, str, str, Optional[int]], int]:
+    def _normalized_contributions(
+        self,
+    ) -> dict[tuple[int, int, str, str, Optional[int]], int]:
         contrib: dict[tuple[int, int, str, str, Optional[int]], int] = {}
         for s in self.summands:
             if not s.computable or not s.exact or s.value is None:
-                raise ValueError("Direct-sum arithmetic requires computable exact summands with explicit values.")
+                raise ValueError(
+                    "Direct-sum arithmetic requires computable exact summands with explicit values."
+                )
             key = s.group_key()
             term = int(s.multiplicity) * int(s.value)
             if s.modulus is not None:
@@ -208,7 +224,9 @@ class LDirectSumElement(BaseModel):
 
     def _combine(self, other: "LDirectSumElement", sign: int) -> "LDirectSumElement":
         if self.dimension != other.dimension or self.pi != other.pi:
-            raise ValueError("Can only combine direct-sum elements with matching (dimension, pi).")
+            raise ValueError(
+                "Can only combine direct-sum elements with matching (dimension, pi)."
+            )
         c1 = self._normalized_contributions()
         c2 = other._normalized_contributions()
         keys = set(c1.keys()) | set(c2.keys())
@@ -220,7 +238,9 @@ class LDirectSumElement(BaseModel):
                 mod = abs(int(modulus))
                 if mod != 0:
                     v %= mod
-            zero_certified = (v == 0) if modulus is None else (int(v) % int(modulus) == 0)
+            zero_certified = (
+                (v == 0) if modulus is None else (int(v) % int(modulus) == 0)
+            )
             out.append(
                 LDirectSummand(
                     shift=shift,
@@ -256,19 +276,27 @@ class LDirectSumElement(BaseModel):
 
     def __mul__(self, scalar: int) -> "LDirectSumElement":
         if not isinstance(scalar, int):
-            raise ValueError("Direct-sum scalar multiplication requires an integer scalar.")
+            raise ValueError(
+                "Direct-sum scalar multiplication requires an integer scalar."
+            )
         if not self.computable or not self.exact:
-            raise ValueError("Direct-sum scalar multiplication requires computable exact summands.")
+            raise ValueError(
+                "Direct-sum scalar multiplication requires computable exact summands."
+            )
         out: List[LDirectSummand] = []
         for s in self.summands:
             if s.value is None:
-                raise ValueError("Direct-sum scalar multiplication requires explicit summand values.")
+                raise ValueError(
+                    "Direct-sum scalar multiplication requires explicit summand values."
+                )
             v = int(s.value) * scalar
             if s.modulus is not None:
                 mod = abs(int(s.modulus))
                 if mod != 0:
                     v %= mod
-            zero_certified = (v == 0) if s.modulus is None else (int(v) % int(s.modulus) == 0)
+            zero_certified = (
+                (v == 0) if s.modulus is None else (int(v) % int(s.modulus) == 0)
+            )
             out.append(
                 LDirectSummand(
                     shift=s.shift,
@@ -301,14 +329,19 @@ class LDirectSumElement(BaseModel):
             return False
         if not (self.computable and self.exact and other.computable and other.exact):
             return False
-        return self.normalized()._normalized_contributions() == other.normalized()._normalized_contributions()
+        return (
+            self.normalized()._normalized_contributions()
+            == other.normalized()._normalized_contributions()
+        )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, LDirectSumElement):
             return False
         return self.equivalent(other)
 
-    def to_obstruction_result(self, *, collapse_integral: bool = False) -> ObstructionResult:
+    def to_obstruction_result(
+        self, *, collapse_integral: bool = False
+    ) -> ObstructionResult:
         ns = self.normalized() if self.computable and self.exact else self
         summands = []
         for s in ns.summands:
@@ -331,11 +364,18 @@ class LDirectSumElement(BaseModel):
 
         scalar_value: Optional[int] = None
         scalar_modulus: Optional[int] = None
-        if collapse_integral and ns.computable and ns.exact and all(s.value is not None and s.modulus is None for s in ns.summands):
+        if (
+            collapse_integral
+            and ns.computable
+            and ns.exact
+            and all(s.value is not None and s.modulus is None for s in ns.summands)
+        ):
             scalar_value = int(sum(int(s.value) for s in ns.summands))
 
         known_obstructs = any(s.obstructs is True for s in ns.summands)
-        all_zero_certified = bool(ns.summands) and all(s.zero_certified for s in ns.summands)
+        all_zero_certified = bool(ns.summands) and all(
+            s.zero_certified for s in ns.summands
+        )
         return ObstructionResult(
             dimension=ns.dimension,
             pi=ns.pi,
@@ -346,16 +386,19 @@ class LDirectSumElement(BaseModel):
             message="Direct-sum obstruction element",
             factor_analysis=["typed_direct_sum_conversion"],
             summands=summands,
-            obstructs=True if known_obstructs else (False if all_zero_certified else None),
+            obstructs=True
+            if known_obstructs
+            else (False if all_zero_certified else None),
             zero_certified=all_zero_certified,
         )
+
 
 class WallGroupL(BaseModel):
     """
     Interface for computing Wall's surgery obstruction groups L_n(pi).
     Extends beyond the simply-connected case into finite groups and Z.
     """
-    
+
     dimension: int
     pi: Union[str, GroupPresentation] = "1"
 
@@ -374,23 +417,31 @@ class WallGroupL(BaseModel):
             )
         return sig // 8
 
-    def compute_obstruction(self, form: Optional[IntersectionForm] = None) -> Union[int, str]:
+    def compute_obstruction(
+        self, form: Optional[IntersectionForm] = None
+    ) -> Union[int, str]:
         """
         Backward-compatible output (int or diagnostic string).
         """
         return self.compute_obstruction_result(form).legacy_output()
 
-    def compute_obstruction_element(self, form: Optional[IntersectionForm] = None) -> LDirectSumElement:
+    def compute_obstruction_element(
+        self, form: Optional[IntersectionForm] = None
+    ) -> LDirectSumElement:
         return self.compute_obstruction_result(form).to_direct_sum_element()
 
-    def _compute_for_single_factor(self, n: int, pi: str, form: Optional[IntersectionForm]) -> ObstructionResult:
+    def _compute_for_single_factor(
+        self, n: int, pi: str, form: Optional[IntersectionForm]
+    ) -> ObstructionResult:
         assumptions: List[str] = []
         if pi == "1":
             assumptions.append("Classical simply-connected Wall L-group model")
             if n % 4 == 0:
                 if form is None:
-                    raise SurgeryObstructionError("Intersection form required to compute Wall group L_{4k}(1) obstruction. "
-                                                  "Hint: Provide an IntersectionForm instance derived from the manifold's H_{2k} basis.")
+                    raise SurgeryObstructionError(
+                        "Intersection form required to compute Wall group L_{4k}(1) obstruction. "
+                        "Hint: Provide an IntersectionForm instance derived from the manifold's H_{2k} basis."
+                    )
                 return ObstructionResult(
                     dimension=n,
                     pi=pi,
@@ -404,8 +455,10 @@ class WallGroupL(BaseModel):
                 )
             if n % 4 == 2:
                 if form is None or not isinstance(form, QuadraticForm):
-                    raise SurgeryObstructionError("L_{4k+2}(1) obstruction requires the Arf Invariant. "
-                                                  "Hint: Symmetric bilinear forms are insufficient. Provide a QuadraticForm with explicit Z_2 quadratic refinement q: H -> Z_2.")
+                    raise SurgeryObstructionError(
+                        "L_{4k+2}(1) obstruction requires the Arf Invariant. "
+                        "Hint: Symmetric bilinear forms are insufficient. Provide a QuadraticForm with explicit Z_2 quadratic refinement q: H -> Z_2."
+                    )
                 return ObstructionResult(
                     dimension=n,
                     pi=pi,
@@ -498,7 +551,9 @@ class WallGroupL(BaseModel):
 
         if pi.startswith("Z_"):
             p = int(pi.split("_")[1])
-            assumptions.append("Finite cyclic group ring obstruction via multisignature")
+            assumptions.append(
+                "Finite cyclic group ring obstruction via multisignature"
+            )
             if n % 4 != 0:
                 return ObstructionResult(
                     dimension=n,
@@ -509,7 +564,9 @@ class WallGroupL(BaseModel):
                     assumptions=assumptions,
                 )
             if form is None:
-                raise SurgeryObstructionError(f"Intersection form required to compute Wall group L_{{{n}}}(Z_{p}) multisignature obstruction.")
+                raise SurgeryObstructionError(
+                    f"Intersection form required to compute Wall group L_{{{n}}}(Z_{p}) multisignature obstruction."
+                )
             if julia_engine.available:
                 return ObstructionResult(
                     dimension=n,
@@ -542,7 +599,9 @@ class WallGroupL(BaseModel):
             assumptions=["Group-ring representation data not fully specified"],
         )
 
-    def compute_obstruction_result(self, form: Optional[IntersectionForm] = None) -> ObstructionResult:
+    def compute_obstruction_result(
+        self, form: Optional[IntersectionForm] = None
+    ) -> ObstructionResult:
         """Compute surgery obstruction as a typed result with exactness metadata."""
         n = self.dimension
         pi = self._normalize_pi(self.pi)
@@ -567,7 +626,9 @@ class WallGroupL(BaseModel):
             try:
                 for j in range(z_count + 1):
                     multiplicity = comb(z_count, j)
-                    base_res = WallGroupL(dimension=n - j, pi=rest_pi).compute_obstruction_result(form)
+                    base_res = WallGroupL(
+                        dimension=n - j, pi=rest_pi
+                    ).compute_obstruction_result(form)
                     component_results.append(base_res)
                     summands.append(
                         {
@@ -594,7 +655,10 @@ class WallGroupL(BaseModel):
                     message=(
                         f"Shaneson splitting for '{pi}' reduced to factor '{rest_pi}', but required form data is missing: {e}"
                     ),
-                    assumptions=["Shaneson splitting applied", "Insufficient form input for reduced factors"],
+                    assumptions=[
+                        "Shaneson splitting applied",
+                        "Insufficient form input for reduced factors",
+                    ],
                     summands=summands,
                     decomposition_kind="shaneson",
                     assembly_certified=False,
@@ -602,7 +666,9 @@ class WallGroupL(BaseModel):
 
             all_computable = all(r.computable for r in component_results)
             all_exact = all(r.exact for r in component_results)
-            all_integral = all((r.value is not None and r.modulus is None) for r in component_results)
+            all_integral = all(
+                (r.value is not None and r.modulus is None) for r in component_results
+            )
             if all_computable and all_integral:
                 total = 0
                 for j, r in enumerate(component_results):
@@ -631,13 +697,9 @@ class WallGroupL(BaseModel):
                 known_obstructs = any(r.obstructs is True for r in component_results)
                 all_zero_certified = all(r.zero_certified for r in component_results)
                 if all_zero_certified:
-                    decomposition_message = (
-                        f"Shaneson decomposition for '{pi}' is computable as a direct-sum element and all summands are certified zero."
-                    )
+                    decomposition_message = f"Shaneson decomposition for '{pi}' is computable as a direct-sum element and all summands are certified zero."
                 elif known_obstructs:
-                    decomposition_message = (
-                        f"Shaneson decomposition for '{pi}' is computable as a direct-sum element and contains a certified non-zero summand."
-                    )
+                    decomposition_message = f"Shaneson decomposition for '{pi}' is computable as a direct-sum element and contains a certified non-zero summand."
                 else:
                     decomposition_message = (
                         f"Shaneson decomposition for '{pi}' is computable as a direct-sum element, "
@@ -660,7 +722,9 @@ class WallGroupL(BaseModel):
                     summands=summands,
                     decomposition_kind="shaneson_direct_sum",
                     assembly_certified=True,
-                    obstructs=True if known_obstructs else (False if all_zero_certified else None),
+                    obstructs=True
+                    if known_obstructs
+                    else (False if all_zero_certified else None),
                     zero_certified=all_zero_certified,
                 )
 
@@ -673,7 +737,10 @@ class WallGroupL(BaseModel):
                     f"Partial product decomposition for '{pi}' succeeded, but one or more Shaneson summands "
                     "is not computable with current inputs/backends."
                 ),
-                assumptions=["Generalized Shaneson splitting applied", "At least one summand uncomputable"],
+                assumptions=[
+                    "Generalized Shaneson splitting applied",
+                    "At least one summand uncomputable",
+                ],
                 factor_analysis=[
                     f"factorized={factors}",
                     f"reduced_rest={rest_pi}",
@@ -690,7 +757,9 @@ class WallGroupL(BaseModel):
         summands: List[dict] = []
         for factor, multiplicity in reduced_factors:
             try:
-                base = WallGroupL(dimension=n, pi=factor).compute_obstruction_result(form)
+                base = WallGroupL(dimension=n, pi=factor).compute_obstruction_result(
+                    form
+                )
             except Exception as exc:
                 base = ObstructionResult(
                     dimension=n,
@@ -699,7 +768,9 @@ class WallGroupL(BaseModel):
                     exact=False,
                     value=None,
                     message=f"Factor solver failed: {exc}",
-                    assumptions=["Single-factor obstruction unavailable with current inputs"],
+                    assumptions=[
+                        "Single-factor obstruction unavailable with current inputs"
+                    ],
                 )
             component_results.append(base)
             summands.append(
@@ -722,7 +793,9 @@ class WallGroupL(BaseModel):
         all_computable = all(r.computable for r in component_results)
         all_exact = all(r.exact for r in component_results)
         any_obstructs = any(r.obstructs is True for r in component_results)
-        all_zero = bool(component_results) and all(r.zero_certified for r in component_results)
+        all_zero = bool(component_results) and all(
+            r.zero_certified for r in component_results
+        )
 
         warnings.warn(
             "Wall obstruction fallback in `WallGroupL.compute_obstruction_result`: non-Z multi-factor product "
@@ -750,9 +823,12 @@ class WallGroupL(BaseModel):
             summands=summands,
             decomposition_kind="factor_surrogate",
             assembly_certified=False,
-            obstructs=True if any_obstructs else (False if all_zero and all_computable else None),
+            obstructs=True
+            if any_obstructs
+            else (False if all_zero and all_computable else None),
             zero_certified=bool(all_zero and all_computable),
         )
+
 
 def l_group_symbol(n: int, pi: Union[str, GroupPresentation] = "1") -> str:
     """

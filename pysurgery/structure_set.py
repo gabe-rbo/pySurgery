@@ -15,7 +15,9 @@ class NormalInvariantsResult(BaseModel):
     exact: bool = True
 
     def to_report(self) -> str:
-        report = f"--- NORMAL INVARIANTS [M, G/TOP] FOR {self.dimension}D MANIFOLD ---\n"
+        report = (
+            f"--- NORMAL INVARIANTS [M, G/TOP] FOR {self.dimension}D MANIFOLD ---\n"
+        )
         report += f"Rank over Z: {self.rank_Z}\n"
         report += f"Rank over Z_2: {self.rank_Z2}\n"
         report += "By Sullivan's formula, this defines the topological vector bundles that can be framed for surgery."
@@ -37,12 +39,14 @@ class SurgeryExactSequenceResult(BaseModel):
     l_n_obstruction: Optional[ObstructionResult] = None
     l_n_plus_1_obstruction: Optional[ObstructionResult] = None
     l_n_state: "LObstructionState" = Field(default_factory=lambda: LObstructionState())
-    l_n_plus_1_state: "LObstructionState" = Field(default_factory=lambda: LObstructionState())
+    l_n_plus_1_state: "LObstructionState" = Field(
+        default_factory=lambda: LObstructionState()
+    )
 
     def to_report(self) -> str:
         n = self.dimension
         report = f"--- SURGERY EXACT SEQUENCE FOR {n}D MANIFOLD ---\n"
-        report += f"L_{n+1}(1) ---> S_TOP(M) ---> [M, G/TOP] ---> L_{n}(1)\n"
+        report += f"L_{n + 1}(1) ---> S_TOP(M) ---> [M, G/TOP] ---> L_{n}(1)\n"
         report += f"   {self.l_n_plus_1_symbol}    ---> S_TOP(M) ---> Normal Invs --->    {self.l_n_symbol}\n\n"
         report += "Topological Analysis:\n"
         for line in self.analysis:
@@ -90,18 +94,20 @@ class LObstructionState(BaseModel):
             message=ob.message,
         )
 
+
 class StructureSet(BaseModel):
     """
     Implementation of the topological Structure Set S_TOP(M).
-    
+
     This mathematically models the Surgery Exact Sequence:
     ... -> L_{n+1}(pi_1) -> S_TOP(M) -> [M, G/TOP] -> L_n(pi_1)
-    
-    It determines the exact number of distinct manifolds that are 
+
+    It determines the exact number of distinct manifolds that are
     homotopy equivalent to M but NOT homeomorphic to M.
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    
+
     dimension: int
     fundamental_group: str = "1"
 
@@ -118,7 +124,9 @@ class StructureSet(BaseModel):
         """
         return self.compute_normal_invariants_result(chain).to_report()
 
-    def compute_normal_invariants_result(self, chain: ChainComplex) -> NormalInvariantsResult:
+    def compute_normal_invariants_result(
+        self, chain: ChainComplex
+    ) -> NormalInvariantsResult:
         n = self.dimension
         rank_Z = 0
         rank_Z2 = 0
@@ -132,7 +140,7 @@ class StructureSet(BaseModel):
                 _, t_km1 = chain.homology(k - 1)
                 z2_hom = sum(1 for t in t_k if t % 2 == 0)
                 z2_ext = sum(1 for t in t_km1 if t % 2 == 0)
-                rank_Z2 += (r_k + z2_hom + z2_ext)
+                rank_Z2 += r_k + z2_hom + z2_ext
 
         return NormalInvariantsResult(
             dimension=n,
@@ -157,7 +165,9 @@ class StructureSet(BaseModel):
     ) -> SurgeryExactSequenceResult:
         n = self.dimension
 
-        def _resolve_state(ob: Optional[ObstructionResult], state: Optional[LObstructionState]) -> tuple[LObstructionState, bool]:
+        def _resolve_state(
+            ob: Optional[ObstructionResult], state: Optional[LObstructionState]
+        ) -> tuple[LObstructionState, bool]:
             conflict = False
             derived = LObstructionState.from_obstruction(ob)
             if state is not None:
@@ -174,7 +184,9 @@ class StructureSet(BaseModel):
             return derived, False
 
         resolved_l_n_state, l_n_conflict = _resolve_state(l_n_obstruction, l_n_state)
-        resolved_l_n_plus_1_state, l_n_plus_1_conflict = _resolve_state(l_n_plus_1_obstruction, l_n_plus_1_state)
+        resolved_l_n_plus_1_state, l_n_plus_1_conflict = _resolve_state(
+            l_n_plus_1_obstruction, l_n_plus_1_state
+        )
 
         if not self._is_trivial_group_symbol(self.fundamental_group):
             fg = self.fundamental_group
@@ -183,12 +195,16 @@ class StructureSet(BaseModel):
 
             if resolved_l_n is None:
                 try:
-                    resolved_l_n = WallGroupL(dimension=n, pi=fg).compute_obstruction_result()
+                    resolved_l_n = WallGroupL(
+                        dimension=n, pi=fg
+                    ).compute_obstruction_result()
                 except Exception:
                     resolved_l_n = None
             if resolved_l_n_plus_1 is None:
                 try:
-                    resolved_l_n_plus_1 = WallGroupL(dimension=n + 1, pi=fg).compute_obstruction_result()
+                    resolved_l_n_plus_1 = WallGroupL(
+                        dimension=n + 1, pi=fg
+                    ).compute_obstruction_result()
                 except Exception:
                     resolved_l_n_plus_1 = None
 
@@ -196,12 +212,24 @@ class StructureSet(BaseModel):
                 resolved_l_n_state = LObstructionState.from_obstruction(resolved_l_n)
                 l_n_conflict = False
             if l_n_plus_1_state is None:
-                resolved_l_n_plus_1_state = LObstructionState.from_obstruction(resolved_l_n_plus_1)
+                resolved_l_n_plus_1_state = LObstructionState.from_obstruction(
+                    resolved_l_n_plus_1
+                )
                 l_n_plus_1_conflict = False
 
-            channels_available = resolved_l_n_state.available and resolved_l_n_plus_1_state.available
-            channels_computable = channels_available and resolved_l_n_state.computable and resolved_l_n_plus_1_state.computable
-            channels_exact = channels_computable and resolved_l_n_state.exact and resolved_l_n_plus_1_state.exact
+            channels_available = (
+                resolved_l_n_state.available and resolved_l_n_plus_1_state.available
+            )
+            channels_computable = (
+                channels_available
+                and resolved_l_n_state.computable
+                and resolved_l_n_plus_1_state.computable
+            )
+            channels_exact = (
+                channels_computable
+                and resolved_l_n_state.exact
+                and resolved_l_n_plus_1_state.exact
+            )
 
             analysis = [
                 f"Non-simply-connected case detected (pi_1 = {fg}).",
@@ -209,19 +237,39 @@ class StructureSet(BaseModel):
                 "Group-ring assembly completeness is still theorem-sensitive; readiness is graded from the supplied/computed typed states.",
             ]
             if channels_exact:
-                analysis.append("Typed L-state channels are exact and computable for both L_n and L_{n+1} in this branch.")
+                analysis.append(
+                    "Typed L-state channels are exact and computable for both L_n and L_{n+1} in this branch."
+                )
             elif channels_computable:
-                analysis.append("Typed L-state channels are computable but include heuristic/non-exact data.")
+                analysis.append(
+                    "Typed L-state channels are computable but include heuristic/non-exact data."
+                )
             else:
-                analysis.append("Typed L-state channels are incomplete or non-computable; nontrivial group-ring decomposition remains partial.")
-            if resolved_l_n_state.available and not resolved_l_n_state.assembly_certified:
-                analysis.append("L_n channel is not assembly-certified for full product-group composition.")
-            if resolved_l_n_plus_1_state.available and not resolved_l_n_plus_1_state.assembly_certified:
-                analysis.append("L_{n+1} channel is not assembly-certified for full product-group composition.")
+                analysis.append(
+                    "Typed L-state channels are incomplete or non-computable; nontrivial group-ring decomposition remains partial."
+                )
+            if (
+                resolved_l_n_state.available
+                and not resolved_l_n_state.assembly_certified
+            ):
+                analysis.append(
+                    "L_n channel is not assembly-certified for full product-group composition."
+                )
+            if (
+                resolved_l_n_plus_1_state.available
+                and not resolved_l_n_plus_1_state.assembly_certified
+            ):
+                analysis.append(
+                    "L_{n+1} channel is not assembly-certified for full product-group composition."
+                )
             if l_n_conflict:
-                analysis.append("Warning: explicit L_n state conflicts with obstruction-derived state; explicit typed state was used.")
+                analysis.append(
+                    "Warning: explicit L_n state conflicts with obstruction-derived state; explicit typed state was used."
+                )
             if l_n_plus_1_conflict:
-                analysis.append("Warning: explicit L_{n+1} state conflicts with obstruction-derived state; explicit typed state was used.")
+                analysis.append(
+                    "Warning: explicit L_{n+1} state conflicts with obstruction-derived state; explicit typed state was used."
+                )
             return SurgeryExactSequenceResult(
                 dimension=n,
                 fundamental_group=fg,
@@ -239,7 +287,9 @@ class StructureSet(BaseModel):
             )
 
         if n < 5:
-            raise StructureSetError("The Surgery Exact Sequence strictly applies to dimensions n >= 5. In 4D, Freedman's classification completely replaces the exact sequence.")
+            raise StructureSetError(
+                "The Surgery Exact Sequence strictly applies to dimensions n >= 5. In 4D, Freedman's classification completely replaces the exact sequence."
+            )
 
         l_n_str = self._format_wall_group(n)
         l_n_plus_1_str = self._format_wall_group(n + 1)
@@ -255,7 +305,9 @@ class StructureSet(BaseModel):
                 pass
         if resolved_l_n_plus_1 is None:
             try:
-                candidate = WallGroupL(dimension=n + 1, pi="1").compute_obstruction_result()
+                candidate = WallGroupL(
+                    dimension=n + 1, pi="1"
+                ).compute_obstruction_result()
                 if candidate.computable and candidate.exact:
                     resolved_l_n_plus_1 = candidate
             except Exception:
@@ -265,7 +317,9 @@ class StructureSet(BaseModel):
             resolved_l_n_state = LObstructionState.from_obstruction(resolved_l_n)
             l_n_conflict = False
         if l_n_plus_1_state is None:
-            resolved_l_n_plus_1_state = LObstructionState.from_obstruction(resolved_l_n_plus_1)
+            resolved_l_n_plus_1_state = LObstructionState.from_obstruction(
+                resolved_l_n_plus_1
+            )
             l_n_plus_1_conflict = False
 
         analysis = [
@@ -273,28 +327,46 @@ class StructureSet(BaseModel):
             f"The Wall group L_{n}(1) ({l_n_str}) acts as the primary obstruction to doing surgery.",
         ]
         if l_n_str == "0":
-            analysis.append("Because L_n(1) = 0, every normal invariant maps directly into the Structure Set.")
+            analysis.append(
+                "Because L_n(1) = 0, every normal invariant maps directly into the Structure Set."
+            )
         else:
             analysis.append(
                 f"Because L_n(1) = {l_n_str}, some normal invariants may fail to lift to homotopy equivalences."
             )
-        analysis.append("The group L_{n+1}(1) acts on the Structure Set and governs multiplicity of structures.")
+        analysis.append(
+            "The group L_{n+1}(1) acts on the Structure Set and governs multiplicity of structures."
+        )
         if resolved_l_n_state.available:
             if resolved_l_n_state.obstructs is True:
-                analysis.append("Typed L_n obstruction state certifies a non-zero obstruction element.")
+                analysis.append(
+                    "Typed L_n obstruction state certifies a non-zero obstruction element."
+                )
             elif resolved_l_n_state.zero_certified:
-                analysis.append("Typed L_n obstruction state certifies vanishing obstruction.")
+                analysis.append(
+                    "Typed L_n obstruction state certifies vanishing obstruction."
+                )
             else:
-                analysis.append("Typed L_n obstruction state is available but does not certify vanishing/non-vanishing.")
+                analysis.append(
+                    "Typed L_n obstruction state is available but does not certify vanishing/non-vanishing."
+                )
         if resolved_l_n_plus_1_state.available:
             if resolved_l_n_plus_1_state.obstructs is True:
-                analysis.append("Typed L_{n+1} action state is non-trivial in the supplied obstruction certificate.")
+                analysis.append(
+                    "Typed L_{n+1} action state is non-trivial in the supplied obstruction certificate."
+                )
             elif resolved_l_n_plus_1_state.zero_certified:
-                analysis.append("Typed L_{n+1} action state is certified zero in the supplied obstruction certificate.")
+                analysis.append(
+                    "Typed L_{n+1} action state is certified zero in the supplied obstruction certificate."
+                )
         if l_n_conflict:
-            analysis.append("Warning: explicit L_n state conflicts with obstruction-derived state; explicit typed state was used.")
+            analysis.append(
+                "Warning: explicit L_n state conflicts with obstruction-derived state; explicit typed state was used."
+            )
         if l_n_plus_1_conflict:
-            analysis.append("Warning: explicit L_{n+1} state conflicts with obstruction-derived state; explicit typed state was used.")
+            analysis.append(
+                "Warning: explicit L_{n+1} state conflicts with obstruction-derived state; explicit typed state was used."
+            )
 
         return SurgeryExactSequenceResult(
             dimension=n,

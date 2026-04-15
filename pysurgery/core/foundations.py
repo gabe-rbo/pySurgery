@@ -29,7 +29,9 @@ class AnalyzerContract(BaseModel):
     theorem_tag: str
     contract_version: str = CONTRACT_VERSION
     required_inputs: list[str] = Field(default_factory=list)
-    exactness_policy: str = "Exact statements require exact certificates and theorem hypotheses."
+    exactness_policy: str = (
+        "Exact statements require exact certificates and theorem hypotheses."
+    )
 
 
 COVERAGE_MATRIX: list[CoverageMatrixEntry] = [
@@ -48,8 +50,14 @@ COVERAGE_MATRIX: list[CoverageMatrixEntry] = [
         theorem="Poincare Conjecture / Geometrization",
         theorem_tag="3d.poincare.geometrization",
         status="exact",
-        required_inputs=["homology-sphere checks", "pi_1 witness", "decision-ready 3-manifold recognition certificate"],
-        notes=["Poincare branch is exact for trivial pi_1 homology spheres; broader recognition requires explicit certificate intake."],
+        required_inputs=[
+            "homology-sphere checks",
+            "pi_1 witness",
+            "decision-ready 3-manifold recognition certificate",
+        ],
+        notes=[
+            "Poincare branch is exact for trivial pi_1 homology spheres; broader recognition requires explicit certificate intake."
+        ],
     ),
     CoverageMatrixEntry(
         dimension_class="4D",
@@ -62,7 +70,9 @@ COVERAGE_MATRIX: list[CoverageMatrixEntry] = [
             "Kirby-Siebenmann invariants",
             "decision-ready definite-lattice isometry certificate (if bounded search does not produce witness)",
         ],
-        notes=["Indefinite branch is intrinsic; definite branch supports internal search and external decision-ready isometry certificates."],
+        notes=[
+            "Indefinite branch is intrinsic; definite branch supports internal search and external decision-ready isometry certificates."
+        ],
     ),
     CoverageMatrixEntry(
         dimension_class="n>=5",
@@ -75,7 +85,9 @@ COVERAGE_MATRIX: list[CoverageMatrixEntry] = [
             "Certified Wall obstruction state",
             "Decision-ready homotopy-completion certificate",
         ],
-        notes=["Exact high-dimensional success requires an exact and validated completion certificate."],
+        notes=[
+            "Exact high-dimensional success requires an exact and validated completion certificate."
+        ],
     ),
     CoverageMatrixEntry(
         dimension_class="n>=5",
@@ -83,8 +95,14 @@ COVERAGE_MATRIX: list[CoverageMatrixEntry] = [
         theorem="Wall L-theory over group rings",
         theorem_tag="highdim.wall.group_ring",
         status="exact",
-        required_inputs=["group-ring decomposition data", "representation-theoretic inputs", "decision-ready product-group assembly certificate"],
-        notes=["Z-factor recursive splitting and factor-wise surrogate decomposition are implemented; exact product-group success requires assembly certification."],
+        required_inputs=[
+            "group-ring decomposition data",
+            "representation-theoretic inputs",
+            "decision-ready product-group assembly certificate",
+        ],
+        notes=[
+            "Z-factor recursive splitting and factor-wise surrogate decomposition are implemented; exact product-group success requires assembly certification."
+        ],
     ),
 ]
 
@@ -95,7 +113,12 @@ def coverage_status_counts() -> dict[str, int]:
     return dict(counts)
 
 
-def get_contract(analyzer: str, theorem: str, theorem_tag: str, required_inputs: list[str] | None = None) -> AnalyzerContract:
+def get_contract(
+    analyzer: str,
+    theorem: str,
+    theorem_tag: str,
+    required_inputs: list[str] | None = None,
+) -> AnalyzerContract:
     """Create a normalized analyzer contract record."""
     return AnalyzerContract(
         analyzer=analyzer,
@@ -103,4 +126,3 @@ def get_contract(analyzer: str, theorem: str, theorem_tag: str, required_inputs:
         theorem_tag=theorem_tag,
         required_inputs=list(required_inputs or []),
     )
-

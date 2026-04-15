@@ -54,7 +54,9 @@ def _rank_mod_p(A: np.ndarray, p: int) -> int:
     return rank
 
 
-def _matrix_rank_for_ring(matrix: csr_matrix, ring_kind: str, p: int | None = None) -> int:
+def _matrix_rank_for_ring(
+    matrix: csr_matrix, ring_kind: str, p: int | None = None
+) -> int:
     """Compute matrix rank in the requested coefficient field, preferring Julia when available."""
     if matrix is None or matrix.nnz == 0:
         return 0
@@ -181,12 +183,14 @@ def _composite_mod_uct_decomposition(
 
     return rank_mod, sorted(torsion_mod)
 
+
 class ChainComplex(BaseModel):
     """
     An abstract Chain Complex C_* over Z.
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    
+
     boundaries: Dict[int, csr_matrix]
     dimensions: List[int]
     cells: Dict[int, int] = Field(default_factory=dict)
@@ -197,7 +201,12 @@ class ChainComplex(BaseModel):
         dn = self.boundaries.get(n)
         dn_plus_1 = self.boundaries.get(n + 1)
 
-        if n not in self.dimensions and n not in self.cells and dn is None and dn_plus_1 is None:
+        if (
+            n not in self.dimensions
+            and n not in self.cells
+            and dn is None
+            and dn_plus_1 is None
+        ):
             return 0, []
 
         if n in self.cells:
@@ -234,7 +243,7 @@ class ChainComplex(BaseModel):
     def homology(self, n: int) -> Tuple[int, List[int]]:
         """
         Compute the n-th homology group H_n(C) = ker(d_n) / im(d_{n+1}).
-        
+
         Returns
         -------
         rank : int
@@ -256,15 +265,22 @@ class ChainComplex(BaseModel):
             _, t_nm1 = self._homology_over_z(n - 1)
             modulus = int(p)
 
-            rank_mod, torsion_mod = _composite_mod_uct_decomposition(r_n, t_n, t_nm1, modulus)
+            rank_mod, torsion_mod = _composite_mod_uct_decomposition(
+                r_n, t_n, t_nm1, modulus
+            )
             return int(rank_mod), torsion_mod
 
         dn = self.boundaries.get(n)
         dn_plus_1 = self.boundaries.get(n + 1)
-        
+
         # Dimensions of chain groups
         # If n not in boundaries, assume C_n is 0 or its size is inferred from boundaries
-        if n not in self.dimensions and n not in self.cells and dn is None and dn_plus_1 is None:
+        if (
+            n not in self.dimensions
+            and n not in self.cells
+            and dn is None
+            and dn_plus_1 is None
+        ):
             return 0, []
 
         # Number of n-cells (columns of d_n or rows of d_{n+1})
@@ -278,7 +294,6 @@ class ChainComplex(BaseModel):
             # Isolated dimension with no boundaries and no explicit cell count
             return 0, []
 
-
         # 1. Find rank of d_n to get dim(ker(d_n))
         if dn is not None and dn.nnz > 0:
             if ring_kind == "Z":
@@ -290,9 +305,9 @@ class ChainComplex(BaseModel):
                 rank_n = _matrix_rank_for_ring(dn, "ZMOD", int(p))
         else:
             rank_n = 0
-            
+
         dim_ker_n = c_n_size - rank_n
-        
+
         # 2. Find rank(im(d_{n+1})) and torsion when applicable
         if dn_plus_1 is not None and dn_plus_1.nnz > 0:
             if ring_kind == "Z":
@@ -328,7 +343,9 @@ class ChainComplex(BaseModel):
                 r_n, t_n = self._homology_over_z(n)
                 _, t_nm1 = self._homology_over_z(n - 1)
                 modulus = int(p)
-                rank_mod, torsion_mod = _composite_mod_uct_decomposition(r_n, t_n, t_nm1, modulus)
+                rank_mod, torsion_mod = _composite_mod_uct_decomposition(
+                    r_n, t_n, t_nm1, modulus
+                )
                 return int(rank_mod), torsion_mod
         free_rank, _ = self.homology(n)
         if ring_kind == "Z":
@@ -340,7 +357,7 @@ class ChainComplex(BaseModel):
         """
         Computes a basis for the free part of the n-th cohomology group H^n(C; Z).
         Returns a list of n-cochains (vectors in C^n).
-        
+
         This finds generators of the free part via a rational complement:
         (ker d_{n+1}^T / im d_n^T) tensor Q.
         Exact torsion-sensitive quotients require the Julia backend.
@@ -349,7 +366,7 @@ class ChainComplex(BaseModel):
         """
         dn_plus_1 = self.boundaries.get(n + 1)
         dn = self.boundaries.get(n)
-        
+
         # Number of n-cells (columns of d_n or rows of d_{n+1})
         if n in self.cells:
             cn_size = self.cells[n]
@@ -358,7 +375,7 @@ class ChainComplex(BaseModel):
         elif dn_plus_1 is not None:
             cn_size = dn_plus_1.shape[0]
         else:
-            return [] # Isolated dimension
+            return []  # Isolated dimension
 
         ring_kind, p = _parse_coefficient_ring(self.coefficient_ring)
 
@@ -390,7 +407,9 @@ class ChainComplex(BaseModel):
             if julia_engine.available:
                 try:
                     if ring_kind == "Q":
-                        return julia_engine.compute_sparse_cohomology_basis(dn_plus_1, dn, cn_size=cn_size)
+                        return julia_engine.compute_sparse_cohomology_basis(
+                            dn_plus_1, dn, cn_size=cn_size
+                        )
                     return julia_engine.compute_sparse_cohomology_basis_mod_p(
                         dn_plus_1,
                         dn,
@@ -406,9 +425,14 @@ class ChainComplex(BaseModel):
             # Vector-space basis over a field.
             if dn_plus_1 is None or dn_plus_1.nnz == 0:
                 if ring_kind == "Q":
-                    null_basis = [sp.Matrix([1 if i == j else 0 for i in range(cn_size)]) for j in range(cn_size)]
+                    null_basis = [
+                        sp.Matrix([1 if i == j else 0 for i in range(cn_size)])
+                        for j in range(cn_size)
+                    ]
                 else:
-                    null_basis = [np.eye(cn_size, dtype=np.int64)[j] for j in range(cn_size)]
+                    null_basis = [
+                        np.eye(cn_size, dtype=np.int64)[j] for j in range(cn_size)
+                    ]
             else:
                 if ring_kind == "Q":
                     M = sp.Matrix(dn_plus_1.T.toarray().astype(int))
@@ -437,7 +461,11 @@ class ChainComplex(BaseModel):
                     current_mat = np.column_stack(image_basis).astype(np.int64) % int(p)
                     current_rank = _rank_mod_p(current_mat, int(p))
             else:
-                current_mat = sp.Matrix.zeros(cn_size, 0) if ring_kind == "Q" else np.zeros((cn_size, 0), dtype=np.int64)
+                current_mat = (
+                    sp.Matrix.zeros(cn_size, 0)
+                    if ring_kind == "Q"
+                    else np.zeros((cn_size, 0), dtype=np.int64)
+                )
                 current_rank = 0
 
             for v in null_basis:
@@ -466,7 +494,9 @@ class ChainComplex(BaseModel):
         if julia_engine.available:
             try:
                 # Use exact sparse linear algebra in Julia to perfectly compute Z^n / B^n
-                return julia_engine.compute_sparse_cohomology_basis(dn_plus_1, dn, cn_size=cn_size)
+                return julia_engine.compute_sparse_cohomology_basis(
+                    dn_plus_1, dn, cn_size=cn_size
+                )
             except Exception as e:
                 msg = (
                     f"Topological Hint: Julia bridge failed ({e!r}). Falling back to pure Python computation. "
@@ -477,7 +507,7 @@ class ChainComplex(BaseModel):
         # If Julia is unavailable, we dynamically attempt exact Python mathematics.
         # SymPy is used for exact integer quotients, but if it exceeds memory/time thresholds,
         # we catch the exception (or we just use an optimized float SVD fallback directly).
-        
+
         def _primitive_int_vector(vec: sp.Matrix) -> sp.Matrix:
             denoms = [sp.fraction(x)[1] for x in vec]
             common_lcm = reduce(lcm, (int(d) for d in denoms), 1) if denoms else 1
@@ -490,7 +520,10 @@ class ChainComplex(BaseModel):
 
         # 1. Z^n: Kernel of d_{n+1}^T
         if dn_plus_1 is None or dn_plus_1.nnz == 0:
-            null_basis = [sp.Matrix([1 if i == j else 0 for j in range(cn_size)]) for i in range(cn_size)]
+            null_basis = [
+                sp.Matrix([1 if i == j else 0 for j in range(cn_size)])
+                for i in range(cn_size)
+            ]
         else:
             coboundary_mat = sp.Matrix(dn_plus_1.T.toarray().astype(int))
             null_basis = [_primitive_int_vector(v) for v in coboundary_mat.nullspace()]
@@ -500,7 +533,9 @@ class ChainComplex(BaseModel):
             image_basis = []
         else:
             dn_mat = dn.T.toarray()
-            image_basis = [_primitive_int_vector(v) for v in sp.Matrix(dn_mat).columnspace()]
+            image_basis = [
+                _primitive_int_vector(v) for v in sp.Matrix(dn_mat).columnspace()
+            ]
 
         # 3. H^n = Z^n / B^n
         target_rank, _ = self.cohomology(n)
@@ -511,7 +546,7 @@ class ChainComplex(BaseModel):
         else:
             current_mat = sp.Matrix.zeros(cn_size, 0)
             current_rank = 0
-            
+
         for v in null_basis:
             if len(basis_of_quotient) >= target_rank:
                 break
@@ -521,7 +556,7 @@ class ChainComplex(BaseModel):
                 current_mat = test_mat
                 current_rank = new_rank
                 basis_of_quotient.append(v)
-        
+
         int_basis = []
         for v in basis_of_quotient:
             denominators = [sp.fraction(x)[1] for x in v]
@@ -532,13 +567,15 @@ class ChainComplex(BaseModel):
 
             int_v = np.array([int(x * common_lcm) for x in v], dtype=np.int64)
             int_basis.append(int_v)
-            
+
         return int_basis
+
 
 class CWComplex(BaseModel):
     """
     Representation of a Finite CW Complex X.
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     cells: Dict[int, int]
@@ -548,7 +585,7 @@ class CWComplex(BaseModel):
     def cellular_chain_complex(self) -> ChainComplex:
         """Convert the CW object into a `ChainComplex` view."""
         return ChainComplex(
-            boundaries=self.attaching_maps, 
+            boundaries=self.attaching_maps,
             dimensions=sorted(self.cells.keys()),
             cells=self.cells,
             coefficient_ring=self.coefficient_ring,

@@ -22,7 +22,9 @@ def arf_invariant_gf2(M: np.ndarray, q: np.ndarray) -> int:
     # Here we enforce nondegeneracy of the associated bilinear form matrix M,
     # which is the standard computational assumption for these APIs.
     if _rank_mod_2(M) != n:
-        raise DimensionError("Arf invariant is undefined for degenerate GF(2) bilinear forms.")
+        raise DimensionError(
+            "Arf invariant is undefined for degenerate GF(2) bilinear forms."
+        )
 
     basis = np.eye(n, dtype=np.int64)
     active_indices = list(range(n))
@@ -93,17 +95,19 @@ def _rank_mod_2(M: np.ndarray) -> int:
             break
     return rank
 
+
 class QuadraticForm(IntersectionForm):
     """
     A quadratic form on an abelian group, which is a refinement of a symmetric bilinear form.
-    Specifically, this models the Z/2Z refinements required for L_{4k+2} surgery obstructions 
+    Specifically, this models the Z/2Z refinements required for L_{4k+2} surgery obstructions
     and the computation of the Arf invariant.
-    
+
     Attributes
     ----------
     q_refinement : List[int]
         The quadratic mapping q: H -> Z_2 evaluated on the basis elements.
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     q_refinement: List[int]
 
@@ -112,8 +116,9 @@ class QuadraticForm(IntersectionForm):
         Compute the Arf invariant of the quadratic form.
         For a symplectic basis (e_i, f_i) where q(e_i)=a_i and q(f_i)=b_i,
         Arf(q) = sum(a_i * b_i) mod 2.
-        
+
         This assumes the underlying intersection form matrix represents a symplectic basis.
         """
-        return arf_invariant_gf2(self.matrix, np.array(self.q_refinement, dtype=np.int64))
-
+        return arf_invariant_gf2(
+            self.matrix, np.array(self.q_refinement, dtype=np.int64)
+        )

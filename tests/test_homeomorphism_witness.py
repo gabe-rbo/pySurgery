@@ -23,7 +23,9 @@ def test_build_4d_definite_homeomorphism_witness_contains_explicit_isometry_matr
     form1 = IntersectionForm(matrix=q1, dimension=4)
     form2 = IntersectionForm(matrix=np.matmul(np.matmul(u.T, q1), u), dimension=4)
 
-    res = build_4d_homeomorphism_witness(form1, form2, ks1=0, ks2=0, simply_connected=True)
+    res = build_4d_homeomorphism_witness(
+        form1, form2, ks1=0, ks2=0, simply_connected=True
+    )
     assert res.status == "success"
     assert res.witness is not None
     assert res.witness.explicit_map is not None
@@ -38,7 +40,9 @@ def test_build_4d_definite_homeomorphism_witness_finds_larger_isometry_matrix():
 
     form1 = IntersectionForm(matrix=q1, dimension=4)
     form2 = IntersectionForm(matrix=q2, dimension=4)
-    res = build_4d_homeomorphism_witness(form1, form2, ks1=0, ks2=0, simply_connected=True)
+    res = build_4d_homeomorphism_witness(
+        form1, form2, ks1=0, ks2=0, simply_connected=True
+    )
 
     assert res.status == "success"
     assert res.witness is not None
@@ -69,7 +73,10 @@ def test_build_4d_witness_accepts_external_definite_lattice_certificate():
     )
     assert res.status == "success"
     assert res.witness is not None
-    assert res.witness.certificates.get("isometry_search_mode") in {"bounded_search", "external_certificate"}
+    assert res.witness.certificates.get("isometry_search_mode") in {
+        "bounded_search",
+        "external_certificate",
+    }
 
 
 def test_build_3d_trivial_pi1_witness_uses_poincare_branch():
@@ -105,7 +112,12 @@ def test_build_3d_witness_accepts_recognition_certificate_for_nontrivial_pi1_cas
         c,
         pi1_1=pi,
         pi1_2=pi,
-        recognition_certificate={"provided": True, "source": "test", "exact": True, "validated": True},
+        recognition_certificate={
+            "provided": True,
+            "source": "test",
+            "exact": True,
+            "validated": True,
+        },
     )
     assert res.status == "success"
     assert res.witness is not None
@@ -155,7 +167,12 @@ def test_build_high_dim_witness_returns_certificate_bundle():
         normal_invariants_2=normal,
         surgery_sequence=seq,
         homotopy_equivalence_witness={"map": "f", "degree": 1},
-        homotopy_witness_hook={"provided": True, "source": "test", "exact": True, "summary": "manual hook"},
+        homotopy_witness_hook={
+            "provided": True,
+            "source": "test",
+            "exact": True,
+            "summary": "manual hook",
+        },
         homotopy_completion_certificate={
             "provided": True,
             "source": "typed",
@@ -238,7 +255,12 @@ def test_build_high_dim_witness_inconclusive_retains_phase5_metadata_on_source_r
         pi_group="Z/3",
         whitehead_group=wh,
         wall_obstruction=wall,
-        homotopy_witness_hook={"provided": True, "source": "test", "exact": False, "summary": "heuristic hook"},
+        homotopy_witness_hook={
+            "provided": True,
+            "source": "test",
+            "exact": False,
+            "summary": "heuristic hook",
+        },
     )
     assert res.status == "inconclusive"
     assert res.witness is None
@@ -255,7 +277,9 @@ def test_build_high_dim_witness_accepts_product_assembly_certificate_inputs():
         dimensions=[0, 1, 2, 3, 4, 5],
         cells={0: 1, 1: 0, 2: 0, 3: 0, 4: 0, 5: 1},
     )
-    wh = WhiteheadGroup(rank=0, description="Wh(Z_2 x Z_3)=0", computable=True, exact=True)
+    wh = WhiteheadGroup(
+        rank=0, description="Wh(Z_2 x Z_3)=0", computable=True, exact=True
+    )
     wall = ObstructionResult(
         dimension=5,
         pi="Z_2 x Z_3",
@@ -277,8 +301,18 @@ def test_build_high_dim_witness_accepts_product_assembly_certificate_inputs():
         pi_group="Z_2 x Z_3",
         whitehead_group=wh,
         wall_obstruction=wall,
-        homotopy_completion_certificate={"provided": True, "source": "test", "exact": True, "validated": True},
-        product_assembly_certificate={"provided": True, "source": "test", "exact": True, "validated": True},
+        homotopy_completion_certificate={
+            "provided": True,
+            "source": "test",
+            "exact": True,
+            "validated": True,
+        },
+        product_assembly_certificate={
+            "provided": True,
+            "source": "test",
+            "exact": True,
+            "validated": True,
+        },
     )
     assert res.status == "success"
     assert res.witness is not None
@@ -294,7 +328,9 @@ def test_build_homeomorphism_witness_dim2_dispatch_does_not_forward_3d_only_kwar
         cells={0: 1, 1: 0, 2: 1},
     )
 
-    res = build_homeomorphism_witness(c1=c, c2=c, dim=2, recognition_certificate={"provided": True})
+    res = build_homeomorphism_witness(
+        c1=c, c2=c, dim=2, recognition_certificate={"provided": True}
+    )
     assert res.status in {"success", "inconclusive"}
 
 
@@ -309,7 +345,12 @@ def test_build_homeomorphism_witness_dim3_dispatch_forwards_recognition_certific
     )
     pi = FundamentalGroup(generators=["g"], relations=[["g", "g", "g"]])
 
-    cert = {"provided": True, "source": "dispatch-test", "exact": True, "validated": True}
+    cert = {
+        "provided": True,
+        "source": "dispatch-test",
+        "exact": True,
+        "validated": True,
+    }
     res = build_homeomorphism_witness(
         c1=c,
         c2=c,

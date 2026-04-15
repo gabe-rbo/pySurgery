@@ -21,5 +21,3 @@ def test_homeomorphism_result_auto_sets_theorem_tag():
 def test_infer_theorem_tag_wall_group_ring_label():
     tag = infer_theorem_tag("Wall L-theory over group rings")
     assert tag == "highdim.wall.group_ring"
-
-

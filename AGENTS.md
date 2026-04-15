@@ -14,7 +14,8 @@
 
 ## Data-flow patterns you should preserve
 - Typical pipeline is: external data -> integration bridge -> boundary matrices/cells -> `ChainComplex` -> invariants/analyzer -> witness.
-- Example end-to-end path: `examples/12_torus_surgery.ipynb` builds point clouds, triangulates via `triangulate_surface`, runs `analyze_homeomorphism_2d_result`, then `build_homeomorphism_witness`.
+- Example end-to-end path: `examples/12_cube_surgery.ipynb` builds a small simplicial cube, triangulates via `triangulate_surface`/manual simplex trees, runs `analyze_homeomorphism_2d_result`, then `build_homeomorphism_witness`.
+- Generator-focused tutorial path: `examples/13_homology_generators_small_figures.ipynb` shows `compute_homology_basis_from_simplex_tree` and `compute_optimal_h1_basis_from_simplex_tree` on tiny complexes with explicit `HomologyGenerator` outputs.
 - High-dimensional analyzers accumulate a decision DAG and typed certificates; preserve certificate fields when refactoring (`decision_dag`, homotopy/product certificates in `homeomorphism.py`).
 
 ## Exactness and status conventions (project-specific)
@@ -41,4 +42,3 @@
 - Prefer adding new theorem/certificate behavior through typed dataclasses and normalization helpers, then wire through both analyzer and witness layers.
 - Mirror existing test style: lightweight synthetic `ChainComplex` fixtures with sparse matrices to pin theorem-branch behavior.
 - When changing integration bridges, add tests for both accelerated and fallback paths (monkeypatch `julia_engine.available` / optional dependency flags).
-

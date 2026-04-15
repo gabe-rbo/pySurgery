@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 
-from pysurgery.integrations.lean_export import generate_lean_isomorphism_certificate, run_lean_check
+from pysurgery.integrations.lean_export import (
+    generate_lean_isomorphism_certificate,
+    run_lean_check,
+)
 
 
 def test_lean_export_uses_decide_for_small_matrices():
@@ -44,7 +47,9 @@ def test_lean_export_rejects_invalid_theorem_name():
 
 
 def test_run_lean_check_unavailable_executable():
-    res = run_lean_check("theorem t : True := by trivial", lean_cmd="lean-does-not-exist")
+    res = run_lean_check(
+        "theorem t : True := by trivial", lean_cmd="lean-does-not-exist"
+    )
     assert not res.available
     assert not res.success
     assert res.exit_code == 127
@@ -56,5 +61,3 @@ def test_run_lean_check_on_generated_code_returns_structured_result():
     res = run_lean_check(code, lean_cmd="lean-does-not-exist")
     assert hasattr(res, "available")
     assert hasattr(res, "stderr")
-
-

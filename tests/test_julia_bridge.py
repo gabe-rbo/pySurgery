@@ -16,6 +16,7 @@ def test_julia_bridge_require_julia_behavior():
         julia_engine.require_julia()
     else:
         from pysurgery.core.exceptions import SurgeryError
+
         with pytest.raises(SurgeryError):
             julia_engine.require_julia()
 
@@ -42,13 +43,19 @@ def test_julia_bridge_warmup_full_executes_and_caches(monkeypatch):
     calls = {"minimal": 0, "full": 0}
 
     def _minimal_workloads():
-        return [("min_probe", lambda: calls.__setitem__("minimal", calls["minimal"] + 1))]
+        return [
+            ("min_probe", lambda: calls.__setitem__("minimal", calls["minimal"] + 1))
+        ]
 
     def _full_workloads():
         return [("full_probe", lambda: calls.__setitem__("full", calls["full"] + 1))]
 
-    monkeypatch.setattr(julia_engine, "_minimal_warmup_workloads", _minimal_workloads, raising=False)
-    monkeypatch.setattr(julia_engine, "_full_warmup_workloads", _full_workloads, raising=False)
+    monkeypatch.setattr(
+        julia_engine, "_minimal_warmup_workloads", _minimal_workloads, raising=False
+    )
+    monkeypatch.setattr(
+        julia_engine, "_full_warmup_workloads", _full_workloads, raising=False
+    )
 
     report_first = julia_engine.warmup()
     report_second = julia_engine.warmup()
@@ -59,5 +66,3 @@ def test_julia_bridge_warmup_full_executes_and_caches(monkeypatch):
     assert report_first["mode"] == "full"
     assert report_first["cached"] is False
     assert report_second["cached"] is True
-
-

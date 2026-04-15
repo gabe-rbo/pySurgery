@@ -5,17 +5,18 @@ import importlib.util
 
 HAS_TORCH = importlib.util.find_spec("torch") is not None
 
+
 def pyg_to_cw_complex(data) -> CWComplex:
     """
     Converts a PyTorch Geometric (PyG) Graph Data object into a 1-dimensional CW Complex.
-    This enables topological surgery analysis on graph data structures, computing 
+    This enables topological surgery analysis on graph data structures, computing
     homology and identifying fundamental cycles for graph simplification.
-    
+
     Parameters
     ----------
     data : torch_geometric.data.Data
         A PyG Data object.
-        
+
     Returns
     -------
     CWComplex
@@ -24,7 +25,7 @@ def pyg_to_cw_complex(data) -> CWComplex:
     if not HAS_TORCH:
         raise ImportError("PyTorch is required. Install via 'pip install torch'.")
 
-    if not hasattr(data, 'edge_index'):
+    if not hasattr(data, "edge_index"):
         raise TypeError("Input must have an 'edge_index' attribute (like PyG Data).")
 
     n_vertices = data.num_nodes
@@ -35,7 +36,7 @@ def pyg_to_cw_complex(data) -> CWComplex:
     # We treat the graph as an undirected graph, but boundary matrices require orientation.
     # PyG edge_index usually contains both (u, v) and (v, u) for undirected graphs.
     # We will filter to only include edges where u < v to define a canonical orientation.
-    
+
     mask = edge_index[0, :] < edge_index[1, :]
     unique_edges = edge_index[:, mask]
     n_edges = unique_edges.shape[1]
@@ -44,7 +45,7 @@ def pyg_to_cw_complex(data) -> CWComplex:
         u, v = int(unique_edges[0, j]), int(unique_edges[1, j])
         edge_to_idx[(u, v)] = j
 
-    has_faces = hasattr(data, 'face') and data.face is not None
+    has_faces = hasattr(data, "face") and data.face is not None
     face_obj = data.face if has_faces else None
     n_faces = int(face_obj.shape[1]) if has_faces else 0
 
@@ -56,20 +57,24 @@ def pyg_to_cw_complex(data) -> CWComplex:
     d1_rows = []
     d1_cols = []
     d1_data = []
-    
+
     for j in range(n_edges):
         u, v = unique_edges[0, j], unique_edges[1, j]
         # Boundary of oriented edge (u, v) is v - u
         d1_rows.extend([u, v])
         d1_cols.extend([j, j])
         d1_data.extend([-1, 1])
-        
-    d1 = sp.csr_matrix((d1_data, (d1_rows, d1_cols)), shape=(n_vertices, n_edges), dtype=np.int64)
-    
+
+    d1 = sp.csr_matrix(
+        (d1_data, (d1_rows, d1_cols)), shape=(n_vertices, n_edges), dtype=np.int64
+    )
+
     attaching_maps = {1: d1}
 
     if n_faces > 0:
-        face_arr = face_obj.cpu().numpy() if hasattr(face_obj, "cpu") else np.asarray(face_obj)
+        face_arr = (
+            face_obj.cpu().numpy() if hasattr(face_obj, "cpu") else np.asarray(face_obj)
+        )
         if face_arr.ndim != 2 or face_arr.shape[0] < 3:
             raise ValueError("face must have shape [k, F] with k >= 3.")
 
@@ -92,10 +97,14 @@ def pyg_to_cw_complex(data) -> CWComplex:
                 d2_cols.append(j)
                 d2_data.append(sign)
 
-        d2 = sp.csr_matrix((d2_data, (d2_rows, d2_cols)), shape=(n_edges, n_faces), dtype=np.int64)
+        d2 = sp.csr_matrix(
+            (d2_data, (d2_rows, d2_cols)), shape=(n_edges, n_faces), dtype=np.int64
+        )
         boundary_check = d1 @ d2
         if boundary_check.nnz > 0 and np.any(boundary_check.data != 0):
-            raise ValueError("Invalid face orientation: boundary operator d_1 o d_2 != 0.")
+            raise ValueError(
+                "Invalid face orientation: boundary operator d_1 o d_2 != 0."
+            )
         attaching_maps[2] = d2
 
     return CWComplex(cells=cells, attaching_maps=attaching_maps)

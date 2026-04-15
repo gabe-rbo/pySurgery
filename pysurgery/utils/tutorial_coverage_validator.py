@@ -14,7 +14,9 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-def validate_tutorial_coverage(coverage_path: str | Path, workspace_root: str | Path) -> list[str]:
+def validate_tutorial_coverage(
+    coverage_path: str | Path, workspace_root: str | Path
+) -> list[str]:
     coverage_file = Path(coverage_path)
     root = Path(workspace_root)
     errors: list[str] = []
@@ -64,7 +66,9 @@ def validate_tutorial_coverage(coverage_path: str | Path, workspace_root: str | 
             errors.append(f"Item '{item_id}' must define a non-empty notebooks list.")
             continue
         if not isinstance(snippets, list) or not snippets:
-            errors.append(f"Item '{item_id}' must define a non-empty required_snippets list.")
+            errors.append(
+                f"Item '{item_id}' must define a non-empty required_snippets list."
+            )
             continue
 
         notebook_texts: list[str] = []
@@ -81,13 +85,16 @@ def validate_tutorial_coverage(coverage_path: str | Path, workspace_root: str | 
         for snippet in snippets:
             s = str(snippet)
             if not any(s in t for t in notebook_texts):
-                errors.append(f"Item '{item_id}' missing snippet '{s}' in referenced notebooks.")
+                errors.append(
+                    f"Item '{item_id}' missing snippet '{s}' in referenced notebooks."
+                )
 
     required_theorem_tags = {entry.theorem_tag for entry in COVERAGE_MATRIX}
     uncovered_theorems = sorted(required_theorem_tags - theorem_targets)
     if uncovered_theorems:
         errors.append(
-            "Tutorial coverage is missing theorem-tag entries for: " + ", ".join(uncovered_theorems)
+            "Tutorial coverage is missing theorem-tag entries for: "
+            + ", ".join(uncovered_theorems)
         )
 
     return errors
@@ -107,4 +114,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -26,7 +26,9 @@ def test_extract_pi1_with_traces_circle_has_data_grounded_generator():
 def test_extract_pi1_with_traces_disc_simplifies_killed_generator():
     d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
     d2 = sp.csr_matrix(np.array([[1]], dtype=np.int64))
-    cw = CWComplex(attaching_maps={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1})
+    cw = CWComplex(
+        attaching_maps={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1}
+    )
 
     out = extract_pi_1_with_traces(cw, simplify=True, generator_mode="optimized")
     assert out.generators == []
@@ -40,7 +42,9 @@ def test_extract_pi1_with_traces_disc_simplifies_killed_generator():
 def test_extract_pi1_with_traces_raw_mode_keeps_all_generators():
     d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
     d2 = sp.csr_matrix(np.array([[1]], dtype=np.int64))
-    cw = CWComplex(attaching_maps={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1})
+    cw = CWComplex(
+        attaching_maps={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1}
+    )
 
     out = extract_pi_1_with_traces(cw, simplify=True, generator_mode="raw")
     assert out.generators == ["g_0"]
@@ -55,7 +59,9 @@ def test_extract_pi1_with_traces_raw_mode_keeps_all_generators():
 def test_extract_pi1_raw_fundamental_group_mode_matches_traces():
     d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
     d2 = sp.csr_matrix(np.array([[1]], dtype=np.int64))
-    cw = CWComplex(attaching_maps={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1})
+    cw = CWComplex(
+        attaching_maps={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1}
+    )
 
     pi1 = extract_pi_1(cw, simplify=True, generator_mode="raw")
     assert pi1.generators == ["g_0"]
@@ -89,7 +95,9 @@ def test_compute_optimal_h1_basis_from_simplices_filled_triangle_rank_zero():
     assert res.generators == []
 
 
-def test_compute_optimal_h1_basis_from_simplices_julia_path_handles_square_cycle(monkeypatch):
+def test_compute_optimal_h1_basis_from_simplices_julia_path_handles_square_cycle(
+    monkeypatch,
+):
     simplices = [
         (0, 1),
         (1, 2),
@@ -104,7 +112,12 @@ def test_compute_optimal_h1_basis_from_simplices_julia_path_handles_square_cycle
         assert args[1] == 4
         return [[(0, 1), (1, 2), (2, 3), (0, 3)]]
 
-    monkeypatch.setattr(julia_engine, "compute_optimal_h1_basis_from_simplices", _fake_julia_optimal, raising=False)
+    monkeypatch.setattr(
+        julia_engine,
+        "compute_optimal_h1_basis_from_simplices",
+        _fake_julia_optimal,
+        raising=False,
+    )
 
     res = compute_optimal_h1_basis_from_simplices(simplices, num_vertices=4)
     assert res.dimension == 1
@@ -128,7 +141,9 @@ def test_compute_optimal_h1_basis_python_fallback_when_julia_unavailable(monkeyp
     assert "Python backend" in res.message
 
 
-def test_compute_optimal_h1_basis_from_simplices_julia_empty_result_does_not_fallback(monkeypatch):
+def test_compute_optimal_h1_basis_from_simplices_julia_empty_result_does_not_fallback(
+    monkeypatch,
+):
     simplices = [
         (0, 1),
         (1, 2),
@@ -145,10 +160,17 @@ def test_compute_optimal_h1_basis_from_simplices_julia_empty_result_does_not_fal
     )
 
     def _unexpected_fallback(*args, **kwargs):
-        raise AssertionError("Python fallback should not run when Julia returns an empty basis")
+        raise AssertionError(
+            "Python fallback should not run when Julia returns an empty basis"
+        )
 
-    monkeypatch.setattr("pysurgery.core.homology_generators.generator_cycles_from_simplices", _unexpected_fallback)
-    monkeypatch.setattr("pysurgery.core.homology_generators.greedy_h1_basis", _unexpected_fallback)
+    monkeypatch.setattr(
+        "pysurgery.core.homology_generators.generator_cycles_from_simplices",
+        _unexpected_fallback,
+    )
+    monkeypatch.setattr(
+        "pysurgery.core.homology_generators.greedy_h1_basis", _unexpected_fallback
+    )
 
     res = compute_optimal_h1_basis_from_simplices(simplices, num_vertices=3)
     assert res.dimension == 1
@@ -205,7 +227,9 @@ def test_compute_h2_generators_optimal_mode_metadata():
         (0, 2, 3),
         (1, 2, 3),
     ]
-    res = compute_homology_basis_from_simplices(simplices, num_vertices=4, dimension=2, mode="optimal")
+    res = compute_homology_basis_from_simplices(
+        simplices, num_vertices=4, dimension=2, mode="optimal"
+    )
     assert res.rank == 1
     assert res.optimal is True
 
@@ -218,9 +242,9 @@ def test_compute_h1_generators_valid_mode_works_when_julia_unavailable(monkeypat
         (0, 3),
     ]
     monkeypatch.setattr(julia_engine, "available", False, raising=False)
-    res = compute_homology_basis_from_simplices(simplices, num_vertices=4, dimension=1, mode="valid")
+    res = compute_homology_basis_from_simplices(
+        simplices, num_vertices=4, dimension=1, mode="valid"
+    )
     assert res.dimension == 1
     assert res.rank >= 1
     assert all(g.dimension == 1 for g in res.generators)
-
-

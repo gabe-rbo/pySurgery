@@ -8,13 +8,15 @@ from .exact_algebra import normalize_word_token
 from .generator_models import Pi1GeneratorTrace, Pi1PresentationWithTraces
 from ..bridge.julia_bridge import julia_engine
 
+
 class FundamentalGroup(BaseModel):
     """
     Representation of the Fundamental Group pi_1(X) of a CW Complex.
     Uses the Edge-Path Group algorithm.
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    
+
     generators: List[str]
     relations: List[List[str]]
 
@@ -74,7 +76,9 @@ def _canonicalize_cyclic_word(word: List[str]) -> List[str]:
     return best if best is not None else []
 
 
-def _normalize_pi1_mode(generator_mode: str = "optimized", mode: str | None = None) -> str:
+def _normalize_pi1_mode(
+    generator_mode: str = "optimized", mode: str | None = None
+) -> str:
     """Normalize/validate the user-facing pi1 generator mode selector."""
     chosen = mode if mode is not None else generator_mode
     chosen = str(chosen).strip().lower()
@@ -111,7 +115,9 @@ def _normalize_relations(relations: List[List[str]]) -> List[List[str]]:
     return dedup
 
 
-def _kill_singleton_generators(generators: List[str], relations: List[List[str]]) -> tuple[List[str], List[List[str]], set[str]]:
+def _kill_singleton_generators(
+    generators: List[str], relations: List[List[str]]
+) -> tuple[List[str], List[List[str]], set[str]]:
     """Eliminate generators forced to identity by singleton relators."""
     kill = {_token_base(r[0]) for r in relations if len(r) == 1}
     if not kill:
@@ -129,7 +135,9 @@ def _solve_generator_from_relator(relator: List[str], idx: int) -> List[str]:
     return _free_reduce(rest if tok.endswith("^-1") else _inverse_word(rest))
 
 
-def _substitute_generator_word(relator: List[str], target: str, rhs: List[str]) -> List[str]:
+def _substitute_generator_word(
+    relator: List[str], target: str, rhs: List[str]
+) -> List[str]:
     """Substitute a generator by a solved word in one relator."""
     out: List[str] = []
     inv_rhs = _inverse_word(rhs)
@@ -142,7 +150,9 @@ def _substitute_generator_word(relator: List[str], target: str, rhs: List[str]) 
     return out
 
 
-def _find_substitution_move(generators: List[str], relations: List[List[str]]) -> tuple[str, int, List[str]] | None:
+def _find_substitution_move(
+    generators: List[str], relations: List[List[str]]
+) -> tuple[str, int, List[str]] | None:
     """Find a deterministic one-occurrence substitution candidate.
 
     Returns a tuple `(generator, defining_relator_index, replacement_word)`.
@@ -157,7 +167,9 @@ def _find_substitution_move(generators: List[str], relations: List[List[str]]) -
     return None
 
 
-def simplify_presentation(generators: List[str], relations: List[List[str]]) -> FundamentalGroup:
+def simplify_presentation(
+    generators: List[str], relations: List[List[str]]
+) -> FundamentalGroup:
     """Simplify a finitely presented group using a deterministic Tietze-lite loop.
 
     Args:
@@ -210,7 +222,9 @@ def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
     This intentionally avoids heuristic/non-abelian guesses and only certifies
     descriptors from simplified one-generator presentations.
     """
-    simplified = simplify_presentation(list(pi1.generators), [list(rel) for rel in pi1.relations])
+    simplified = simplify_presentation(
+        list(pi1.generators), [list(rel) for rel in pi1.relations]
+    )
     gens = list(simplified.generators)
     rels = [list(rel) for rel in simplified.relations]
 
@@ -220,7 +234,9 @@ def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
         # Attempt a certified finitely-generated abelian descriptor when all
         # pairwise commutators are explicitly present in the presentation.
         pair_comm = {
-            tuple(sorted((gens[i], gens[j]))): _canonicalize_cyclic_word([gens[i], gens[j], f"{gens[i]}^-1", f"{gens[j]}^-1"])
+            tuple(sorted((gens[i], gens[j]))): _canonicalize_cyclic_word(
+                [gens[i], gens[j], f"{gens[i]}^-1", f"{gens[j]}^-1"]
+            )
             for i in range(len(gens))
             for j in range(i + 1, len(gens))
         }
@@ -525,11 +541,20 @@ def _pi1_raw_data_python(cw: CWComplex):
                         edge_index=int(tr["edge_index"]),
                         component_root=int(tr["component_root"]),
                         vertex_path=[int(x) for x in tr["vertex_path"]],
-                        directed_edge_path=[(int(a), int(b)) for a, b in tr["directed_edge_path"]],
-                        undirected_edge_path=[(int(a), int(b)) for a, b in tr["undirected_edge_path"]],
+                        directed_edge_path=[
+                            (int(a), int(b)) for a, b in tr["directed_edge_path"]
+                        ],
+                        undirected_edge_path=[
+                            (int(a), int(b)) for a, b in tr["undirected_edge_path"]
+                        ],
                     )
                 )
-            return raw_gen_map, relations, traces, {"generator_mode": "raw", "backend_used": "julia"}
+            return (
+                raw_gen_map,
+                relations,
+                traces,
+                {"generator_mode": "raw", "backend_used": "julia"},
+            )
         except Exception:
             pass
 
@@ -562,11 +587,18 @@ def _pi1_raw_data_python(cw: CWComplex):
                 component_root=int(comp_root),
                 vertex_path=[int(x) for x in vertex_path],
                 directed_edge_path=[(int(a), int(b)) for a, b in directed],
-                undirected_edge_path=[tuple(sorted((int(a), int(b)))) for a, b in directed],
+                undirected_edge_path=[
+                    tuple(sorted((int(a), int(b)))) for a, b in directed
+                ],
             )
         )
 
-    return raw_gen_map, relations, traces, {"generator_mode": "raw", "backend_used": "python"}
+    return (
+        raw_gen_map,
+        relations,
+        traces,
+        {"generator_mode": "raw", "backend_used": "python"},
+    )
 
 
 def extract_pi_1_with_traces(
@@ -607,7 +639,9 @@ def extract_pi_1_with_traces(
             reduced_generator_count=0,
         )
 
-    raw_pi = FundamentalGroup(generators=list(raw_generators.values()), relations=[list(r) for r in relations])
+    raw_pi = FundamentalGroup(
+        generators=list(raw_generators.values()), relations=[list(r) for r in relations]
+    )
     if actual_mode == "raw" or not simplify:
         return Pi1PresentationWithTraces(
             generators=list(raw_pi.generators),
@@ -621,7 +655,9 @@ def extract_pi_1_with_traces(
             reduced_generator_count=len(raw_pi.generators),
         )
 
-    out_pi = simplify_presentation(list(raw_pi.generators), [list(r) for r in raw_pi.relations])
+    out_pi = simplify_presentation(
+        list(raw_pi.generators), [list(r) for r in raw_pi.relations]
+    )
     keep = set(out_pi.generators)
     filtered_traces = [tr for tr in traces if tr.generator in keep]
     return Pi1PresentationWithTraces(
@@ -635,6 +671,7 @@ def extract_pi_1_with_traces(
         optimized_generator_count=len(out_pi.generators),
         reduced_generator_count=len(out_pi.generators),
     )
+
 
 def extract_pi_1(
     cw: CWComplex,
@@ -656,6 +693,10 @@ def extract_pi_1(
     Returns:
         A `FundamentalGroup` presentation (`generators`, `relations`).
     """
-    traces = extract_pi_1_with_traces(cw, simplify=simplify, generator_mode=generator_mode, mode=mode)
-    return FundamentalGroup(generators=list(traces.generators), relations=[list(r) for r in traces.relations])
-
+    traces = extract_pi_1_with_traces(
+        cw, simplify=simplify, generator_mode=generator_mode, mode=mode
+    )
+    return FundamentalGroup(
+        generators=list(traces.generators),
+        relations=[list(r) for r in traces.relations],
+    )

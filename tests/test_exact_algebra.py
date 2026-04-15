@@ -1,7 +1,11 @@
 import numpy as np
 import pytest
 
-from pysurgery.core.exact_algebra import coerce_int_matrix, normalize_word_token, validate_group_descriptor
+from pysurgery.core.exact_algebra import (
+    coerce_int_matrix,
+    normalize_word_token,
+    validate_group_descriptor,
+)
 
 
 def test_coerce_int_matrix_accepts_integer_valued_float_entries():
@@ -26,4 +30,3 @@ def test_validate_group_descriptor_recognizes_supported_forms():
     assert validate_group_descriptor("Z_7")[0]
     assert validate_group_descriptor("Z x Z_3")[0]
     assert not validate_group_descriptor("PSL_2(7)")[0]
-

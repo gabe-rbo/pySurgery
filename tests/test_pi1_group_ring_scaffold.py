@@ -23,5 +23,3 @@ def test_phase2_readiness_accepts_supported_product_descriptor():
     assert readiness.ready
     assert readiness.group_ring_context is not None
     assert readiness.group_ring_context.family == "product"
-
-

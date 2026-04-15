@@ -63,4 +63,3 @@ def validate_group_descriptor(descriptor: str) -> tuple[bool, str]:
         return False, "Finite cyclic descriptors must be of the form Z_n with n>1"
 
     return False, "Unsupported descriptor grammar"
-

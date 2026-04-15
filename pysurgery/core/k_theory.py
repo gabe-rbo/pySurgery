@@ -6,6 +6,7 @@ from sympy.matrices.normalforms import smith_normal_form
 from .fundamental_group import FundamentalGroup, infer_standard_group_descriptor
 from ..bridge.julia_bridge import julia_engine
 
+
 def euler_totient(n):
     """Compute Euler's totient function φ(n) by prime-factor stripping."""
     result = n
@@ -70,19 +71,22 @@ def _abelianization_from_snf(pi1: FundamentalGroup) -> tuple[int, list[int]]:
     torsion = [d for d in diag if d > 1]
     return free_rank, torsion
 
+
 class WhiteheadGroup(BaseModel):
     """
     Representation of the Whitehead group Wh(pi_1) = K_1(Z[pi_1]) / (+- pi_1).
     Used as the obstruction to the s-Cobordism theorem.
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    
+
     rank: int
     description: str
     computable: bool = True
     exact: bool = True
     assumptions: List[str] = Field(default_factory=list)
     method: str = ""
+
 
 def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
     """
@@ -147,7 +151,9 @@ def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
 
     try:
         if julia_engine.available:
-            free_rank, torsions = julia_engine.abelianize_and_bhs_rank(pi1.generators, pi1.relations)
+            free_rank, torsions = julia_engine.abelianize_and_bhs_rank(
+                pi1.generators, pi1.relations
+            )
         else:
             free_rank, torsions = _abelianization_from_snf(pi1)
 
@@ -159,7 +165,10 @@ def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
                 description=f"Abelianization is free Z^{free_rank}. Assuming Farrell-Jones, Wh(pi_1) = 0. No s-Cobordism obstruction.",
                 computable=True,
                 exact=False,
-                assumptions=["Farrell-Jones conjecture input", "Wh inferred from abelianization class only"],
+                assumptions=[
+                    "Farrell-Jones conjecture input",
+                    "Wh inferred from abelianization class only",
+                ],
                 method="abelianization_plus_theorem_assumption",
             )
 
@@ -169,14 +178,17 @@ def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
             if n > 1:
                 rank_n = cyclic_whitehead_rank(int(n))
                 total_rank += max(0, rank_n)
-                
+
         if total_rank == 0:
             return WhiteheadGroup(
                 rank=0,
                 description="Wh(pi_1) evaluates to rank 0. No free s-Cobordism obstruction.",
                 computable=True,
                 exact=False,
-                assumptions=["Modeled from cyclic torsion factors in abelianization", "Not a full non-abelian Wh solver"],
+                assumptions=[
+                    "Modeled from cyclic torsion factors in abelianization",
+                    "Not a full non-abelian Wh solver",
+                ],
                 method="cyclic_factor_formula",
             )
         else:
@@ -185,7 +197,10 @@ def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
                 description=f"Wh(pi_1) contains free abelian parts of rank >= {total_rank}. Torsion obstruction definitively exists for s-Cobordism.",
                 computable=True,
                 exact=False,
-                assumptions=["Modeled from cyclic torsion factors in abelianization", "Not a full non-abelian Wh solver"],
+                assumptions=[
+                    "Modeled from cyclic torsion factors in abelianization",
+                    "Not a full non-abelian Wh solver",
+                ],
                 method="cyclic_factor_formula",
             )
 

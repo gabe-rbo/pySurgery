@@ -4,13 +4,14 @@ from itertools import combinations
 from typing import Dict, List, Tuple
 from ..bridge.julia_bridge import julia_engine
 
+
 def _numpy_alexander_whitney_cup(
-    alpha: np.ndarray, 
-    beta: np.ndarray, 
-    p: int, 
-    q: int, 
-    simplices: np.ndarray, 
-    p_simplex_to_idx: Dict[Tuple[int, ...], int], 
+    alpha: np.ndarray,
+    beta: np.ndarray,
+    p: int,
+    q: int,
+    simplices: np.ndarray,
+    p_simplex_to_idx: Dict[Tuple[int, ...], int],
     q_simplex_to_idx: Dict[Tuple[int, ...], int],
     modulus: int | None = None,
 ) -> np.ndarray:
@@ -20,19 +21,19 @@ def _numpy_alexander_whitney_cup(
     """
     n_simplices = len(simplices)
     result = np.zeros(n_simplices, dtype=np.int64)
-    
+
     # We must iterate to query the dictionary, but we can do it efficiently
-    # A true Numba JIT implementation would use typed dicts, but this is a 
+    # A true Numba JIT implementation would use typed dicts, but this is a
     # highly optimized Python fallback.
     for i in range(n_simplices):
         simplex = simplices[i]
-        
-        front_face = tuple(simplex[:p+1])
+
+        front_face = tuple(simplex[: p + 1])
         back_face = tuple(simplex[p:])
-        
+
         idx_p = p_simplex_to_idx.get(front_face, -1)
         idx_q = q_simplex_to_idx.get(back_face, -1)
-        
+
         if idx_p != -1 and idx_q != -1:
             result[i] = alpha[idx_p] * beta[idx_q]
             if modulus is not None:
@@ -107,13 +108,14 @@ def cup_i_product(
         result[idx] = total
     return result
 
+
 def alexander_whitney_cup(
-    alpha: np.ndarray, 
-    beta: np.ndarray, 
-    p: int, 
-    q: int, 
-    simplices_p_plus_q: List[Tuple[int, ...]], 
-    simplex_to_idx_p: Dict[Tuple[int, ...], int], 
+    alpha: np.ndarray,
+    beta: np.ndarray,
+    p: int,
+    q: int,
+    simplices_p_plus_q: List[Tuple[int, ...]],
+    simplex_to_idx_p: Dict[Tuple[int, ...], int],
     simplex_to_idx_q: Dict[Tuple[int, ...], int],
     i: int = 0,
     modulus: int | None = None,
@@ -121,11 +123,11 @@ def alexander_whitney_cup(
     """
     Computes the Alexander-Whitney cup product of a p-cochain alpha and a q-cochain beta.
     The result is a (p+q)-cochain.
-    
+
     Formula: (alpha U beta)([v_0, ..., v_{p+q}]) = alpha([v_0, ..., v_p]) * beta([v_p, ..., v_{p+q}])
-    
+
     Uses Julia backend acceleration when available, with a pure-Python fallback.
-    
+
     Parameters
     ----------
     alpha : np.ndarray
@@ -142,7 +144,7 @@ def alexander_whitney_cup(
         Mapping from a p-simplex tuple to its index in the alpha cochain vector.
     simplex_to_idx_q : Dict[Tuple[int, ...], int]
         Mapping from a q-simplex tuple to its index in the beta cochain vector.
-        
+
     Returns
     -------
     np.ndarray
@@ -152,18 +154,25 @@ def alexander_whitney_cup(
     # This prevents object-overhead in memory when dealing with millions of simplices.
     if len(simplices_p_plus_q) == 0:
         return np.zeros(0, dtype=np.int64)
-    
+
     if i == 0 and julia_engine.available:
         try:
             return julia_engine.compute_alexander_whitney_cup(
-                alpha, beta, p, q, simplices_p_plus_q, simplex_to_idx_p, simplex_to_idx_q, modulus=modulus
+                alpha,
+                beta,
+                p,
+                q,
+                simplices_p_plus_q,
+                simplex_to_idx_p,
+                simplex_to_idx_q,
+                modulus=modulus,
             )
         except Exception as e:
             warnings.warn(
                 f"Topological Hint: Julia cup product acceleration failed ({e!r}). "
                 "Falling back to slower pure-Python evaluation."
             )
-        
+
     # Standardize input for fast memory layout
     simplices_arr = np.array(simplices_p_plus_q, dtype=np.int64)
     if i == 0:
@@ -188,4 +197,3 @@ def alexander_whitney_cup(
         simplex_to_idx_q,
         modulus=modulus,
     )
-

@@ -2,9 +2,11 @@ import pytest
 from pysurgery.core.group_rings import GroupRingElement
 from pysurgery.core.exceptions import GroupRingError
 
+
 def test_group_ring_init():
     el = GroupRingElement({"e": 1, "g_1": -2}, group_order=5)
     assert el.coeffs == {"1": 1, "g_1": -2}
+
 
 def test_group_ring_add():
     el1 = GroupRingElement({"e": 1, "g_1": -2}, group_order=5)
@@ -12,17 +14,20 @@ def test_group_ring_add():
     res = el1 + el2
     assert res.coeffs == {"g_1": 1, "g_2": 1}
 
+
 def test_group_ring_add_mismatch():
     el1 = GroupRingElement({"e": 1}, group_order=5)
     el2 = GroupRingElement({"e": 1}, group_order=3)
     with pytest.raises(GroupRingError):
         _ = el1 + el2
 
+
 def test_group_ring_involution():
     el = GroupRingElement({"e": 1, "g_1": 2, "g_2": 3}, group_order=5)
     inv = el.involution()
     # (g_1)^-1 = g_4, (g_2)^-1 = g_3
     assert inv.coeffs == {"1": 1, "g_4": 2, "g_3": 3}
+
 
 def test_group_ring_involution_standard():
     el = GroupRingElement({"e": 1, "g1": 2, "g2": 3}, group_order=5)
@@ -33,6 +38,7 @@ def test_group_ring_involution_standard():
 def test_group_ring_multiply_python_fallback_cyclic(monkeypatch):
     # Uses pure Python fallback when Julia is unavailable; still valid when Julia is available.
     from pysurgery.core import group_rings as gr
+
     monkeypatch.setattr(gr.julia_engine, "available", False)
     a = GroupRingElement({"1": 1, "g_1": 2}, group_order=5)
     b = GroupRingElement({"1": 3, "g_2": 1}, group_order=5)
@@ -47,6 +53,7 @@ def test_group_ring_multiply_python_fallback_cyclic(monkeypatch):
 def test_group_ring_mixed_identity_spellings_normalize():
     el = GroupRingElement({"e": 1, "1": 2, "g0": 3, "g_0": 4}, group_order=7)
     assert el.coeffs == {"1": 10}
+
 
 def test_group_ring_involution_non_cyclic():
     el = GroupRingElement({"a": 1, "b": 2}, group_order=None)
@@ -63,11 +70,24 @@ def test_group_ring_involution_non_cyclic_with_group_order_still_requires_struct
 def test_group_ring_generic_group_law_noncyclic():
     # Klein four group V4 = {1,a,b,c}, where a^2=b^2=c^2=1 and ab=c, bc=a, ca=b.
     table = {
-        ("1", "1"): "1", ("1", "a"): "a", ("1", "b"): "b", ("1", "c"): "c",
-        ("a", "1"): "a", ("a", "a"): "1", ("a", "b"): "c", ("a", "c"): "b",
-        ("b", "1"): "b", ("b", "a"): "c", ("b", "b"): "1", ("b", "c"): "a",
-        ("c", "1"): "c", ("c", "a"): "b", ("c", "b"): "a", ("c", "c"): "1",
+        ("1", "1"): "1",
+        ("1", "a"): "a",
+        ("1", "b"): "b",
+        ("1", "c"): "c",
+        ("a", "1"): "a",
+        ("a", "a"): "1",
+        ("a", "b"): "c",
+        ("a", "c"): "b",
+        ("b", "1"): "b",
+        ("b", "a"): "c",
+        ("b", "b"): "1",
+        ("b", "c"): "a",
+        ("c", "1"): "c",
+        ("c", "a"): "b",
+        ("c", "b"): "a",
+        ("c", "c"): "1",
     }
+
     def law(x, y):
         return table[(x, y)]
 
@@ -80,12 +100,13 @@ def test_group_ring_generic_group_law_noncyclic():
 
 def test_group_ring_generic_involution_callback():
     inv = {"1": "1", "a": "a", "b": "b", "c": "c"}
+
     def inv_law(g):
         return inv[g]
 
     def law(x, y):
         return x if y == "1" else y if x == "1" else "1"
+
     el = GroupRingElement({"a": 2, "1": 1}, group_law=law, inverse_law=inv_law)
     bar = el.involution()
     assert bar.coeffs == {"a": 2, "1": 1}
-

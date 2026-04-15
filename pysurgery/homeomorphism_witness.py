@@ -136,7 +136,9 @@ def _build_from_result(
     )
 
 
-def _obstruction_state_payload(obstruction: ObstructionResult | None) -> dict[str, object]:
+def _obstruction_state_payload(
+    obstruction: ObstructionResult | None,
+) -> dict[str, object]:
     if obstruction is None:
         return {
             "available": False,
@@ -258,7 +260,9 @@ def build_4d_homeomorphism_witness(
     ks2: int | None = None,
     *,
     simply_connected: bool | None = None,
-    definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate | dict | None = None,
+    definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate
+    | dict
+    | None = None,
 ) -> HomeomorphismWitnessResult:
     result = analyze_homeomorphism_4d_result(
         m1,
@@ -270,7 +274,9 @@ def build_4d_homeomorphism_witness(
     )
     if result.status != "success" or result.is_homeomorphic is not True:
         mapped_status: Literal["inconclusive", "surgery_required"] = (
-            "surgery_required" if result.status == "surgery_required" else "inconclusive"
+            "surgery_required"
+            if result.status == "surgery_required"
+            else "inconclusive"
         )
         return HomeomorphismWitnessResult(
             status=mapped_status,
@@ -289,23 +295,29 @@ def build_4d_homeomorphism_witness(
     if np.array_equal(q1, q2):
         explicit_map = np.eye(q1.shape[0], dtype=np.int64)
     elif result.certificates.get("isometry_matrix") is not None:
-        explicit_map = np.asarray(result.certificates.get("isometry_matrix"), dtype=np.int64)
+        explicit_map = np.asarray(
+            result.certificates.get("isometry_matrix"), dtype=np.int64
+        )
     elif not m1.is_indefinite():
         explicit_map = _search_integer_isometry(q1, q2, max_entry=2)
         if explicit_map is None and q1.shape[0] <= 3:
             explicit_map = _search_integer_isometry(q1, q2, max_entry=3)
 
     certificates = dict(result.certificates)
-    certificates.update({
-        "intersection_form_1": m1,
-        "intersection_form_2": m2,
-        "ks1": ks1,
-        "ks2": ks2,
-        "simply_connected": simply_connected,
-        "definite_lattice_isometry_certificate_input": definite_lattice_isometry_certificate,
-    })
+    certificates.update(
+        {
+            "intersection_form_1": m1,
+            "intersection_form_2": m2,
+            "ks1": ks1,
+            "ks2": ks2,
+            "simply_connected": simply_connected,
+            "definite_lattice_isometry_certificate_input": definite_lattice_isometry_certificate,
+        }
+    )
     if explicit_map is not None:
-        certificates["isometry_matrix"] = np.asarray(explicit_map, dtype=np.int64).tolist()
+        certificates["isometry_matrix"] = np.asarray(
+            explicit_map, dtype=np.int64
+        ).tolist()
 
     if explicit_map is None and not m1.is_indefinite():
         return HomeomorphismWitnessResult(
@@ -317,7 +329,9 @@ def build_4d_homeomorphism_witness(
             missing_data=["Explicit lattice isometry certificate"],
         )
 
-    kind: WitnessKind = "freedman_indefinite" if m1.is_indefinite() else "freedman_definite_isometry"
+    kind: WitnessKind = (
+        "freedman_indefinite" if m1.is_indefinite() else "freedman_definite_isometry"
+    )
     witness = HomeomorphismWitness(
         dimension=4,
         theorem=result.theorem or "Freedman classification",
@@ -391,7 +405,9 @@ def build_high_dim_homeomorphism_witness(
     )
     if result.status != "success" or result.is_homeomorphic is not True:
         mapped_status: Literal["inconclusive", "surgery_required"] = (
-            "surgery_required" if result.status == "surgery_required" else "inconclusive"
+            "surgery_required"
+            if result.status == "surgery_required"
+            else "inconclusive"
         )
         return HomeomorphismWitnessResult(
             status=mapped_status,
@@ -428,7 +444,9 @@ def build_high_dim_homeomorphism_witness(
     )
     resolved_wall = certificates.get("wall_obstruction")
     if isinstance(resolved_wall, ObstructionResult):
-        certificates["wall_obstruction_state"] = _obstruction_state_payload(resolved_wall)
+        certificates["wall_obstruction_state"] = _obstruction_state_payload(
+            resolved_wall
+        )
     else:
         certificates["wall_obstruction_state"] = _obstruction_state_payload(None)
 
@@ -439,9 +457,13 @@ def build_high_dim_homeomorphism_witness(
         else:
             certificates["surgery_sequence_l_n_state"] = dict(seq.l_n_state)
         if hasattr(seq.l_n_plus_1_state, "to_legacy_dict"):
-            certificates["surgery_sequence_l_n_plus_1_state"] = seq.l_n_plus_1_state.to_legacy_dict()
+            certificates["surgery_sequence_l_n_plus_1_state"] = (
+                seq.l_n_plus_1_state.to_legacy_dict()
+            )
         else:
-            certificates["surgery_sequence_l_n_plus_1_state"] = dict(seq.l_n_plus_1_state)
+            certificates["surgery_sequence_l_n_plus_1_state"] = dict(
+                seq.l_n_plus_1_state
+            )
 
     certificates = {k: v for k, v in certificates.items() if v is not None}
 
@@ -477,7 +499,9 @@ def build_homeomorphism_witness(
     ks1: int | None = None,
     ks2: int | None = None,
     simply_connected: bool | None = None,
-    definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate | dict | None = None,
+    definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate
+    | dict
+    | None = None,
     pi1_1: FundamentalGroup | None = None,
     pi1_2: FundamentalGroup | None = None,
     pi1: FundamentalGroup | None = None,
@@ -602,4 +626,3 @@ def build_homeomorphism_witness(
         theorem=None,
         missing_data=["Supported dimension (2, 3, 4, or >=5)"],
     )
-

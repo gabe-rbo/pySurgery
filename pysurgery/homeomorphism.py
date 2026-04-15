@@ -4,11 +4,20 @@ from typing import Literal, Tuple
 from .core.intersection_forms import IntersectionForm
 from .core.complexes import ChainComplex, _parse_coefficient_ring
 from .core.exceptions import DimensionError
-from .core.fundamental_group import FundamentalGroup, GroupPresentation, simplify_presentation, infer_standard_group_descriptor
+from .core.fundamental_group import (
+    FundamentalGroup,
+    GroupPresentation,
+    simplify_presentation,
+    infer_standard_group_descriptor,
+)
 from .core.pi1_group_ring_scaffold import evaluate_phase2_readiness
 from .core.k_theory import WhiteheadGroup, compute_whitehead_group
 from .core.foundations import CONTRACT_VERSION
-from .structure_set import NormalInvariantsResult, SurgeryExactSequenceResult, StructureSet
+from .structure_set import (
+    NormalInvariantsResult,
+    SurgeryExactSequenceResult,
+    StructureSet,
+)
 from .core.theorem_tags import infer_theorem_tag
 from .wall_groups import ObstructionResult, WallGroupL
 from .bridge.julia_bridge import julia_engine
@@ -195,7 +204,12 @@ class DefiniteLatticeIsometryCertificate:
     payload: dict[str, object] = field(default_factory=dict)
 
     def decision_ready(self) -> bool:
-        return bool(self.provided and self.exact and self.validated and self.isometry_matrix is not None)
+        return bool(
+            self.provided
+            and self.exact
+            and self.validated
+            and self.isometry_matrix is not None
+        )
 
     def to_legacy_dict(self) -> dict[str, object]:
         return {
@@ -218,7 +232,10 @@ def _normalize_torsion(torsion: list[int]) -> list[int]:
 def _freeze_value(value: object) -> object:
     """Return a hashable, canonical representation for nested witness data."""
     if isinstance(value, dict):
-        return tuple((str(k), _freeze_value(v)) for k, v in sorted(value.items(), key=lambda item: str(item[0])))
+        return tuple(
+            (str(k), _freeze_value(v))
+            for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+        )
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_value(v) for v in value)
     if isinstance(value, set):
@@ -244,7 +261,11 @@ def _normalize_homotopy_witness_hook(
             provided=bool(homotopy_witness_hook.get("provided", True)),
             source=str(homotopy_witness_hook.get("source", "hook")),
             exact=bool(homotopy_witness_hook.get("exact", False)),
-            summary=str(homotopy_witness_hook.get("summary", "Homotopy witness hook metadata provided.")),
+            summary=str(
+                homotopy_witness_hook.get(
+                    "summary", "Homotopy witness hook metadata provided."
+                )
+            ),
             payload=payload,
         )
     if homotopy_equivalence_witness is not None:
@@ -276,8 +297,17 @@ def _normalize_homotopy_completion_certificate(
         if homotopy_equivalence_witness is not None and "witness" not in payload:
             payload["witness"] = _freeze_value(homotopy_equivalence_witness)
         assumptions = list(homotopy_completion_certificate.get("assumptions") or [])
-        eq_type = str(homotopy_completion_certificate.get("equivalence_type", "homotopy_equivalence"))
-        if eq_type not in {"homotopy_equivalence", "simple_homotopy_equivalence", "h_cobordism", "s_cobordism"}:
+        eq_type = str(
+            homotopy_completion_certificate.get(
+                "equivalence_type", "homotopy_equivalence"
+            )
+        )
+        if eq_type not in {
+            "homotopy_equivalence",
+            "simple_homotopy_equivalence",
+            "h_cobordism",
+            "s_cobordism",
+        }:
             eq_type = "homotopy_equivalence"
         return HomotopyCompletionCertificate(
             provided=bool(homotopy_completion_certificate.get("provided", True)),
@@ -285,7 +315,11 @@ def _normalize_homotopy_completion_certificate(
             exact=bool(homotopy_completion_certificate.get("exact", False)),
             validated=bool(homotopy_completion_certificate.get("validated", False)),
             equivalence_type=eq_type,
-            summary=str(homotopy_completion_certificate.get("summary", "Typed homotopy-completion certificate provided.")),
+            summary=str(
+                homotopy_completion_certificate.get(
+                    "summary", "Typed homotopy-completion certificate provided."
+                )
+            ),
             assumptions=assumptions,
             payload=payload,
         )
@@ -325,8 +359,14 @@ def _normalize_3d_recognition_certificate(
             source=str(recognition_certificate.get("source", "certificate")),
             exact=bool(recognition_certificate.get("exact", False)),
             validated=bool(recognition_certificate.get("validated", False)),
-            method=str(recognition_certificate.get("method", "geometrization_recognition")),
-            summary=str(recognition_certificate.get("summary", "3-manifold recognition certificate provided.")),
+            method=str(
+                recognition_certificate.get("method", "geometrization_recognition")
+            ),
+            summary=str(
+                recognition_certificate.get(
+                    "summary", "3-manifold recognition certificate provided."
+                )
+            ),
             assumptions=list(recognition_certificate.get("assumptions") or []),
             payload=dict(recognition_certificate.get("payload") or {}),
         )
@@ -353,7 +393,11 @@ def _normalize_product_assembly_certificate(
             source=str(product_assembly_certificate.get("source", "certificate")),
             exact=bool(product_assembly_certificate.get("exact", False)),
             validated=bool(product_assembly_certificate.get("validated", False)),
-            summary=str(product_assembly_certificate.get("summary", "Product-group assembly certificate provided.")),
+            summary=str(
+                product_assembly_certificate.get(
+                    "summary", "Product-group assembly certificate provided."
+                )
+            ),
             assumptions=list(product_assembly_certificate.get("assumptions") or []),
             payload=dict(product_assembly_certificate.get("payload") or {}),
         )
@@ -383,7 +427,11 @@ def _normalize_definite_lattice_isometry_certificate(
             exact=bool(certificate.get("exact", False)),
             validated=bool(certificate.get("validated", False)),
             isometry_matrix=matrix,
-            summary=str(certificate.get("summary", "Definite-lattice isometry certificate provided.")),
+            summary=str(
+                certificate.get(
+                    "summary", "Definite-lattice isometry certificate provided."
+                )
+            ),
             assumptions=list(certificate.get("assumptions") or []),
             payload=dict(certificate.get("payload") or {}),
         )
@@ -426,7 +474,9 @@ def _parse_ring_certificate(
         return {}, HomeomorphismResult(
             status="inconclusive",
             is_homeomorphic=None,
-            reasoning="INCONCLUSIVE: {} ring certificate must be a dictionary.".format(label),
+            reasoning="INCONCLUSIVE: {} ring certificate must be a dictionary.".format(
+                label
+            ),
             theorem=theorem,
             missing_data=["Structured ring certificate for {}".format(label)],
             exact=False,
@@ -434,7 +484,9 @@ def _parse_ring_certificate(
 
     payload = dict(certificate)
     normalized: dict[str, object] = {}
-    normalized["coefficient_ring"] = _canonical_coefficient_ring(payload.get("coefficient_ring"))
+    normalized["coefficient_ring"] = _canonical_coefficient_ring(
+        payload.get("coefficient_ring")
+    )
 
     basis = payload.get("basis")
     if basis is None:
@@ -454,8 +506,25 @@ def _parse_ring_certificate(
     if products is None:
         products = payload.get("multiplication")
 
-    standard_keys = {"coefficient_ring", "basis", "generators", "unit", "one", "products", "cup_products", "multiplication", "groups", "cohomology", "H", "notes", "name", "label"}
-    if products is None and not any(k in payload for k in {"groups", "cohomology", "H"}):
+    standard_keys = {
+        "coefficient_ring",
+        "basis",
+        "generators",
+        "unit",
+        "one",
+        "products",
+        "cup_products",
+        "multiplication",
+        "groups",
+        "cohomology",
+        "H",
+        "notes",
+        "name",
+        "label",
+    }
+    if products is None and not any(
+        k in payload for k in {"groups", "cohomology", "H"}
+    ):
         products = {k: v for k, v in payload.items() if k not in standard_keys}
 
     if products is not None:
@@ -509,17 +578,23 @@ def _check_cohomology_equivalence(
     def _parse_cohomology_signature(
         signature: dict | None,
         label: str,
-    ) -> tuple[dict[int, tuple[int, list[int]]], str | None, HomeomorphismResult | None]:
+    ) -> tuple[
+        dict[int, tuple[int, list[int]]], str | None, HomeomorphismResult | None
+    ]:
         if signature is None:
             return {}, None, None
         if not isinstance(signature, dict):
-            return {}, None, HomeomorphismResult(
-                status="inconclusive",
-                is_homeomorphic=None,
-                reasoning=f"INCONCLUSIVE: {label} cohomology signature must be a dictionary.",
-                theorem=theorem,
-                missing_data=[f"Valid cohomology signature for {label}"],
-                exact=False,
+            return (
+                {},
+                None,
+                HomeomorphismResult(
+                    status="inconclusive",
+                    is_homeomorphic=None,
+                    reasoning=f"INCONCLUSIVE: {label} cohomology signature must be a dictionary.",
+                    theorem=theorem,
+                    missing_data=[f"Valid cohomology signature for {label}"],
+                    exact=False,
+                ),
             )
 
         ring = _canonical_coefficient_ring(signature.get("coefficient_ring"))
@@ -529,16 +604,24 @@ def _check_cohomology_equivalence(
         if groups is None:
             groups = signature.get("H")
         if groups is None:
-            groups = {k: v for k, v in signature.items() if k not in {"coefficient_ring", "name", "label", "notes"}}
+            groups = {
+                k: v
+                for k, v in signature.items()
+                if k not in {"coefficient_ring", "name", "label", "notes"}
+            }
 
         if not isinstance(groups, dict):
-            return {}, ring, HomeomorphismResult(
-                status="inconclusive",
-                is_homeomorphic=None,
-                reasoning=f"INCONCLUSIVE: {label} cohomology signature must map degrees to group data.",
-                theorem=theorem,
-                missing_data=[f"Degree-indexed cohomology data for {label}"],
-                exact=False,
+            return (
+                {},
+                ring,
+                HomeomorphismResult(
+                    status="inconclusive",
+                    is_homeomorphic=None,
+                    reasoning=f"INCONCLUSIVE: {label} cohomology signature must map degrees to group data.",
+                    theorem=theorem,
+                    missing_data=[f"Degree-indexed cohomology data for {label}"],
+                    exact=False,
+                ),
             )
 
         normalized: dict[int, tuple[int, list[int]]] = {}
@@ -548,25 +631,33 @@ def _check_cohomology_equivalence(
             else:
                 match = re.search(r"(\d+)$", str(degree_key).strip())
                 if match is None:
-                    return {}, ring, HomeomorphismResult(
-                        status="inconclusive",
-                        is_homeomorphic=None,
-                        reasoning=f"INCONCLUSIVE: {label} cohomology signature contains an unparseable degree key {degree_key!r}.",
-                        theorem=theorem,
-                        missing_data=[f"Parseable cohomology degrees for {label}"],
-                        exact=False,
+                    return (
+                        {},
+                        ring,
+                        HomeomorphismResult(
+                            status="inconclusive",
+                            is_homeomorphic=None,
+                            reasoning=f"INCONCLUSIVE: {label} cohomology signature contains an unparseable degree key {degree_key!r}.",
+                            theorem=theorem,
+                            missing_data=[f"Parseable cohomology degrees for {label}"],
+                            exact=False,
+                        ),
                     )
                 degree = int(match.group(1))
 
             if isinstance(entry, dict):
                 if "rank" not in entry:
-                    return {}, ring, HomeomorphismResult(
-                        status="inconclusive",
-                        is_homeomorphic=None,
-                        reasoning=f"INCONCLUSIVE: {label} cohomology signature for degree {degree} is missing a rank.",
-                        theorem=theorem,
-                        missing_data=[f"Rank for H^{degree}({label})"],
-                        exact=False,
+                    return (
+                        {},
+                        ring,
+                        HomeomorphismResult(
+                            status="inconclusive",
+                            is_homeomorphic=None,
+                            reasoning=f"INCONCLUSIVE: {label} cohomology signature for degree {degree} is missing a rank.",
+                            theorem=theorem,
+                            missing_data=[f"Rank for H^{degree}({label})"],
+                            exact=False,
+                        ),
                     )
                 rank = int(entry["rank"])
                 torsion = entry.get("torsion", [])
@@ -577,13 +668,17 @@ def _check_cohomology_equivalence(
                 rank = int(entry)
                 torsion = []
             else:
-                return {}, ring, HomeomorphismResult(
-                    status="inconclusive",
-                    is_homeomorphic=None,
-                    reasoning=f"INCONCLUSIVE: {label} cohomology signature for degree {degree} must be a dict, pair, or integer rank.",
-                    theorem=theorem,
-                    missing_data=[f"Structured H^{degree} data for {label}"],
-                    exact=False,
+                return (
+                    {},
+                    ring,
+                    HomeomorphismResult(
+                        status="inconclusive",
+                        is_homeomorphic=None,
+                        reasoning=f"INCONCLUSIVE: {label} cohomology signature for degree {degree} must be a dict, pair, or integer rank.",
+                        theorem=theorem,
+                        missing_data=[f"Structured H^{degree} data for {label}"],
+                        exact=False,
+                    ),
                 )
 
             torsion_list = _normalize_torsion(list(torsion or []))
@@ -591,8 +686,12 @@ def _check_cohomology_equivalence(
 
         return normalized, ring, None
 
-    sig1, ring1, sig_issue_1 = _parse_cohomology_signature(cohomology_signature_1, "first manifold")
-    sig2, ring2, sig_issue_2 = _parse_cohomology_signature(cohomology_signature_2, "second manifold")
+    sig1, ring1, sig_issue_1 = _parse_cohomology_signature(
+        cohomology_signature_1, "first manifold"
+    )
+    sig2, ring2, sig_issue_2 = _parse_cohomology_signature(
+        cohomology_signature_2, "second manifold"
+    )
 
     if sig_issue_1 is not None:
         return sig_issue_1
@@ -726,12 +825,16 @@ def _check_cup_product_compatibility(
     theorem: str,
 ) -> HomeomorphismResult | None:
     ring_1, issue_1 = _parse_ring_certificate(
-        cohomology_ring_signature_1 if cohomology_ring_signature_1 is not None else cup_product_signature_1,
+        cohomology_ring_signature_1
+        if cohomology_ring_signature_1 is not None
+        else cup_product_signature_1,
         theorem,
         "first manifold",
     )
     ring_2, issue_2 = _parse_ring_certificate(
-        cohomology_ring_signature_2 if cohomology_ring_signature_2 is not None else cup_product_signature_2,
+        cohomology_ring_signature_2
+        if cohomology_ring_signature_2 is not None
+        else cup_product_signature_2,
         theorem,
         "second manifold",
     )
@@ -743,7 +846,7 @@ def _check_cup_product_compatibility(
 
     if not ring_1 and not ring_2:
         return None
-    if (bool(ring_1) != bool(ring_2)):
+    if bool(ring_1) != bool(ring_2):
         return HomeomorphismResult(
             status="inconclusive",
             is_homeomorphic=None,
@@ -755,13 +858,19 @@ def _check_cup_product_compatibility(
             missing_data=["Cohomology-ring witness for both manifolds"],
         )
 
-    if ring_1.get("coefficient_ring") is not None and ring_2.get("coefficient_ring") is not None and ring_1.get("coefficient_ring") != ring_2.get("coefficient_ring"):
+    if (
+        ring_1.get("coefficient_ring") is not None
+        and ring_2.get("coefficient_ring") is not None
+        and ring_1.get("coefficient_ring") != ring_2.get("coefficient_ring")
+    ):
         return HomeomorphismResult(
             status="inconclusive",
             is_homeomorphic=None,
             reasoning=(
                 "INCONCLUSIVE: Cohomology-ring comparison requires a shared coefficient ring; "
-                "received {} vs {}.".format(ring_1.get("coefficient_ring"), ring_2.get("coefficient_ring"))
+                "received {} vs {}.".format(
+                    ring_1.get("coefficient_ring"), ring_2.get("coefficient_ring")
+                )
             ),
             theorem=theorem,
             missing_data=["Matching coefficient ring in ring witnesses"],
@@ -789,15 +898,25 @@ def _det_int_small(M: np.ndarray) -> int:
     return int(sp.Matrix(M.tolist()).det())
 
 
-def _presentation_key(pi1: FundamentalGroup) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
-    simplified = simplify_presentation(list(pi1.generators), [list(rel) for rel in pi1.relations])
+def _presentation_key(
+    pi1: FundamentalGroup,
+) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
+    simplified = simplify_presentation(
+        list(pi1.generators), [list(rel) for rel in pi1.relations]
+    )
     rels = tuple(tuple(tok for tok in rel) for rel in simplified.relations)
     return tuple(simplified.generators), rels
 
 
-def _infer_pi_group_descriptor(pi1: FundamentalGroup | None, pi_group: str | GroupPresentation | None) -> str | GroupPresentation | None:
+def _infer_pi_group_descriptor(
+    pi1: FundamentalGroup | None, pi_group: str | GroupPresentation | None
+) -> str | GroupPresentation | None:
     if pi_group is not None:
-        return pi_group.normalized() if isinstance(pi_group, GroupPresentation) else str(pi_group).strip()
+        return (
+            pi_group.normalized()
+            if isinstance(pi_group, GroupPresentation)
+            else str(pi_group).strip()
+        )
     if pi1 is None:
         return None
     return infer_standard_group_descriptor(pi1)
@@ -818,13 +937,20 @@ def _homology_sphere_like(c: ChainComplex, dim: int) -> bool | None:
         return None
 
 
-def _search_integer_isometry(Q1: np.ndarray, Q2: np.ndarray, max_entry: int = 2) -> np.ndarray | None:
+def _search_integer_isometry(
+    Q1: np.ndarray, Q2: np.ndarray, max_entry: int = 2
+) -> np.ndarray | None:
     """Search for U in GL_n(Z) with U^T Q1 U = Q2.
 
     For definite forms, use an exact finite lattice search (optionally accelerated by Julia).
     For non-definite forms, keep the older bounded brute-force fallback.
     """
-    if Q1.ndim != 2 or Q2.ndim != 2 or Q1.shape[0] != Q1.shape[1] or Q2.shape[0] != Q2.shape[1]:
+    if (
+        Q1.ndim != 2
+        or Q2.ndim != 2
+        or Q1.shape[0] != Q1.shape[1]
+        or Q2.shape[0] != Q2.shape[1]
+    ):
         return None
     if Q1.shape != Q2.shape:
         return None
@@ -836,7 +962,11 @@ def _search_integer_isometry(Q1: np.ndarray, Q2: np.ndarray, max_entry: int = 2)
     # Exact branch for definite forms: finite search by lattice-vector norms/pairings.
     eig1 = np.linalg.eigvalsh(q1.astype(float))
     eig2 = np.linalg.eigvalsh(q2.astype(float))
-    tol = max(q1.shape) * np.finfo(float).eps * max(1.0, float(np.max(np.abs(np.concatenate([eig1, eig2])))))
+    tol = (
+        max(q1.shape)
+        * np.finfo(float).eps
+        * max(1.0, float(np.max(np.abs(np.concatenate([eig1, eig2])))))
+    )
     pos1 = bool(np.all(eig1 > tol))
     neg1 = bool(np.all(eig1 < -tol))
     pos2 = bool(np.all(eig2 > tol))
@@ -846,7 +976,9 @@ def _search_integer_isometry(Q1: np.ndarray, Q2: np.ndarray, max_entry: int = 2)
         if julia_engine.available:
             try:
                 candidate = julia_engine.integral_lattice_isometry(q1, q2)
-                if candidate is not None and np.array_equal(candidate.T @ q1 @ candidate, q2):
+                if candidate is not None and np.array_equal(
+                    candidate.T @ q1 @ candidate, q2
+                ):
                     return candidate
             except Exception:
                 # Fall through to Python exact solver.
@@ -867,7 +999,9 @@ def _search_integer_isometry(Q1: np.ndarray, Q2: np.ndarray, max_entry: int = 2)
         values = range(-search_radius, search_radius + 1)
 
         # Enumerate all vectors of a prescribed quadratic norm in the ambient lattice.
-        vectors_by_norm: dict[int, list[np.ndarray]] = {t: [] for t in set(diag_targets)}
+        vectors_by_norm: dict[int, list[np.ndarray]] = {
+            t: [] for t in set(diag_targets)
+        }
         max_vectors_per_norm = 20000
         for entries in itertools.product(values, repeat=n):
             v = np.array(entries, dtype=np.int64)
@@ -929,6 +1063,7 @@ def _search_integer_isometry(Q1: np.ndarray, Q2: np.ndarray, max_entry: int = 2)
             return U
     return None
 
+
 def analyze_homeomorphism_2d_result(
     c1: ChainComplex,
     c2: ChainComplex,
@@ -943,12 +1078,12 @@ def analyze_homeomorphism_2d_result(
 ) -> HomeomorphismResult:
     """
     Analyzes the potential for homeomorphism between two 2-dimensional manifolds (surfaces).
-    
+
     Based on the Classification of Closed Surfaces:
     Two closed surfaces are homeomorphic if and only if they have:
     1. The same orientability (H_2 = Z vs H_2 = 0).
     2. The same Euler characteristic (or genus).
-    
+
     Returns
     -------
     is_homeomorphic : bool
@@ -959,7 +1094,9 @@ def analyze_homeomorphism_2d_result(
         r2_2, _ = c2.homology(2)
     except Exception as e:
         if allow_approx:
-            warnings.warn(f"Topological Hint: H_2 homology extraction failed ({e!r}). Exact classification disabled.")
+            warnings.warn(
+                f"Topological Hint: H_2 homology extraction failed ({e!r}). Exact classification disabled."
+            )
         return HomeomorphismResult(
             status="inconclusive",
             is_homeomorphic=None,
@@ -969,9 +1106,9 @@ def analyze_homeomorphism_2d_result(
             exact=False,
         )
 
-    orientable_1 = (r2_1 == 1)
-    orientable_2 = (r2_2 == 1)
-    
+    orientable_1 = r2_1 == 1
+    orientable_2 = r2_2 == 1
+
     if orientable_1 != orientable_2:
         return HomeomorphismResult(
             status="impediment",
@@ -986,7 +1123,9 @@ def analyze_homeomorphism_2d_result(
         r1_2, t1_2 = c2.homology(1)
     except Exception as e:
         if allow_approx:
-            warnings.warn(f"Topological Hint: H_1 homology extraction failed ({e!r}). Exact classification disabled.")
+            warnings.warn(
+                f"Topological Hint: H_1 homology extraction failed ({e!r}). Exact classification disabled."
+            )
         return HomeomorphismResult(
             status="inconclusive",
             is_homeomorphic=None,
@@ -1072,6 +1211,7 @@ def analyze_homeomorphism_2d(
         cup_product_signature_2=cup_product_signature_2,
     ).to_legacy_tuple()
 
+
 def analyze_homeomorphism_3d_result(
     c1: ChainComplex,
     c2: ChainComplex,
@@ -1089,9 +1229,9 @@ def analyze_homeomorphism_3d_result(
 ) -> HomeomorphismResult:
     """
     Analyzes the potential for homeomorphism between two 3-dimensional manifolds.
-    
+
     Warning: 3-manifolds are classified by Thurston's Geometrization (Perelman, 2003).
-    Algebraic topology alone (homology) is insufficient to prove homeomorphism in general 
+    Algebraic topology alone (homology) is insufficient to prove homeomorphism in general
     (e.g., Poincare homology spheres have the same homology as S^3 but different fundamental groups).
     """
     rec_cert = _normalize_3d_recognition_certificate(recognition_certificate)
@@ -1102,7 +1242,9 @@ def analyze_homeomorphism_3d_result(
             r_2, t_2 = c2.homology(n)
         except Exception as e:
             if allow_approx:
-                warnings.warn(f"Topological Hint: Homology extraction failed at dimension {n} ({e!r}). Exact classification disabled.")
+                warnings.warn(
+                    f"Topological Hint: Homology extraction failed at dimension {n} ({e!r}). Exact classification disabled."
+                )
             return HomeomorphismResult(
                 status="inconclusive",
                 is_homeomorphic=None,
@@ -1132,7 +1274,11 @@ def analyze_homeomorphism_3d_result(
             missing_data=["Matched pi_1 data for both manifolds"],
         )
 
-    if pi1_1 is not None and pi1_2 is not None and _presentation_key(pi1_1) != _presentation_key(pi1_2):
+    if (
+        pi1_1 is not None
+        and pi1_2 is not None
+        and _presentation_key(pi1_1) != _presentation_key(pi1_2)
+    ):
         return HomeomorphismResult(
             status="impediment",
             is_homeomorphic=False,
@@ -1182,7 +1328,10 @@ def analyze_homeomorphism_3d_result(
                 is_homeomorphic=True,
                 reasoning="SUCCESS: Both manifolds satisfy the homology-sphere conditions and have trivial pi_1, so they are homeomorphic by the Poincaré conjecture.",
                 theorem="Poincaré Conjecture / Geometrization",
-                evidence=["Homology sphere checks passed", "Trivial pi_1 for both manifolds"],
+                evidence=[
+                    "Homology sphere checks passed",
+                    "Trivial pi_1 for both manifolds",
+                ],
                 assumptions=["Closed connected 3-manifold hypotheses must hold"],
             )
         if pi_desc_1 is not None and pi_desc_2 is not None and pi_desc_1 == pi_desc_2:
@@ -1195,9 +1344,16 @@ def analyze_homeomorphism_3d_result(
                         "certificate support homeomorphism in this API model."
                     ),
                     theorem="Geometrization / 3-manifold recognition",
-                    evidence=["Homology sphere checks passed", "Matching pi_1 descriptor", "Decision-ready 3D recognition certificate"],
-                    assumptions=["Closed connected 3-manifold hypotheses must hold"] + rec_cert.assumptions,
-                    certificates={"three_manifold_recognition_certificate": rec_cert.to_legacy_dict()},
+                    evidence=[
+                        "Homology sphere checks passed",
+                        "Matching pi_1 descriptor",
+                        "Decision-ready 3D recognition certificate",
+                    ],
+                    assumptions=["Closed connected 3-manifold hypotheses must hold"]
+                    + rec_cert.assumptions,
+                    certificates={
+                        "three_manifold_recognition_certificate": rec_cert.to_legacy_dict()
+                    },
                     exact=True,
                 )
             return HomeomorphismResult(
@@ -1206,7 +1362,9 @@ def analyze_homeomorphism_3d_result(
                 reasoning="INCONCLUSIVE: Homology-sphere and matching pi_1 evidence is promising; a full 3-manifold recognition pipeline is still required in this API.",
                 theorem="Poincare Conjecture / Geometrization",
                 missing_data=["Decision-ready 3-manifold recognition certificate"],
-                certificates={"three_manifold_recognition_certificate": rec_cert.to_legacy_dict()},
+                certificates={
+                    "three_manifold_recognition_certificate": rec_cert.to_legacy_dict()
+                },
                 assumptions=["Closed connected 3-manifold hypotheses must hold"],
             )
 
@@ -1220,9 +1378,14 @@ def analyze_homeomorphism_3d_result(
                     "3-manifold recognition certificate completes classification."
                 ),
                 theorem="Geometrization / 3-manifold recognition",
-                evidence=["Homology checks passed", "Decision-ready 3D recognition certificate"],
+                evidence=[
+                    "Homology checks passed",
+                    "Decision-ready 3D recognition certificate",
+                ],
                 assumptions=rec_cert.assumptions,
-                certificates={"three_manifold_recognition_certificate": rec_cert.to_legacy_dict()},
+                certificates={
+                    "three_manifold_recognition_certificate": rec_cert.to_legacy_dict()
+                },
                 exact=True,
             )
         return HomeomorphismResult(
@@ -1234,7 +1397,9 @@ def analyze_homeomorphism_3d_result(
             ),
             theorem="Geometrization / 3-manifold recognition",
             missing_data=["Decision-ready 3-manifold recognition certificate"],
-            certificates={"three_manifold_recognition_certificate": rec_cert.to_legacy_dict()},
+            certificates={
+                "three_manifold_recognition_certificate": rec_cert.to_legacy_dict()
+            },
             exact=False,
         )
 
@@ -1273,6 +1438,7 @@ def analyze_homeomorphism_3d(
         recognition_certificate=recognition_certificate,
     ).to_legacy_tuple()
 
+
 def analyze_homeomorphism_high_dim_result(
     c1: ChainComplex,
     c2: ChainComplex,
@@ -1299,9 +1465,10 @@ def analyze_homeomorphism_high_dim_result(
     product_assembly_certificate: ProductAssemblyCertificate | dict | None = None,
 ) -> HomeomorphismResult:
     """
-    Analyzes homeomorphism for high-dimensional manifolds (n >= 5) using the s-Cobordism Theorem 
+    Analyzes homeomorphism for high-dimensional manifolds (n >= 5) using the s-Cobordism Theorem
     and Smale's Generalized Poincare Conjecture (1961).
     """
+
     def _is_nontrivial_product_descriptor(desc: object | None) -> bool:
         if desc is None:
             return False
@@ -1314,13 +1481,17 @@ def analyze_homeomorphism_high_dim_result(
 
     theorem_label = "s-Cobordism / surgery classification"
     decision_stages: list[HighDimDecisionStage] = []
-    hook_state = _normalize_homotopy_witness_hook(homotopy_equivalence_witness, homotopy_witness_hook)
+    hook_state = _normalize_homotopy_witness_hook(
+        homotopy_equivalence_witness, homotopy_witness_hook
+    )
     completion_state = _normalize_homotopy_completion_certificate(
         homotopy_completion_certificate,
         hook_state,
         homotopy_equivalence_witness,
     )
-    assembly_state = _normalize_product_assembly_certificate(product_assembly_certificate)
+    assembly_state = _normalize_product_assembly_certificate(
+        product_assembly_certificate
+    )
 
     def _record_stage(
         sid: str,
@@ -1353,7 +1524,9 @@ def analyze_homeomorphism_high_dim_result(
         certs["homotopy_completion_certificate"] = completion_state.to_legacy_dict()
         certs["product_assembly_certificate"] = assembly_state.to_legacy_dict()
         if homotopy_equivalence_witness is not None:
-            certs["homotopy_equivalence_witness"] = _freeze_value(homotopy_equivalence_witness)
+            certs["homotopy_equivalence_witness"] = _freeze_value(
+                homotopy_equivalence_witness
+            )
         result.certificates = certs
         return result
 
@@ -1382,13 +1555,23 @@ def analyze_homeomorphism_high_dim_result(
         "passed" if assembly_state.provided else "skipped",
         assembly_state.summary,
         exact=assembly_state.exact,
-        data={"validated": assembly_state.validated, "decision_ready": assembly_state.decision_ready()},
+        data={
+            "validated": assembly_state.validated,
+            "decision_ready": assembly_state.decision_ready(),
+        },
     )
 
     if dim < 5:
-        _record_stage("dimension_guard", "Dimension Guard", "failed", f"Received dimension {dim}; requires n>=5.")
-        raise DimensionError(f"Function called on {dim}D. The s-Cobordism theorem and Wall's high-dimensional surgery framework strictly apply to n >= 5, where the 'Whitney Trick' guarantees enough room to untangle handles.")
-        
+        _record_stage(
+            "dimension_guard",
+            "Dimension Guard",
+            "failed",
+            f"Received dimension {dim}; requires n>=5.",
+        )
+        raise DimensionError(
+            f"Function called on {dim}D. The s-Cobordism theorem and Wall's high-dimensional surgery framework strictly apply to n >= 5, where the 'Whitney Trick' guarantees enough room to untangle handles."
+        )
+
     # Check Homology Equivalence
     for n in range(dim + 1):
         try:
@@ -1396,30 +1579,52 @@ def analyze_homeomorphism_high_dim_result(
             r_2, t_2 = c2.homology(n)
         except Exception as e:
             if allow_approx:
-                warnings.warn(f"Topological Hint: Homology extraction failed at dimension {n} ({e!r}). Exact classification disabled.")
-            _record_stage("homology_check", "Homology Equivalence", "inconclusive", f"Failed at H_{n}: {e!r}", exact=False)
-            return _with_phase5_metadata(HomeomorphismResult(
-                status="inconclusive",
-                is_homeomorphic=None,
-                reasoning=f"INCONCLUSIVE: Exact homology extraction failed at dimension {n} ({e!r}).",
-                theorem="s-Cobordism / surgery classification",
-                missing_data=[f"Exact H_{n}"],
+                warnings.warn(
+                    f"Topological Hint: Homology extraction failed at dimension {n} ({e!r}). Exact classification disabled."
+                )
+            _record_stage(
+                "homology_check",
+                "Homology Equivalence",
+                "inconclusive",
+                f"Failed at H_{n}: {e!r}",
                 exact=False,
-            ))
+            )
+            return _with_phase5_metadata(
+                HomeomorphismResult(
+                    status="inconclusive",
+                    is_homeomorphic=None,
+                    reasoning=f"INCONCLUSIVE: Exact homology extraction failed at dimension {n} ({e!r}).",
+                    theorem="s-Cobordism / surgery classification",
+                    missing_data=[f"Exact H_{n}"],
+                    exact=False,
+                )
+            )
 
         t_1n = _normalize_torsion(t_1)
         t_2n = _normalize_torsion(t_2)
         if r_1 != r_2 or t_1n != t_2n:
-            _record_stage("homology_check", "Homology Equivalence", "failed", f"Mismatch at H_{n}.")
-            return _with_phase5_metadata(HomeomorphismResult(
-                status="impediment",
-                is_homeomorphic=False,
-                reasoning=f"IMPEDIMENT: Homology mismatch in dimension {n} (Rank: {r_1} vs {r_2}, Torsion: {t_1n} vs {t_2n}).",
-                theorem="s-Cobordism / surgery classification",
-                evidence=[f"H_{n} mismatch"],
-            ))
+            _record_stage(
+                "homology_check",
+                "Homology Equivalence",
+                "failed",
+                f"Mismatch at H_{n}.",
+            )
+            return _with_phase5_metadata(
+                HomeomorphismResult(
+                    status="impediment",
+                    is_homeomorphic=False,
+                    reasoning=f"IMPEDIMENT: Homology mismatch in dimension {n} (Rank: {r_1} vs {r_2}, Torsion: {t_1n} vs {t_2n}).",
+                    theorem="s-Cobordism / surgery classification",
+                    evidence=[f"H_{n} mismatch"],
+                )
+            )
 
-    _record_stage("homology_check", "Homology Equivalence", "passed", "Exact homology groups match in all degrees.")
+    _record_stage(
+        "homology_check",
+        "Homology Equivalence",
+        "passed",
+        "Exact homology groups match in all degrees.",
+    )
 
     coho_check = _check_cohomology_equivalence(
         c1,
@@ -1431,10 +1636,21 @@ def analyze_homeomorphism_high_dim_result(
         cohomology_signature_2=cohomology_signature_2,
     )
     if coho_check is not None:
-        _record_stage("cohomology_check", "Cohomology Equivalence", "failed" if coho_check.status == "impediment" else "inconclusive", coho_check.reasoning, exact=coho_check.exact)
+        _record_stage(
+            "cohomology_check",
+            "Cohomology Equivalence",
+            "failed" if coho_check.status == "impediment" else "inconclusive",
+            coho_check.reasoning,
+            exact=coho_check.exact,
+        )
         return _with_phase5_metadata(coho_check)
 
-    _record_stage("cohomology_check", "Cohomology Equivalence", "passed", "Cohomology groups are compatible.")
+    _record_stage(
+        "cohomology_check",
+        "Cohomology Equivalence",
+        "passed",
+        "Cohomology groups are compatible.",
+    )
 
     cup_check = _check_cup_product_compatibility(
         cohomology_ring_signature_1,
@@ -1444,27 +1660,56 @@ def analyze_homeomorphism_high_dim_result(
         theorem="s-Cobordism / surgery classification",
     )
     if cup_check is not None:
-        _record_stage("cup_product_check", "Cup-Product Compatibility", "failed" if cup_check.status == "impediment" else "inconclusive", cup_check.reasoning, exact=cup_check.exact)
+        _record_stage(
+            "cup_product_check",
+            "Cup-Product Compatibility",
+            "failed" if cup_check.status == "impediment" else "inconclusive",
+            cup_check.reasoning,
+            exact=cup_check.exact,
+        )
         return _with_phase5_metadata(cup_check)
 
-    _record_stage("cup_product_check", "Cup-Product Compatibility", "passed", "No cup-product incompatibility detected.")
+    _record_stage(
+        "cup_product_check",
+        "Cup-Product Compatibility",
+        "passed",
+        "No cup-product incompatibility detected.",
+    )
 
     descriptor = _infer_pi_group_descriptor(pi1, pi_group)
     if _is_nontrivial_product_descriptor(descriptor):
         theorem_label = "Wall L-theory over group rings"
-    phase2_readiness = evaluate_phase2_readiness(pi1, str(descriptor) if descriptor is not None else None)
+    phase2_readiness = evaluate_phase2_readiness(
+        pi1, str(descriptor) if descriptor is not None else None
+    )
     if descriptor is None:
-        _record_stage("pi_descriptor", "pi_1 Descriptor", "inconclusive", "No supported descriptor inferred.")
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="inconclusive",
-            is_homeomorphic=None,
-            reasoning=f"INCONCLUSIVE: Homology matches in {dim}D, but pi_1/group-ring descriptor is missing. s-Cobordism requires Whitehead and Wall obstruction checks.",
-            theorem=theorem_label,
-            missing_data=["pi_1 or supported pi-group descriptor", "Whitehead torsion", "Wall obstruction"],
-            certificates={"phase2_readiness": phase2_readiness},
-        ))
+        _record_stage(
+            "pi_descriptor",
+            "pi_1 Descriptor",
+            "inconclusive",
+            "No supported descriptor inferred.",
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning=f"INCONCLUSIVE: Homology matches in {dim}D, but pi_1/group-ring descriptor is missing. s-Cobordism requires Whitehead and Wall obstruction checks.",
+                theorem=theorem_label,
+                missing_data=[
+                    "pi_1 or supported pi-group descriptor",
+                    "Whitehead torsion",
+                    "Wall obstruction",
+                ],
+                certificates={"phase2_readiness": phase2_readiness},
+            )
+        )
 
-    _record_stage("pi_descriptor", "pi_1 Descriptor", "passed", f"Descriptor resolved as {descriptor}.")
+    _record_stage(
+        "pi_descriptor",
+        "pi_1 Descriptor",
+        "passed",
+        f"Descriptor resolved as {descriptor}.",
+    )
 
     wh = whitehead_group
     if wh is None:
@@ -1474,78 +1719,131 @@ def analyze_homeomorphism_high_dim_result(
             wh = WhiteheadGroup(rank=0, description="Wh(1)=0")
 
     if wh is None:
-        _record_stage("whitehead_check", "Whitehead Torsion", "inconclusive", "Could not infer/provide Whitehead data.")
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="inconclusive",
-            is_homeomorphic=None,
-            reasoning="INCONCLUSIVE: Whitehead torsion was not provided and cannot be inferred from available data.",
-            theorem=theorem_label,
-            missing_data=["Whitehead torsion Wh(pi_1)"],
-        ))
+        _record_stage(
+            "whitehead_check",
+            "Whitehead Torsion",
+            "inconclusive",
+            "Could not infer/provide Whitehead data.",
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning="INCONCLUSIVE: Whitehead torsion was not provided and cannot be inferred from available data.",
+                theorem=theorem_label,
+                missing_data=["Whitehead torsion Wh(pi_1)"],
+            )
+        )
 
     if not wh.computable:
-        _record_stage("whitehead_check", "Whitehead Torsion", "inconclusive", "Whitehead computation unavailable.", exact=wh.exact)
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="inconclusive",
-            is_homeomorphic=None,
-            reasoning=f"INCONCLUSIVE: Whitehead torsion computation failed ({wh.description}).",
-            theorem=theorem_label,
-            missing_data=["Computable Wh(pi_1)"],
-            assumptions=wh.assumptions,
+        _record_stage(
+            "whitehead_check",
+            "Whitehead Torsion",
+            "inconclusive",
+            "Whitehead computation unavailable.",
             exact=wh.exact,
-        ))
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning=f"INCONCLUSIVE: Whitehead torsion computation failed ({wh.description}).",
+                theorem=theorem_label,
+                missing_data=["Computable Wh(pi_1)"],
+                assumptions=wh.assumptions,
+                exact=wh.exact,
+            )
+        )
 
     if not wh.exact:
-        _record_stage("whitehead_check", "Whitehead Torsion", "inconclusive", "Whitehead certificate is heuristic.", exact=False)
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="inconclusive",
-            is_homeomorphic=None,
-            reasoning="INCONCLUSIVE: Whitehead torsion data is only heuristic; exact s-cobordism classification requires an exact Whitehead certificate.",
-            theorem=theorem_label,
-            missing_data=["Exact Whitehead torsion certificate"],
-            assumptions=wh.assumptions,
+        _record_stage(
+            "whitehead_check",
+            "Whitehead Torsion",
+            "inconclusive",
+            "Whitehead certificate is heuristic.",
             exact=False,
-        ))
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning="INCONCLUSIVE: Whitehead torsion data is only heuristic; exact s-cobordism classification requires an exact Whitehead certificate.",
+                theorem=theorem_label,
+                missing_data=["Exact Whitehead torsion certificate"],
+                assumptions=wh.assumptions,
+                exact=False,
+            )
+        )
 
     if wh.rank > 0:
-        _record_stage("whitehead_check", "Whitehead Torsion", "failed", f"Non-zero Whitehead rank {wh.rank}.")
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="surgery_required",
-            is_homeomorphic=False,
-            reasoning=f"SURGERY_REQUIRED: Whitehead torsion obstruction detected (rank >= {wh.rank}).",
-            theorem=theorem_label,
-            evidence=[wh.description],
-            assumptions=wh.assumptions,
-            exact=wh.exact,
-        ))
+        _record_stage(
+            "whitehead_check",
+            "Whitehead Torsion",
+            "failed",
+            f"Non-zero Whitehead rank {wh.rank}.",
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="surgery_required",
+                is_homeomorphic=False,
+                reasoning=f"SURGERY_REQUIRED: Whitehead torsion obstruction detected (rank >= {wh.rank}).",
+                theorem=theorem_label,
+                evidence=[wh.description],
+                assumptions=wh.assumptions,
+                exact=wh.exact,
+            )
+        )
 
-    _record_stage("whitehead_check", "Whitehead Torsion", "passed", "Exact Whitehead obstruction vanishes.")
+    _record_stage(
+        "whitehead_check",
+        "Whitehead Torsion",
+        "passed",
+        "Exact Whitehead obstruction vanishes.",
+    )
 
     if normal_invariants_1 is not None and normal_invariants_1.dimension != dim:
-        _record_stage("normal_invariants", "Normal Invariants", "inconclusive", "First normal-invariant dimension mismatch.")
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="inconclusive",
-            is_homeomorphic=None,
-            reasoning=(
-                f"INCONCLUSIVE: normal_invariants_1 has dimension {normal_invariants_1.dimension}, "
-                f"but the manifold dimension is {dim}."
-            ),
-            theorem=theorem_label,
-            missing_data=["Dimension-compatible normal invariants for the first manifold"],
-        ))
+        _record_stage(
+            "normal_invariants",
+            "Normal Invariants",
+            "inconclusive",
+            "First normal-invariant dimension mismatch.",
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning=(
+                    f"INCONCLUSIVE: normal_invariants_1 has dimension {normal_invariants_1.dimension}, "
+                    f"but the manifold dimension is {dim}."
+                ),
+                theorem=theorem_label,
+                missing_data=[
+                    "Dimension-compatible normal invariants for the first manifold"
+                ],
+            )
+        )
 
     if normal_invariants_2 is not None and normal_invariants_2.dimension != dim:
-        _record_stage("normal_invariants", "Normal Invariants", "inconclusive", "Second normal-invariant dimension mismatch.")
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="inconclusive",
-            is_homeomorphic=None,
-            reasoning=(
-                f"INCONCLUSIVE: normal_invariants_2 has dimension {normal_invariants_2.dimension}, "
-                f"but the manifold dimension is {dim}."
-            ),
-            theorem=theorem_label,
-            missing_data=["Dimension-compatible normal invariants for the second manifold"],
-        ))
+        _record_stage(
+            "normal_invariants",
+            "Normal Invariants",
+            "inconclusive",
+            "Second normal-invariant dimension mismatch.",
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning=(
+                    f"INCONCLUSIVE: normal_invariants_2 has dimension {normal_invariants_2.dimension}, "
+                    f"but the manifold dimension is {dim}."
+                ),
+                theorem=theorem_label,
+                missing_data=[
+                    "Dimension-compatible normal invariants for the second manifold"
+                ],
+            )
+        )
 
     structure_set = None
     computed_normal_invariants_1 = normal_invariants_1
@@ -1554,16 +1852,22 @@ def analyze_homeomorphism_high_dim_result(
     sequence_l_n_plus_1_obstruction = None
     if descriptor == "1":
         try:
-            sequence_l_n_plus_1_obstruction = WallGroupL(dimension=dim + 1, pi="1").compute_obstruction_result(wall_form)
+            sequence_l_n_plus_1_obstruction = WallGroupL(
+                dimension=dim + 1, pi="1"
+            ).compute_obstruction_result(wall_form)
         except Exception:
             sequence_l_n_plus_1_obstruction = None
     if descriptor == "1":
         try:
             structure_set = StructureSet(dimension=dim, fundamental_group="1")
             if computed_normal_invariants_1 is None:
-                computed_normal_invariants_1 = structure_set.compute_normal_invariants_result(c1)
+                computed_normal_invariants_1 = (
+                    structure_set.compute_normal_invariants_result(c1)
+                )
             if computed_normal_invariants_2 is None:
-                computed_normal_invariants_2 = structure_set.compute_normal_invariants_result(c2)
+                computed_normal_invariants_2 = (
+                    structure_set.compute_normal_invariants_result(c2)
+                )
             if surgery_sequence is None and computed_normal_invariants_1 is not None:
                 surgery_sequence = structure_set.evaluate_exact_sequence_result(
                     normal_invariants=computed_normal_invariants_1,
@@ -1576,114 +1880,202 @@ def analyze_homeomorphism_high_dim_result(
                     f"Topological Hint: Structure-set witness computation failed ({e!r}). Continuing with obstruction-only classification."
                 )
 
-    _record_stage("structure_set", "Structure Set Pipeline", "passed" if surgery_sequence is not None else "skipped", "Structure-set certificate computed." if surgery_sequence is not None else "Structure-set certificate not provided/computed.")
+    _record_stage(
+        "structure_set",
+        "Structure Set Pipeline",
+        "passed" if surgery_sequence is not None else "skipped",
+        "Structure-set certificate computed."
+        if surgery_sequence is not None
+        else "Structure-set certificate not provided/computed.",
+    )
 
     if surgery_sequence is not None:
         if surgery_sequence.dimension != dim:
-            _record_stage("surgery_sequence", "Surgery Exact Sequence", "inconclusive", "Dimension mismatch in provided sequence certificate.")
-            return _with_phase5_metadata(HomeomorphismResult(
-                status="inconclusive",
-                is_homeomorphic=None,
-                reasoning=(
-                    f"INCONCLUSIVE: Surgery exact-sequence certificate has dimension {surgery_sequence.dimension}, "
-                    f"but the manifold dimension is {dim}."
-                ),
-                theorem=theorem_label,
-                missing_data=["Dimension-compatible surgery exact-sequence certificate"],
-            ))
+            _record_stage(
+                "surgery_sequence",
+                "Surgery Exact Sequence",
+                "inconclusive",
+                "Dimension mismatch in provided sequence certificate.",
+            )
+            return _with_phase5_metadata(
+                HomeomorphismResult(
+                    status="inconclusive",
+                    is_homeomorphic=None,
+                    reasoning=(
+                        f"INCONCLUSIVE: Surgery exact-sequence certificate has dimension {surgery_sequence.dimension}, "
+                        f"but the manifold dimension is {dim}."
+                    ),
+                    theorem=theorem_label,
+                    missing_data=[
+                        "Dimension-compatible surgery exact-sequence certificate"
+                    ],
+                )
+            )
         if not surgery_sequence.computable:
-            _record_stage("surgery_sequence", "Surgery Exact Sequence", "inconclusive", "Surgery sequence marked non-computable.", exact=surgery_sequence.exact)
-            return _with_phase5_metadata(HomeomorphismResult(
-                status="inconclusive",
-                is_homeomorphic=None,
-                reasoning=f"INCONCLUSIVE: Surgery exact-sequence certificate is not computable ({surgery_sequence.analysis[:1]}).",
-                theorem=theorem_label,
-                missing_data=["Computable surgery exact-sequence certificate"],
-                assumptions=["Supplied surgery certificate is not exact"],
+            _record_stage(
+                "surgery_sequence",
+                "Surgery Exact Sequence",
+                "inconclusive",
+                "Surgery sequence marked non-computable.",
                 exact=surgery_sequence.exact,
-            ))
-        if surgery_sequence.normal_invariants is not None and computed_normal_invariants_1 is not None and surgery_sequence.normal_invariants != computed_normal_invariants_1:
-            _record_stage("surgery_sequence", "Surgery Exact Sequence", "failed", "Normal invariants mismatch against supplied sequence.")
-            return _with_phase5_metadata(HomeomorphismResult(
-                status="impediment",
-                is_homeomorphic=False,
-                reasoning="IMPEDIMENT: Supplied surgery exact-sequence certificate is inconsistent with the computed normal invariants for the first manifold.",
-                theorem=theorem_label,
-                evidence=["Normal invariants mismatch against supplied surgery sequence"],
-            ))
+            )
+            return _with_phase5_metadata(
+                HomeomorphismResult(
+                    status="inconclusive",
+                    is_homeomorphic=None,
+                    reasoning=f"INCONCLUSIVE: Surgery exact-sequence certificate is not computable ({surgery_sequence.analysis[:1]}).",
+                    theorem=theorem_label,
+                    missing_data=["Computable surgery exact-sequence certificate"],
+                    assumptions=["Supplied surgery certificate is not exact"],
+                    exact=surgery_sequence.exact,
+                )
+            )
+        if (
+            surgery_sequence.normal_invariants is not None
+            and computed_normal_invariants_1 is not None
+            and surgery_sequence.normal_invariants != computed_normal_invariants_1
+        ):
+            _record_stage(
+                "surgery_sequence",
+                "Surgery Exact Sequence",
+                "failed",
+                "Normal invariants mismatch against supplied sequence.",
+            )
+            return _with_phase5_metadata(
+                HomeomorphismResult(
+                    status="impediment",
+                    is_homeomorphic=False,
+                    reasoning="IMPEDIMENT: Supplied surgery exact-sequence certificate is inconsistent with the computed normal invariants for the first manifold.",
+                    theorem=theorem_label,
+                    evidence=[
+                        "Normal invariants mismatch against supplied surgery sequence"
+                    ],
+                )
+            )
 
     wall = wall_obstruction
     if wall is None:
         try:
-            wall = WallGroupL(dimension=dim, pi=descriptor).compute_obstruction_result(wall_form)
+            wall = WallGroupL(dimension=dim, pi=descriptor).compute_obstruction_result(
+                wall_form
+            )
         except Exception as e:
-            _record_stage("wall_obstruction", "Wall Obstruction", "inconclusive", f"Wall evaluation failed: {e!r}")
-            return _with_phase5_metadata(HomeomorphismResult(
-                status="inconclusive",
-                is_homeomorphic=None,
-                reasoning=f"INCONCLUSIVE: Wall obstruction evaluation failed ({e!r}).",
-                theorem=theorem_label,
-                missing_data=["Computable Wall L-group obstruction"],
-            ))
+            _record_stage(
+                "wall_obstruction",
+                "Wall Obstruction",
+                "inconclusive",
+                f"Wall evaluation failed: {e!r}",
+            )
+            return _with_phase5_metadata(
+                HomeomorphismResult(
+                    status="inconclusive",
+                    is_homeomorphic=None,
+                    reasoning=f"INCONCLUSIVE: Wall obstruction evaluation failed ({e!r}).",
+                    theorem=theorem_label,
+                    missing_data=["Computable Wall L-group obstruction"],
+                )
+            )
 
     if not wall.computable:
-        _record_stage("wall_obstruction", "Wall Obstruction", "inconclusive", "Wall obstruction not computable.", exact=wall.exact)
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="inconclusive",
-            is_homeomorphic=None,
-            reasoning=f"INCONCLUSIVE: Wall obstruction not computable ({wall.message}).",
-            theorem=theorem_label,
-            missing_data=[f"Computable L_{dim}({wall.pi}) obstruction"],
-            assumptions=wall.assumptions,
+        _record_stage(
+            "wall_obstruction",
+            "Wall Obstruction",
+            "inconclusive",
+            "Wall obstruction not computable.",
             exact=wall.exact,
-        ))
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning=f"INCONCLUSIVE: Wall obstruction not computable ({wall.message}).",
+                theorem=theorem_label,
+                missing_data=[f"Computable L_{dim}({wall.pi}) obstruction"],
+                assumptions=wall.assumptions,
+                exact=wall.exact,
+            )
+        )
 
     if not wall.exact:
         missing = ["Exact Wall obstruction certificate"]
         if not getattr(wall, "assembly_certified", False):
             missing.append("Certified product-group assembly map witness")
-        _record_stage("wall_obstruction", "Wall Obstruction", "inconclusive", "Wall obstruction is heuristic.", exact=False)
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="inconclusive",
-            is_homeomorphic=None,
-            reasoning="INCONCLUSIVE: Wall obstruction data is only heuristic; exact surgery classification requires an exact Wall certificate.",
-            theorem=theorem_label,
-            missing_data=missing,
-            assumptions=wall.assumptions,
+        _record_stage(
+            "wall_obstruction",
+            "Wall Obstruction",
+            "inconclusive",
+            "Wall obstruction is heuristic.",
             exact=False,
-        ))
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning="INCONCLUSIVE: Wall obstruction data is only heuristic; exact surgery classification requires an exact Wall certificate.",
+                theorem=theorem_label,
+                missing_data=missing,
+                assumptions=wall.assumptions,
+                exact=False,
+            )
+        )
 
     if wall.obstructs is True:
-        obstruction_desc = f"value={wall.value}" if wall.value is not None else "direct-sum element"
-        _record_stage("wall_obstruction", "Wall Obstruction", "failed", f"Certified non-zero obstruction ({obstruction_desc}).")
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="surgery_required",
-            is_homeomorphic=False,
-            reasoning=f"SURGERY_REQUIRED: Non-zero Wall obstruction detected in L_{dim}({wall.pi}) ({obstruction_desc}).",
-            theorem=theorem_label,
-            evidence=["Whitehead obstruction vanishes", f"Wall obstruction state obstructs={wall.obstructs}, zero_certified={wall.zero_certified}"],
-            assumptions=wall.assumptions,
-            exact=wall.exact,
-        ))
+        obstruction_desc = (
+            f"value={wall.value}" if wall.value is not None else "direct-sum element"
+        )
+        _record_stage(
+            "wall_obstruction",
+            "Wall Obstruction",
+            "failed",
+            f"Certified non-zero obstruction ({obstruction_desc}).",
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="surgery_required",
+                is_homeomorphic=False,
+                reasoning=f"SURGERY_REQUIRED: Non-zero Wall obstruction detected in L_{dim}({wall.pi}) ({obstruction_desc}).",
+                theorem=theorem_label,
+                evidence=[
+                    "Whitehead obstruction vanishes",
+                    f"Wall obstruction state obstructs={wall.obstructs}, zero_certified={wall.zero_certified}",
+                ],
+                assumptions=wall.assumptions,
+                exact=wall.exact,
+            )
+        )
 
     if not wall.zero_certified:
-        _record_stage("wall_obstruction", "Wall Obstruction", "inconclusive", "Wall element computed but vanishing is uncertified.")
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="inconclusive",
-            is_homeomorphic=None,
-            reasoning=(
-                "INCONCLUSIVE: Wall obstruction is computable, but vanishing is not certified "
-                "(e.g., direct-sum/mixed summands without scalar collapse)."
-            ),
-            theorem=theorem_label,
-            missing_data=["Certified vanishing Wall obstruction element"],
-            assumptions=wall.assumptions,
-            exact=wall.exact,
-        ))
+        _record_stage(
+            "wall_obstruction",
+            "Wall Obstruction",
+            "inconclusive",
+            "Wall element computed but vanishing is uncertified.",
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning=(
+                    "INCONCLUSIVE: Wall obstruction is computable, but vanishing is not certified "
+                    "(e.g., direct-sum/mixed summands without scalar collapse)."
+                ),
+                theorem=theorem_label,
+                missing_data=["Certified vanishing Wall obstruction element"],
+                assumptions=wall.assumptions,
+                exact=wall.exact,
+            )
+        )
 
-    _record_stage("wall_obstruction", "Wall Obstruction", "passed", "Exact Wall obstruction is certified zero.")
+    _record_stage(
+        "wall_obstruction",
+        "Wall Obstruction",
+        "passed",
+        "Exact Wall obstruction is certified zero.",
+    )
 
-    if _is_nontrivial_product_descriptor(descriptor) and not bool(getattr(wall, "assembly_certified", False)):
+    if _is_nontrivial_product_descriptor(descriptor) and not bool(
+        getattr(wall, "assembly_certified", False)
+    ):
         _record_stage(
             "product_assembly",
             "Product-Group Assembly Certification",
@@ -1692,18 +2084,20 @@ def analyze_homeomorphism_high_dim_result(
             exact=False,
         )
         if not assembly_state.decision_ready():
-            return _with_phase5_metadata(HomeomorphismResult(
-                status="inconclusive",
-                is_homeomorphic=None,
-                reasoning=(
-                    "INCONCLUSIVE: Product-group Wall data is not assembly-certified and no decision-ready "
-                    "product assembly certificate was supplied."
-                ),
-                theorem=theorem_label,
-                missing_data=["Decision-ready product-group assembly certificate"],
-                assumptions=wall.assumptions + assembly_state.assumptions,
-                exact=False,
-            ))
+            return _with_phase5_metadata(
+                HomeomorphismResult(
+                    status="inconclusive",
+                    is_homeomorphic=None,
+                    reasoning=(
+                        "INCONCLUSIVE: Product-group Wall data is not assembly-certified and no decision-ready "
+                        "product assembly certificate was supplied."
+                    ),
+                    theorem=theorem_label,
+                    missing_data=["Decision-ready product-group assembly certificate"],
+                    assumptions=wall.assumptions + assembly_state.assumptions,
+                    exact=False,
+                )
+            )
         _record_stage(
             "product_assembly",
             "Product-Group Assembly Certification",
@@ -1746,20 +2140,30 @@ def analyze_homeomorphism_high_dim_result(
                 "Homotopy completion evidence is present but does not satisfy decision-ready criteria.",
                 exact=False,
             )
-            return _with_phase5_metadata(HomeomorphismResult(
-                status="inconclusive",
-                is_homeomorphic=None,
-                reasoning=(
-                    "INCONCLUSIVE: A homotopy-completion certificate was supplied, but it is not decision-ready "
-                    "(exact + validated are required for certified high-dimensional completion)."
-                ),
-                theorem=theorem_label,
-                missing_data=["Decision-ready homotopy-completion certificate (exact and validated)"],
-                evidence=["Homology match", "Wh(pi_1)=0", f"L_{dim}(pi_1) obstruction vanishes"],
-                assumptions=wall.assumptions + wh.assumptions + completion_state.assumptions,
-                certificates=base_certificates,
-                exact=False,
-            ))
+            return _with_phase5_metadata(
+                HomeomorphismResult(
+                    status="inconclusive",
+                    is_homeomorphic=None,
+                    reasoning=(
+                        "INCONCLUSIVE: A homotopy-completion certificate was supplied, but it is not decision-ready "
+                        "(exact + validated are required for certified high-dimensional completion)."
+                    ),
+                    theorem=theorem_label,
+                    missing_data=[
+                        "Decision-ready homotopy-completion certificate (exact and validated)"
+                    ],
+                    evidence=[
+                        "Homology match",
+                        "Wh(pi_1)=0",
+                        f"L_{dim}(pi_1) obstruction vanishes",
+                    ],
+                    assumptions=wall.assumptions
+                    + wh.assumptions
+                    + completion_state.assumptions,
+                    certificates=base_certificates,
+                    exact=False,
+                )
+            )
 
         _record_stage(
             "homotopy_completion",
@@ -1779,24 +2183,31 @@ def analyze_homeomorphism_high_dim_result(
             "Exact high-dimensional surgery pipeline completed with a decision-ready homotopy-completion certificate.",
             exact=True,
         )
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="success",
-            is_homeomorphic=True,
-            reasoning=(
-                f"SUCCESS: Homology equivalence, Wh(pi_1)=0, vanishing Wall obstruction, and an exact "
-                f"validated homotopy-completion certificate certify homeomorphism in {dim}D under the modeled s-cobordism pipeline."
-            ),
-            theorem=theorem_label,
-            evidence=[
-                "Homology match",
-                "Wh(pi_1)=0",
-                f"L_{dim}(pi_1) obstruction vanishes",
-                "Decision-ready homotopy-completion certificate",
-            ],
-            assumptions=wall.assumptions + wh.assumptions + completion_state.assumptions,
-            certificates=base_certificates,
-            exact=wall.exact and wh.exact and completion_state.exact and completion_state.validated,
-        ))
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="success",
+                is_homeomorphic=True,
+                reasoning=(
+                    f"SUCCESS: Homology equivalence, Wh(pi_1)=0, vanishing Wall obstruction, and an exact "
+                    f"validated homotopy-completion certificate certify homeomorphism in {dim}D under the modeled s-cobordism pipeline."
+                ),
+                theorem=theorem_label,
+                evidence=[
+                    "Homology match",
+                    "Wh(pi_1)=0",
+                    f"L_{dim}(pi_1) obstruction vanishes",
+                    "Decision-ready homotopy-completion certificate",
+                ],
+                assumptions=wall.assumptions
+                + wh.assumptions
+                + completion_state.assumptions,
+                certificates=base_certificates,
+                exact=wall.exact
+                and wh.exact
+                and completion_state.exact
+                and completion_state.validated,
+            )
+        )
 
     _record_stage(
         "homotopy_completion",
@@ -1809,39 +2220,71 @@ def analyze_homeomorphism_high_dim_result(
     s1 = _homology_sphere_like(c1, dim)
     s2 = _homology_sphere_like(c2, dim)
     if s1 is None or s2 is None:
-        _record_stage("homology_sphere_side_conditions", "Homology-Sphere Side Conditions", "inconclusive", "Could not verify side conditions exactly.")
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="inconclusive",
-            is_homeomorphic=None,
-            reasoning="INCONCLUSIVE: Could not verify homology-sphere side conditions exactly.",
-            theorem="s-Cobordism / surgery classification",
-            missing_data=["Exact homology-sphere verification"],
-        ))
+        _record_stage(
+            "homology_sphere_side_conditions",
+            "Homology-Sphere Side Conditions",
+            "inconclusive",
+            "Could not verify side conditions exactly.",
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="inconclusive",
+                is_homeomorphic=None,
+                reasoning="INCONCLUSIVE: Could not verify homology-sphere side conditions exactly.",
+                theorem="s-Cobordism / surgery classification",
+                missing_data=["Exact homology-sphere verification"],
+            )
+        )
 
     if s1 and s2 and descriptor == "1":
-        _record_stage("final_classification", "Final Classification", "passed", "All currently modeled high-dimensional obstructions vanish with side conditions satisfied.")
-        return _with_phase5_metadata(HomeomorphismResult(
-            status="success",
-            is_homeomorphic=True,
-            reasoning=f"SUCCESS: Homology-sphere conditions, Wh(pi_1)=0, and vanishing Wall obstruction support homeomorphism in {dim}D under s-cobordism/generalized Poincare hypotheses.",
-            theorem="s-Cobordism / generalized Poincare",
-            evidence=["Homology sphere checks passed", "Wh(pi_1)=0", f"L_{dim}(pi_1) obstruction vanishes"],
-            assumptions=["Closed connected manifold hypotheses", "Input normal-map/surgery model is valid"],
+        _record_stage(
+            "final_classification",
+            "Final Classification",
+            "passed",
+            "All currently modeled high-dimensional obstructions vanish with side conditions satisfied.",
+        )
+        return _with_phase5_metadata(
+            HomeomorphismResult(
+                status="success",
+                is_homeomorphic=True,
+                reasoning=f"SUCCESS: Homology-sphere conditions, Wh(pi_1)=0, and vanishing Wall obstruction support homeomorphism in {dim}D under s-cobordism/generalized Poincare hypotheses.",
+                theorem="s-Cobordism / generalized Poincare",
+                evidence=[
+                    "Homology sphere checks passed",
+                    "Wh(pi_1)=0",
+                    f"L_{dim}(pi_1) obstruction vanishes",
+                ],
+                assumptions=[
+                    "Closed connected manifold hypotheses",
+                    "Input normal-map/surgery model is valid",
+                ],
+                certificates=base_certificates,
+                exact=wall.exact and wh.exact,
+            )
+        )
+
+    _record_stage(
+        "final_classification",
+        "Final Classification",
+        "inconclusive",
+        "Missing explicit homotopy-equivalence completion witness in API pipeline.",
+    )
+    return _with_phase5_metadata(
+        HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=f"INCONCLUSIVE: Homology equivalence holds in {dim}D and computed surgery obstructions vanish, but this API has no explicit homotopy-equivalence witness to complete classification.",
+            theorem=theorem_label,
+            evidence=[
+                "Homology match",
+                "Wh(pi_1)=0",
+                f"L_{dim}(pi_1) obstruction vanishes",
+            ],
+            assumptions=wall.assumptions + wh.assumptions,
             certificates=base_certificates,
             exact=wall.exact and wh.exact,
-        ))
-
-    _record_stage("final_classification", "Final Classification", "inconclusive", "Missing explicit homotopy-equivalence completion witness in API pipeline.")
-    return _with_phase5_metadata(HomeomorphismResult(
-        status="inconclusive",
-        is_homeomorphic=None,
-        reasoning=f"INCONCLUSIVE: Homology equivalence holds in {dim}D and computed surgery obstructions vanish, but this API has no explicit homotopy-equivalence witness to complete classification.",
-        theorem=theorem_label,
-        evidence=["Homology match", "Wh(pi_1)=0", f"L_{dim}(pi_1) obstruction vanishes"],
-        assumptions=wall.assumptions + wh.assumptions,
-        certificates=base_certificates,
-        exact=wall.exact and wh.exact,
-    ))
+        )
+    )
 
 
 def analyze_homeomorphism_high_dim(
@@ -1894,6 +2337,7 @@ def analyze_homeomorphism_high_dim(
         product_assembly_certificate=product_assembly_certificate,
     ).to_legacy_tuple()
 
+
 def analyze_homeomorphism_4d_result(
     m1: IntersectionForm,
     m2: IntersectionForm,
@@ -1901,24 +2345,28 @@ def analyze_homeomorphism_4d_result(
     ks2: int | None = None,
     *,
     simply_connected: bool | None = None,
-    definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate | dict | None = None,
+    definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate
+    | dict
+    | None = None,
 ) -> HomeomorphismResult:
     """
     Analyzes the potential for homeomorphism between two simply-connected 4-manifolds.
-    
+
     Based on Freedman's Classification Theorem:
     Two such manifolds are homeomorphic if and only if:
     1. Their intersection forms are isomorphic over Z.
     2. Their Kirby-Siebenmann invariants match.
-    
+
     Returns
     -------
     is_homeomorphic : bool
     reasoning : str
     """
     if m1.dimension != 4 or m2.dimension != 4:
-        raise DimensionError(f"Freedman's Classification Theorem strictly governs simply-connected 4-manifolds via intersection forms. "
-                             f"Received manifolds of dimensions {m1.dimension} and {m2.dimension}. Hint: Use 2D, 3D, or high_dim analyzers instead.")
+        raise DimensionError(
+            f"Freedman's Classification Theorem strictly governs simply-connected 4-manifolds via intersection forms. "
+            f"Received manifolds of dimensions {m1.dimension} and {m2.dimension}. Hint: Use 2D, 3D, or high_dim analyzers instead."
+        )
 
     if simply_connected is None:
         return HomeomorphismResult(
@@ -2024,7 +2472,10 @@ def analyze_homeomorphism_4d_result(
                 f"(rank={m1.rank()}, signature={m1.signature()}, type={m1.type()}, KS={ks1})."
             ),
             theorem="Freedman classification",
-            evidence=["Indefinite unimodular forms classified by rank/signature/type", "Matching KS invariant"],
+            evidence=[
+                "Indefinite unimodular forms classified by rank/signature/type",
+                "Matching KS invariant",
+            ],
             certificates={
                 "isometry_search_mode": "indefinite_classification",
                 "isometry_search_certified": True,
@@ -2035,7 +2486,9 @@ def analyze_homeomorphism_4d_result(
     # Case: Definite forms (require lattice isomorphism)
     Q1 = np.asarray(m1.matrix, dtype=np.int64)
     Q2 = np.asarray(m2.matrix, dtype=np.int64)
-    cert = _normalize_definite_lattice_isometry_certificate(definite_lattice_isometry_certificate)
+    cert = _normalize_definite_lattice_isometry_certificate(
+        definite_lattice_isometry_certificate
+    )
     if np.array_equal(Q1, Q2):
         return HomeomorphismResult(
             status="success",
@@ -2086,7 +2539,10 @@ def analyze_homeomorphism_4d_result(
                 is_homeomorphic=True,
                 reasoning="SUCCESS: Definite lattice isomorphism certified via decision-ready external isometry witness.",
                 theorem="Freedman classification",
-                evidence=["Decision-ready definite-lattice certificate", "Explicit unimodular isometry witness"],
+                evidence=[
+                    "Decision-ready definite-lattice certificate",
+                    "Explicit unimodular isometry witness",
+                ],
                 assumptions=cert.assumptions,
                 certificates={
                     "isometry_search_mode": "external_certificate",
@@ -2102,7 +2558,9 @@ def analyze_homeomorphism_4d_result(
             reasoning="INCONCLUSIVE: Provided definite-lattice certificate is decision-ready but does not verify U^T Q1 U = Q2.",
             theorem="Freedman classification",
             missing_data=["Valid explicit unimodular isometry matrix"],
-            certificates={"definite_lattice_isometry_certificate": cert.to_legacy_dict()},
+            certificates={
+                "definite_lattice_isometry_certificate": cert.to_legacy_dict()
+            },
         )
 
     return HomeomorphismResult(
@@ -2127,7 +2585,9 @@ def analyze_homeomorphism_4d(
     ks2: int | None = None,
     *,
     simply_connected: bool | None = None,
-    definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate | dict | None = None,
+    definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate
+    | dict
+    | None = None,
 ) -> Tuple[bool | None, str]:
     return analyze_homeomorphism_4d_result(
         m1,
@@ -2138,13 +2598,19 @@ def analyze_homeomorphism_4d(
         definite_lattice_isometry_certificate=definite_lattice_isometry_certificate,
     ).to_legacy_tuple()
 
-def surgery_to_remove_impediments(m: IntersectionForm, target_sig: int) -> Tuple[bool, str]:
+
+def surgery_to_remove_impediments(
+    m: IntersectionForm, target_sig: int
+) -> Tuple[bool, str]:
     """
     Analyzes if surgery can be used to remove the 'impediment' to a target signature.
     """
     sig_diff = m.signature() - target_sig
     if sig_diff == 0:
-        return True, "Signatures already match. No signature-adjustment surgery required; parity, KS, Wh(pi_1), and Wall obstructions may still need checks."
+        return (
+            True,
+            "Signatures already match. No signature-adjustment surgery required; parity, KS, Wh(pi_1), and Wall obstructions may still need checks.",
+        )
     # Blow-up with CP^2 or -CP^2 changes signature by +/-1 and rank by 1.
     n_blowups = abs(sig_diff)
     blowup_type = "CP^2" if sig_diff < 0 else "(-CP^2)"

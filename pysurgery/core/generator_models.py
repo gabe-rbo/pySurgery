@@ -55,4 +55,3 @@ class HomologyBasisResult(BaseModel):
     optimal: bool = False
     exact: bool = True
     message: str = ""
-

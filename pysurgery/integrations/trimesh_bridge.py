@@ -6,38 +6,46 @@ from pysurgery.bridge.julia_bridge import julia_engine
 
 try:
     import trimesh
+
     HAS_TRIMESH = True
 except ImportError:
     HAS_TRIMESH = False
+
 
 def trimesh_to_cw_complex(mesh) -> CWComplex:
     """
     Converts a Trimesh object (3D geometric mesh) into a topological CW Complex.
     This extracts the 0-cells (vertices), 1-cells (edges), and 2-cells (faces)
     and constructs the exact boundary operators (attaching maps) over Z.
-    
+
     Uses Julia acceleration for large face meshes, with pure-Python fallback.
 
     Parameters
     ----------
     mesh : trimesh.Trimesh
         A loaded Trimesh object.
-        
+
     Returns
     -------
     CWComplex
         The abstract topological representation of the mesh.
     """
     if not HAS_TRIMESH:
-        raise ImportError("The 'trimesh' library is required. Install via 'pip install trimesh'.")
+        raise ImportError(
+            "The 'trimesh' library is required. Install via 'pip install trimesh'."
+        )
 
     if not isinstance(mesh, trimesh.Trimesh):
         raise TypeError("Input must be a trimesh.Trimesh object.")
 
     if mesh.faces.ndim != 2 or mesh.faces.shape[1] < 3:
-        raise ValueError("trimesh_to_cw_complex expects polygonal faces with at least 3 vertices.")
+        raise ValueError(
+            "trimesh_to_cw_complex expects polygonal faces with at least 3 vertices."
+        )
     if len(mesh.faces) == 0:
-        raise ValueError("Mesh has no 2-cells (faces); unsupported for current 2-skeleton conversion.")
+        raise ValueError(
+            "Mesh has no 2-cells (faces); unsupported for current 2-skeleton conversion."
+        )
 
     n_vertices = len(mesh.vertices)
     faces = np.asarray(mesh.faces, dtype=np.int64)
@@ -57,7 +65,11 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
                 shape=(payload["n_edges"], payload["n_faces"]),
                 dtype=np.int64,
             )
-            cells = {0: payload["n_vertices"], 1: payload["n_edges"], 2: payload["n_faces"]}
+            cells = {
+                0: payload["n_vertices"],
+                1: payload["n_edges"],
+                2: payload["n_faces"],
+            }
             attaching_maps = {1: d1, 2: d2}
             return CWComplex(cells=cells, attaching_maps=attaching_maps)
         except Exception as e:
@@ -86,19 +98,21 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
     n_edges = len(edges)
 
     cells = {0: n_vertices, 1: n_edges, 2: n_faces}
-    
+
     # Boundary 1: d_1 (Edges -> Vertices)
     d1_rows = []
     d1_cols = []
     d1_data = []
-    
+
     for j, (v1, v2) in enumerate(edges):
         d1_rows.extend([v1, v2])
         d1_cols.extend([j, j])
         d1_data.extend([-1, 1])
-        
-    d1 = sp.csr_matrix((d1_data, (d1_rows, d1_cols)), shape=(n_vertices, n_edges), dtype=np.int64)
-    
+
+    d1 = sp.csr_matrix(
+        (d1_data, (d1_rows, d1_cols)), shape=(n_vertices, n_edges), dtype=np.int64
+    )
+
     # Boundary 2: d_2 (Faces -> Edges)
     d2_rows = []
     d2_cols = []
@@ -110,16 +124,22 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
             d2_cols.append(j)
             d2_data.append(sign)
 
-    d2 = sp.csr_matrix((d2_data, (d2_rows, d2_cols)), shape=(n_edges, n_faces), dtype=np.int64)
-    
+    d2 = sp.csr_matrix(
+        (d2_data, (d2_rows, d2_cols)), shape=(n_edges, n_faces), dtype=np.int64
+    )
+
     boundary_check = d1 @ d2
     if boundary_check.nnz > 0 and np.any(boundary_check.data != 0):
         from pysurgery.core.exceptions import DimensionError
-        raise DimensionError("Invalid mesh topology: boundary operator d_1 o d_2 != 0. The mesh faces are not consistently oriented or the mesh contains non-manifold geometry.")
-    
+
+        raise DimensionError(
+            "Invalid mesh topology: boundary operator d_1 o d_2 != 0. The mesh faces are not consistently oriented or the mesh contains non-manifold geometry."
+        )
+
     attaching_maps = {1: d1, 2: d2}
-    
+
     return CWComplex(cells=cells, attaching_maps=attaching_maps)
+
 
 def heal_mesh_topology(mesh) -> str:
     """
@@ -128,9 +148,9 @@ def heal_mesh_topology(mesh) -> str:
     """
     cw = trimesh_to_cw_complex(mesh)
     chain = cw.cellular_chain_complex()
-    
+
     betti_1, torsion_1 = chain.homology(1)
-    
+
     if betti_1 == 0:
         return "Mesh is topologically simple (H_1 = 0). No handles detected. Healing not required."
     else:
