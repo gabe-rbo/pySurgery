@@ -24,6 +24,12 @@ class Pi1PresentationWithTraces(BaseModel):
     generators: list[str] = Field(default_factory=list)
     relations: list[list[str]] = Field(default_factory=list)
     traces: list[Pi1GeneratorTrace] = Field(default_factory=list)
+    mode_used: str = "optimized"
+    generator_mode: str = "optimized"
+    backend_used: str = "python"
+    raw_generator_count: int = 0
+    optimized_generator_count: int = 0
+    reduced_generator_count: int = 0
 
 
 class HomologyGenerator(BaseModel):

@@ -160,7 +160,25 @@ pySurgery extracts characteristic-class information from intersection-form data;
 
 In dimensions $n \ge 5$, classification interacts with $\pi_1$, Whitehead torsion, and Wall’s surgery groups $L_n(\pi_1)$. pySurgery includes tooling aimed at discrete extraction of group presentations and surgery-sequence-adjacent invariants (where computationally feasible).
 
-### 7) Dimension-aware behavior
+### 7) Fundamental-group generators: raw vs optimized
+
+For source complexes with a 1-skeleton and 2-cells, `extract_pi_1_with_traces(...)` returns a typed presentation plus edge-path traces for the surviving generators.
+
+You can choose the generator mode explicitly:
+
+* `generator_mode="raw"` — keep the full spanning-forest generator set
+* `generator_mode="optimized"` — simplify the presentation and keep a reduced trace set
+
+The result object records `mode_used`, `backend_used`, `raw_generator_count`, and `optimized_generator_count` so notebooks and benchmarks can compare the two modes directly.
+
+Quick benchmark helper:
+
+```bash
+python scripts/benchmark_pi1_modes.py
+python scripts/benchmark_pi1_modes.py --force-python
+```
+
+### 8) Dimension-aware behavior
 
 * **2D**: orientability/genus signals via low-dimensional homology
 * **3D**: homology-sphere style signals and 3-manifold context

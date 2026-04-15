@@ -2,7 +2,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from pysurgery.core.complexes import CWComplex
-from pysurgery.core.fundamental_group import extract_pi_1_with_traces
+from pysurgery.core.fundamental_group import extract_pi_1, extract_pi_1_with_traces
 from pysurgery.core.homology_generators import (
     compute_homology_basis_from_simplices,
     compute_optimal_h1_basis_from_simplices,
@@ -28,10 +28,38 @@ def test_extract_pi1_with_traces_disc_simplifies_killed_generator():
     d2 = sp.csr_matrix(np.array([[1]], dtype=np.int64))
     cw = CWComplex(attaching_maps={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1})
 
-    out = extract_pi_1_with_traces(cw, simplify=True)
+    out = extract_pi_1_with_traces(cw, simplify=True, generator_mode="optimized")
     assert out.generators == []
     assert out.relations == []
     assert out.traces == []
+    assert out.generator_mode == "optimized"
+    assert out.mode_used == "optimized"
+    assert out.optimized_generator_count == 0
+
+
+def test_extract_pi1_with_traces_raw_mode_keeps_all_generators():
+    d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
+    d2 = sp.csr_matrix(np.array([[1]], dtype=np.int64))
+    cw = CWComplex(attaching_maps={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1})
+
+    out = extract_pi_1_with_traces(cw, simplify=True, generator_mode="raw")
+    assert out.generators == ["g_0"]
+    assert len(out.traces) == 1
+    assert out.traces[0].generator == "g_0"
+    assert out.generator_mode == "raw"
+    assert out.mode_used == "raw"
+    assert out.raw_generator_count == 1
+    assert out.reduced_generator_count == 1
+
+
+def test_extract_pi1_raw_fundamental_group_mode_matches_traces():
+    d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
+    d2 = sp.csr_matrix(np.array([[1]], dtype=np.int64))
+    cw = CWComplex(attaching_maps={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1})
+
+    pi1 = extract_pi_1(cw, simplify=True, generator_mode="raw")
+    assert pi1.generators == ["g_0"]
+    assert pi1.relations == [["g_0"]]
 
 
 def test_compute_optimal_h1_basis_from_simplices_square_cycle_rank_one():

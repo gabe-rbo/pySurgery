@@ -457,6 +457,148 @@ function compute_boundary_data_from_simplices(simplex_entries, max_dim::Int)
     return _compute_boundary_data_internal(simplex_entries, max_dim)
 end
 
+function pi1_trace_candidates_from_d1(d1_rows::AbstractVector{Int64}, d1_cols::AbstractVector{Int64}, d1_vals::AbstractVector{Int64}, n_vertices::Int, n_edges::Int)
+    adj = Dict{Int64, Vector{Tuple{Int64, Int64, Int64}}}()
+    for i in 0:(n_vertices - 1)
+        adj[Int64(i)] = Vector{Tuple{Int64, Int64, Int64}}()
+    end
+
+    edge_list = Vector{Union{Nothing, Tuple{Int64, Int64}}}(undef, n_edges)
+    fill!(edge_list, nothing)
+
+    # Build edge endpoint table and adjacency from COO d1.
+    col_to_entries = Dict{Int64, Vector{Tuple{Int64, Int64}}}()
+    for idx in 1:length(d1_rows)
+        col = Int64(d1_cols[idx])
+        push!(get!(col_to_entries, col, Vector{Tuple{Int64, Int64}}()), (Int64(d1_vals[idx]), Int64(d1_rows[idx])))
+    end
+
+    for e in 0:(n_edges - 1)
+        entries = get(col_to_entries, Int64(e), Vector{Tuple{Int64, Int64}}())
+        if isempty(entries)
+            edge_list[e + 1] = (0, 0)
+            continue
+        end
+        if length(entries) != 2
+            edge_list[e + 1] = nothing
+            continue
+        end
+
+        u = Int64(-1)
+        v = Int64(-1)
+        for (val, r) in entries
+            if val == -1
+                u = r
+            elseif val == 1
+                v = r
+            end
+        end
+
+        if u != -1 && v != -1
+            push!(adj[u], (v, e, 1))
+            push!(adj[v], (u, e, -1))
+            edge_list[e + 1] = (u, v)
+        else
+            edge_list[e + 1] = nothing
+        end
+    end
+
+    visited = falses(n_vertices)
+    parent = Dict{Int64, Int64}()
+    component_root = Dict{Int64, Int64}()
+    tree_edges = Set{Int64}()
+
+    if n_vertices > 0
+        for start in 0:(n_vertices - 1)
+            if visited[start + 1]
+                continue
+            end
+            queue = Int64[Int64(start)]
+            visited[start + 1] = true
+            parent[Int64(start)] = Int64(-1)
+            component_root[Int64(start)] = Int64(start)
+
+            while !isempty(queue)
+                curr = popfirst!(queue)
+                for (neighbor, edge_idx, _) in adj[curr]
+                    if !visited[neighbor + 1]
+                        visited[neighbor + 1] = true
+                        push!(tree_edges, edge_idx)
+                        parent[neighbor] = curr
+                        component_root[neighbor] = Int64(start)
+                        push!(queue, neighbor)
+                    end
+                end
+            end
+        end
+    end
+
+    function path_between_tree(u::Int64, v::Int64)
+        path_u = Int64[]
+        seen_u = Set{Int64}()
+        x = u
+        while x != -1
+            push!(path_u, x)
+            push!(seen_u, x)
+            x = get(parent, x, Int64(-1))
+        end
+
+        path_v = Int64[]
+        y = v
+        while !(y in seen_u) && y != -1
+            push!(path_v, y)
+            y = get(parent, y, Int64(-1))
+        end
+
+        if y == -1
+            return Int64[]
+        end
+
+        lca = y
+        i = findfirst(==(lca), path_u)
+        i === nothing && return Int64[]
+        return vcat(path_u[1:i], reverse(path_v))
+    end
+
+    traces = Vector{Dict{String, Any}}()
+    for e in 0:(n_edges - 1)
+        if e in tree_edges
+            continue
+        end
+        endpoints = edge_list[e + 1]
+        endpoints === nothing && continue
+        u, v = endpoints
+
+        if u == v
+            vertex_path = [u]
+            directed = [(u, v)]
+            comp_root = get(component_root, u, u)
+        else
+            path_vertices = path_between_tree(v, u)
+            directed = [(u, v)]
+            for i in 1:(length(path_vertices) - 1)
+                push!(directed, (path_vertices[i], path_vertices[i + 1]))
+            end
+            vertex_path = [u]
+            for (_, b) in directed
+                push!(vertex_path, b)
+            end
+            comp_root = get(component_root, u, get(component_root, v, u))
+        end
+
+        push!(traces, Dict(
+            "generator" => "g_$(e)",
+            "edge_index" => Int64(e),
+            "component_root" => Int64(comp_root),
+            "vertex_path" => vertex_path,
+            "directed_edge_path" => [[Int64(a), Int64(b)] for (a, b) in directed],
+            "undirected_edge_path" => [[Int64(min(a, b)), Int64(max(a, b))] for (a, b) in directed],
+        ))
+    end
+
+    return traces
+end
+
 function _as_string_vector(x)
     if x isa Vector{String}
         return x

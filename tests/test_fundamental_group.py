@@ -5,7 +5,7 @@ try:
     from tests.discrete_surface_data import get_surfaces, get_3_manifolds, to_complex
 except ImportError:
     pass
-from pysurgery.core.fundamental_group import extract_pi_1, simplify_presentation, infer_standard_group_descriptor, FundamentalGroup
+from pysurgery.core.fundamental_group import extract_pi_1, extract_pi_1_with_traces, simplify_presentation, infer_standard_group_descriptor, FundamentalGroup
 from pysurgery.core.complexes import CWComplex
 
 def test_extract_pi_1_trivial():
@@ -89,6 +89,37 @@ def test_simplify_presentation_free_and_cyclic_reduction():
     assert len(simp.relations) == 1
 
 
+def test_simplify_presentation_singleton_inverse_relator_kills_generator():
+    simp = simplify_presentation(["g_0"], [["g_0^-1"]])
+    assert simp.generators == []
+    assert simp.relations == []
+
+
+def test_simplify_presentation_iterative_substitution_chain_collapses_to_trivial():
+    simp = simplify_presentation(
+        ["g_0", "g_1", "g_2", "g_3"],
+        [["g_0", "g_1^-1"], ["g_1", "g_2^-1"], ["g_2", "g_3^-1"], ["g_3"]],
+    )
+    assert simp.generators == []
+    assert simp.relations == []
+
+
+def test_simplify_presentation_torus_like_relators_reduce_significantly():
+    gens = [
+        "g_11", "g_13", "g_15", "g_21", "g_24", "g_25", "g_27", "g_28", "g_29", "g_30", "g_31", "g_33",
+        "g_34", "g_35", "g_36", "g_37", "g_38", "g_39", "g_40", "g_41", "g_43", "g_44", "g_46", "g_47",
+    ]
+    rels = [
+        ["g_24"], ["g_44"], ["g_11", "g_13^-1"], ["g_11", "g_15^-1"], ["g_13", "g_27^-1"], ["g_15", "g_46^-1"],
+        ["g_21"], ["g_47"], ["g_25"], ["g_21", "g_30"], ["g_24", "g_28"], ["g_25", "g_36"],
+        ["g_27", "g_31", "g_29^-1"], ["g_28", "g_39", "g_29^-1"], ["g_30", "g_33", "g_31^-1"],
+        ["g_35", "g_37^-1"], ["g_33", "g_34^-1"], ["g_34", "g_44", "g_35^-1"], ["g_36", "g_40", "g_38^-1"],
+        ["g_37", "g_46", "g_38^-1"], ["g_39", "g_43", "g_41^-1"], ["g_40", "g_47", "g_41^-1"], ["g_43"],
+    ]
+    simp = simplify_presentation(gens, rels)
+    assert len(simp.generators) < 10
+
+
 def test_extract_pi_1_disable_simplification_keeps_singleton_relation():
     d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
     d2 = sp.csr_matrix(np.array([[1]], dtype=np.int64))
@@ -97,6 +128,78 @@ def test_extract_pi_1_disable_simplification_keeps_singleton_relation():
     assert pi_raw.relations == [["g_0"]]
     pi_s = extract_pi_1(cw, simplify=True)
     assert pi_s.relations == []
+
+
+def test_extract_pi_1_with_traces_rejects_invalid_mode():
+    d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
+    cw = CWComplex(attaching_maps={1: d1}, dimensions=[0, 1], cells={0: 1, 1: 1})
+    with pytest.raises(ValueError):
+        extract_pi_1_with_traces(cw, generator_mode="invalid")
+
+
+def test_extract_pi_1_with_traces_simplify_false_preserves_requested_mode_metadata():
+    d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
+    d2 = sp.csr_matrix(np.array([[1]], dtype=np.int64))
+    cw = CWComplex(attaching_maps={1: d1, 2: d2}, dimensions=[0, 1, 2], cells={0: 1, 1: 1, 2: 1})
+    out = extract_pi_1_with_traces(cw, simplify=False, generator_mode="optimized")
+    assert out.generator_mode == "raw"
+    assert out.mode_used == "optimized"
+    assert out.raw_generator_count == 1
+    assert out.reduced_generator_count == 1
+
+
+def test_extract_pi_1_with_traces_mode_alias_matches_generator_mode():
+    d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
+    cw = CWComplex(attaching_maps={1: d1}, dimensions=[0, 1], cells={0: 1, 1: 1})
+    out = extract_pi_1_with_traces(cw, mode="raw")
+    assert out.generator_mode == "raw"
+    assert out.mode_used == "raw"
+
+
+def test_extract_pi_1_with_traces_uses_julia_trace_backend_when_available(monkeypatch):
+    d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
+    cw = CWComplex(attaching_maps={1: d1}, dimensions=[0, 1], cells={0: 1, 1: 1})
+
+    from pysurgery.bridge.julia_bridge import julia_engine
+
+    monkeypatch.setattr(julia_engine, "available", True, raising=False)
+    monkeypatch.setattr(
+        julia_engine,
+        "compute_pi1_trace_candidates",
+        lambda *args, **kwargs: [
+            {
+                "generator": "g_0",
+                "edge_index": 0,
+                "component_root": 0,
+                "vertex_path": [0],
+                "directed_edge_path": [(0, 0)],
+                "undirected_edge_path": [(0, 0)],
+            }
+        ],
+        raising=False,
+    )
+
+    out = extract_pi_1_with_traces(cw, generator_mode="raw")
+    assert out.backend_used == "julia"
+    assert out.traces[0].generator == "g_0"
+
+
+def test_extract_pi_1_with_traces_falls_back_to_python_when_julia_trace_fails(monkeypatch):
+    d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
+    cw = CWComplex(attaching_maps={1: d1}, dimensions=[0, 1], cells={0: 1, 1: 1})
+
+    from pysurgery.bridge.julia_bridge import julia_engine
+
+    monkeypatch.setattr(julia_engine, "available", True, raising=False)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("forced failure")
+
+    monkeypatch.setattr(julia_engine, "compute_pi1_trace_candidates", _raise, raising=False)
+
+    out = extract_pi_1_with_traces(cw, generator_mode="raw")
+    assert out.backend_used == "python"
+    assert out.traces[0].generator == "g_0"
 
 
 def test_infer_standard_group_descriptor_recognizes_trivial_and_infinite_cyclic():

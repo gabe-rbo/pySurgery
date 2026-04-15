@@ -138,6 +138,16 @@ class JuliaBridge:
                     [(0, 1), (1, 2), (0, 2), (2, 3), (0, 3)],
                 ),
             ),
+            (
+                "pi1_raw_traces",
+                lambda: self.compute_pi1_trace_candidates(
+                    np.array([0, 1], dtype=np.int64),
+                    np.array([0, 0], dtype=np.int64),
+                    np.array([-1, 1], dtype=np.int64),
+                    n_vertices=2,
+                    n_edges=1,
+                ),
+            ),
         ]
 
     def _full_warmup_workloads(self) -> list[tuple[str, callable]]:
@@ -191,7 +201,7 @@ class JuliaBridge:
                 lambda: self.group_ring_multiply({(0,): 1}, {(0,): 1}, 2),
             ),
             (
-                "abelianize_and_bhs_rank",
+                "pi1_abelianization",
                 lambda: self.abelianize_and_bhs_rank(["a"], [["a", "a"]]),
             ),
             (
@@ -552,6 +562,38 @@ class JuliaBridge:
                     "support_edges": support_edges,
                     "weight": float(g["weight"]),
                     "certified_cycle": bool(g["certified_cycle"]),
+                }
+            )
+        return parsed
+
+    def compute_pi1_trace_candidates(
+        self,
+        d1_rows: np.ndarray,
+        d1_cols: np.ndarray,
+        d1_vals: np.ndarray,
+        *,
+        n_vertices: int,
+        n_edges: int,
+    ) -> list[dict]:
+        """Compute raw pi1 generator trace candidates from d1 COO data via Julia."""
+        self.require_julia()
+        out = self.backend.pi1_trace_candidates_from_d1(
+            np.asarray(d1_rows, dtype=np.int64),
+            np.asarray(d1_cols, dtype=np.int64),
+            np.asarray(d1_vals, dtype=np.int64),
+            int(n_vertices),
+            int(n_edges),
+        )
+        parsed: list[dict] = []
+        for tr in out:
+            parsed.append(
+                {
+                    "generator": str(tr["generator"]),
+                    "edge_index": int(tr["edge_index"]),
+                    "component_root": int(tr["component_root"]),
+                    "vertex_path": [int(x) for x in tr["vertex_path"]],
+                    "directed_edge_path": [(int(e[0]), int(e[1])) for e in tr["directed_edge_path"]],
+                    "undirected_edge_path": [(int(e[0]), int(e[1])) for e in tr["undirected_edge_path"]],
                 }
             )
         return parsed
