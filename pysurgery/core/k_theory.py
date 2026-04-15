@@ -7,6 +7,7 @@ from .fundamental_group import FundamentalGroup, infer_standard_group_descriptor
 from ..bridge.julia_bridge import julia_engine
 
 def euler_totient(n):
+    """Compute Euler's totient function φ(n) by prime-factor stripping."""
     result = n
     p = 2
     temp = n
@@ -22,6 +23,7 @@ def euler_totient(n):
 
 
 def _num_divisors(n: int) -> int:
+    """Return the divisor-count function d(n)."""
     return sum(1 for i in range(1, n + 1) if n % i == 0)
 
 

@@ -69,6 +69,7 @@ def arf_invariant_gf2(M: np.ndarray, q: np.ndarray) -> int:
 
 
 def _rank_mod_2(M: np.ndarray) -> int:
+    """Compute matrix rank over GF(2)."""
     A = (np.asarray(M, dtype=np.int64) % 2).copy()
     m, n = A.shape
     row = 0

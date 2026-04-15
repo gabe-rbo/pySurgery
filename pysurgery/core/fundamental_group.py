@@ -1,6 +1,7 @@
 from typing import Dict, List, Tuple
 from math import gcd
 import numpy as np
+import sympy as sp
 from pydantic import BaseModel, ConfigDict, Field
 from .complexes import CWComplex
 from .exact_algebra import normalize_word_token
@@ -18,17 +19,20 @@ class FundamentalGroup(BaseModel):
     relations: List[List[str]]
 
     def __str__(self):
+        """Format the presentation as `<g1, g2 | r1, r2, ...>`."""
         gens = ", ".join(self.generators)
         rels = ", ".join(["".join(r) for r in self.relations])
         return f"< {gens} | {rels} >"
 
 
 def _inverse_word_token(tok: str) -> str:
+    """Return the formal inverse of a normalized generator token."""
     nt = normalize_word_token(tok)
     return nt[:-3] if nt.endswith("^-1") else f"{nt}^-1"
 
 
 def _free_reduce(word: List[str]) -> List[str]:
+    """Free-reduce a word by cancelling adjacent inverse token pairs."""
     stack: List[str] = []
     for tok in word:
         tok = normalize_word_token(tok)
@@ -40,6 +44,7 @@ def _free_reduce(word: List[str]) -> List[str]:
 
 
 def _cyclic_reduce(word: List[str]) -> List[str]:
+    """Cyclically reduce a word after free reduction."""
     w = _free_reduce(word)
     while len(w) >= 2 and _inverse_word_token(w[0]) == w[-1]:
         w = w[1:-1]
@@ -48,6 +53,10 @@ def _cyclic_reduce(word: List[str]) -> List[str]:
 
 
 def _canonicalize_cyclic_word(word: List[str]) -> List[str]:
+    """Canonicalize a cyclic word up to rotation and inversion.
+
+    This normalization gives deterministic relator representatives for deduping.
+    """
     if not word:
         return []
     inv_rev = [_inverse_word_token(t) for t in reversed(word)]
@@ -66,6 +75,7 @@ def _canonicalize_cyclic_word(word: List[str]) -> List[str]:
 
 
 def _normalize_pi1_mode(generator_mode: str = "optimized", mode: str | None = None) -> str:
+    """Normalize/validate the user-facing pi1 generator mode selector."""
     chosen = mode if mode is not None else generator_mode
     chosen = str(chosen).strip().lower()
     if chosen not in {"raw", "optimized"}:
@@ -74,15 +84,18 @@ def _normalize_pi1_mode(generator_mode: str = "optimized", mode: str | None = No
 
 
 def _token_base(tok: str) -> str:
+    """Return the unsigned generator name from a word token."""
     nt = normalize_word_token(tok)
     return nt[:-3] if nt.endswith("^-1") else nt
 
 
 def _inverse_word(word: List[str]) -> List[str]:
+    """Return the group inverse of a word (reverse order + invert each token)."""
     return [_inverse_word_token(t) for t in reversed(word)]
 
 
 def _normalize_relations(relations: List[List[str]]) -> List[List[str]]:
+    """Apply reduction/canonicalization and deterministic deduplication to relators."""
     rels: List[List[str]] = []
     for r in relations:
         rr = _cyclic_reduce(r)
@@ -99,6 +112,7 @@ def _normalize_relations(relations: List[List[str]]) -> List[List[str]]:
 
 
 def _kill_singleton_generators(generators: List[str], relations: List[List[str]]) -> tuple[List[str], List[List[str]], set[str]]:
+    """Eliminate generators forced to identity by singleton relators."""
     kill = {_token_base(r[0]) for r in relations if len(r) == 1}
     if not kill:
         return generators, relations, set()
@@ -108,6 +122,7 @@ def _kill_singleton_generators(generators: List[str], relations: List[List[str]]
 
 
 def _solve_generator_from_relator(relator: List[str], idx: int) -> List[str]:
+    """Solve a one-occurrence relator for its target generator token."""
     tok = normalize_word_token(relator[idx])
     rest = relator[idx + 1 :] + relator[:idx]
     # relator = 1 and tok appears once, so we can isolate tok and substitute globally.
@@ -115,6 +130,7 @@ def _solve_generator_from_relator(relator: List[str], idx: int) -> List[str]:
 
 
 def _substitute_generator_word(relator: List[str], target: str, rhs: List[str]) -> List[str]:
+    """Substitute a generator by a solved word in one relator."""
     out: List[str] = []
     inv_rhs = _inverse_word(rhs)
     for tok in relator:
@@ -127,6 +143,10 @@ def _substitute_generator_word(relator: List[str], target: str, rhs: List[str]) 
 
 
 def _find_substitution_move(generators: List[str], relations: List[List[str]]) -> tuple[str, int, List[str]] | None:
+    """Find a deterministic one-occurrence substitution candidate.
+
+    Returns a tuple `(generator, defining_relator_index, replacement_word)`.
+    """
     for g in generators:
         for rel_idx, rel in enumerate(relations):
             occ = [i for i, tok in enumerate(rel) if _token_base(tok) == g]
@@ -138,10 +158,25 @@ def _find_substitution_move(generators: List[str], relations: List[List[str]]) -
 
 
 def simplify_presentation(generators: List[str], relations: List[List[str]]) -> FundamentalGroup:
+    """Simplify a finitely presented group using a deterministic Tietze-lite loop.
+
+    Args:
+        generators: Generator names in the current presentation.
+        relations: Relators as token lists (`g_i`, `g_i^-1`).
+
+    Returns:
+        A reduced presentation with canonicalized relators.
+
+    Algorithm:
+        1. Free/cyclic reduction + cyclic canonicalization.
+        2. Eliminate singleton relators (`g=1`).
+        3. Eliminate one-occurrence generators via substitution.
+        4. Iterate to a fixed point (bounded deterministic loop).
+    """
     gens = [normalize_word_token(g) for g in generators]
     rels = _normalize_relations([list(r) for r in relations])
 
-    # Deterministic Tietze-lite loop: singleton kills first, then single-occurrence substitution.
+    # Deterministic Tietze-lite pass order: singleton elimination, then one-occurrence substitution.
     for _ in range(256):
         prev = (tuple(gens), tuple(tuple(r) for r in rels))
 
@@ -182,7 +217,57 @@ def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
     if not gens:
         return "1"
     if len(gens) != 1:
-        return None
+        # Attempt a certified finitely-generated abelian descriptor when all
+        # pairwise commutators are explicitly present in the presentation.
+        pair_comm = {
+            tuple(sorted((gens[i], gens[j]))): _canonicalize_cyclic_word([gens[i], gens[j], f"{gens[i]}^-1", f"{gens[j]}^-1"])
+            for i in range(len(gens))
+            for j in range(i + 1, len(gens))
+        }
+
+        comm_seen: set[tuple[str, str]] = set()
+        abelian_rows: list[list[int]] = []
+        g_to_idx = {g: i for i, g in enumerate(gens)}
+
+        for rel in rels:
+            key_hit = None
+            for pair, comm in pair_comm.items():
+                if rel == comm:
+                    key_hit = pair
+                    break
+            if key_hit is not None:
+                comm_seen.add(key_hit)
+                continue
+
+            row = [0] * len(gens)
+            has_term = False
+            for tok in rel:
+                base = tok[:-3] if tok.endswith("^-1") else tok
+                idx = g_to_idx.get(base)
+                if idx is None:
+                    return None
+                row[idx] += -1 if tok.endswith("^-1") else 1
+                has_term = True
+            if has_term and any(v != 0 for v in row):
+                abelian_rows.append(row)
+
+        if set(pair_comm.keys()) != comm_seen:
+            return None
+
+        if not abelian_rows:
+            return " x ".join(["Z"] * len(gens))
+
+        M = sp.Matrix(abelian_rows)
+        S = sp.matrices.normalforms.smith_normal_form(M, domain=sp.ZZ)
+        diag_len = min(S.rows, S.cols)
+        diag = [abs(int(S[i, i])) for i in range(diag_len) if int(S[i, i]) != 0]
+        free_rank = max(0, len(gens) - len(diag))
+        factors = ["Z"] * free_rank + [f"Z_{d}" for d in diag if d > 1]
+        if not factors:
+            return "1"
+        if len(factors) == 1:
+            return factors[0]
+        return " x ".join(factors)
 
     g = gens[0]
     if not rels:
@@ -220,6 +305,7 @@ class GroupPresentation(BaseModel):
     factors: List[str] = Field(default_factory=list)
 
     def normalized(self) -> str:
+        """Return a normalized descriptor string for downstream APIs."""
         k = self.kind.strip().lower()
         if k in {"trivial", "1"}:
             return "1"
@@ -255,6 +341,21 @@ def _path_between_tree(u: int, v: int, parent: Dict[int, int]) -> List[int]:
 
 
 def _pi1_raw_data_python(cw: CWComplex):
+    """Build raw pi1 generators/relations/traces from CW boundary maps.
+
+    Args:
+        cw: CW complex with 1-cell and optional 2-cell attaching maps.
+
+    Returns:
+        `(raw_generator_map, relations, traces, metadata)` where traces are
+        edge-path representatives from the spanning-forest method.
+
+    Algorithm:
+        - Build a spanning forest on the 1-skeleton (`d1`) using BFS.
+        - Use non-tree edges as raw generators.
+        - Trace 2-cell boundaries (`d2`) into relators.
+        - Prefer Julia trace extraction when available; otherwise use Python fallback.
+    """
     d1 = cw.attaching_maps.get(1)
     d2 = cw.attaching_maps.get(2)
 
@@ -476,8 +577,20 @@ def extract_pi_1_with_traces(
 ) -> Pi1PresentationWithTraces:
     """Return pi_1 presentation with generator traces as data-native edge/vertex paths.
 
-    `generator_mode="raw"` preserves the full spanning-forest generator set.
-    `generator_mode="optimized"` simplifies the presentation and filters traces to the surviving generators.
+    Args:
+        cw: Input CW complex.
+        simplify: Whether to simplify the raw presentation.
+        generator_mode: `'raw'` keeps all non-tree generators; `'optimized'`
+            applies Tietze-lite reduction before reporting generators/traces.
+        mode: Optional alias for `generator_mode`.
+
+    Returns:
+        A `Pi1PresentationWithTraces` with backend and reduction metadata.
+
+    Notes:
+        - `raw` mode preserves the spanning-forest presentation.
+        - `optimized` mode reduces presentation size and filters traces to
+          surviving generators.
     """
     actual_mode = _normalize_pi1_mode(generator_mode, mode)
     raw_generators, relations, traces, meta = _pi1_raw_data_python(cw)
@@ -530,11 +643,18 @@ def extract_pi_1(
     mode: str | None = None,
 ) -> FundamentalGroup:
     """
-    Computes a presentation for the fundamental group pi_1(X) by constructing
-    a maximal spanning tree in the 1-skeleton.
+    Compute a pi1 presentation from CW boundary maps.
 
-    Edges not in the tree become the generators.
-    The boundary of the 2-cells (faces) dictate the relations.
+    This delegates to `extract_pi_1_with_traces(...)` and drops trace metadata.
+
+    Args:
+        cw: Input CW complex.
+        simplify: Whether to simplify the raw presentation.
+        generator_mode: `'raw'` or `'optimized'`.
+        mode: Optional alias for `generator_mode`.
+
+    Returns:
+        A `FundamentalGroup` presentation (`generators`, `relations`).
     """
     traces = extract_pi_1_with_traces(cw, simplify=simplify, generator_mode=generator_mode, mode=mode)
     return FundamentalGroup(generators=list(traces.generators), relations=[list(r) for r in traces.relations])

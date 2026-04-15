@@ -27,6 +27,7 @@ class Phase2Readiness(BaseModel):
 
 
 def _descriptor_family(descriptor: str) -> str:
+    """Classify descriptor into broad computational family buckets."""
     d = descriptor.strip()
     if d == "1":
         return "trivial"
@@ -40,6 +41,7 @@ def _descriptor_family(descriptor: str) -> str:
 
 
 def build_pi1_evidence(pi1: FundamentalGroup | None) -> Pi1Evidence | None:
+    """Build pi1 evidence payload for readiness diagnostics."""
     if pi1 is None:
         return None
     return Pi1Evidence(
@@ -50,6 +52,7 @@ def build_pi1_evidence(pi1: FundamentalGroup | None) -> Pi1Evidence | None:
 
 
 def build_group_ring_context(descriptor: str | None) -> GroupRingContext | None:
+    """Validate descriptor and package group-ring context metadata."""
     if descriptor is None:
         return None
     ok, msg = validate_group_descriptor(descriptor)
@@ -62,6 +65,7 @@ def build_group_ring_context(descriptor: str | None) -> GroupRingContext | None:
 
 
 def evaluate_phase2_readiness(pi1: FundamentalGroup | None, descriptor: str | None) -> Phase2Readiness:
+    """Evaluate whether inputs satisfy current phase-2 group-ring prerequisites."""
     pi1_evidence = build_pi1_evidence(pi1)
     context = build_group_ring_context(descriptor)
 

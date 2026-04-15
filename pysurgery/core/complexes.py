@@ -11,6 +11,7 @@ from ..bridge.julia_bridge import julia_engine
 
 
 def _parse_coefficient_ring(ring: str) -> tuple[str, int | None]:
+    """Parse user ring labels into internal `(kind, modulus)` form."""
     rs = ring.strip().upper()
     if rs == "Z":
         return "Z", None
@@ -26,6 +27,7 @@ def _parse_coefficient_ring(ring: str) -> tuple[str, int | None]:
 
 
 def _rank_mod_p(A: np.ndarray, p: int) -> int:
+    """Compute matrix rank over `Z/pZ` via modular Gaussian elimination."""
     M = (A.astype(np.int64) % p).copy()
     m, n = M.shape
     row = 0
@@ -85,6 +87,7 @@ def _matrix_rank_for_ring(matrix: csr_matrix, ring_kind: str, p: int | None = No
 
 
 def _is_prime(n: int) -> bool:
+    """Return True when `n` is prime (deterministic trial division)."""
     if n < 2:
         return False
     if n in (2, 3):
@@ -100,6 +103,7 @@ def _is_prime(n: int) -> bool:
 
 
 def _rref_mod_p(A: np.ndarray, p: int) -> tuple[np.ndarray, list[int]]:
+    """Compute row-reduced echelon form over `Z/pZ`."""
     M = (A.astype(np.int64) % p).copy()
     m, n = M.shape
     row = 0
@@ -127,6 +131,7 @@ def _rref_mod_p(A: np.ndarray, p: int) -> tuple[np.ndarray, list[int]]:
 
 
 def _nullspace_basis_mod_p(A: np.ndarray, p: int) -> list[np.ndarray]:
+    """Return a basis of `ker(A)` over `Z/pZ`."""
     # A is m x n. Return basis vectors of ker(A) in F_p^n.
     m, n = A.shape
     rref, pivots = _rref_mod_p(A, p)
@@ -541,6 +546,7 @@ class CWComplex(BaseModel):
     coefficient_ring: str = "Z"
 
     def cellular_chain_complex(self) -> ChainComplex:
+        """Convert the CW object into a `ChainComplex` view."""
         return ChainComplex(
             boundaries=self.attaching_maps, 
             dimensions=sorted(self.cells.keys()),

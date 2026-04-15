@@ -28,6 +28,7 @@ class IntersectionForm(BaseModel):
     dimension: int
 
     def __init__(self, **data):
+        """Validate matrix shape/symmetry and manifold parity constraints."""
         super().__init__(**data)
         if self.matrix.ndim != 2 or self.matrix.shape[0] != self.matrix.shape[1]:
             raise DimensionError("Intersection form matrix must be square.")
@@ -37,6 +38,7 @@ class IntersectionForm(BaseModel):
             raise DimensionError("Intersection forms on H_{2k}(M) are usually defined for even-dimensional manifolds.")
 
     def _eigen_tol(self, eigenvalues: np.ndarray) -> float:
+        """Return a scale-aware tolerance for eigenvalue sign/rank decisions."""
         if len(eigenvalues) == 0:
             return 1e-10
         scale = float(max(1.0, np.max(np.abs(eigenvalues))))

@@ -28,6 +28,7 @@ _SLOW_BOUNDARY_FALLBACK_WARNED = False
 
 
 def _warn_slow_boundary_fallback(reason: str) -> None:
+    """Emit a one-time warning when chain extraction falls back to Python."""
     global _SLOW_BOUNDARY_FALLBACK_WARNED
     if _SLOW_BOUNDARY_FALLBACK_WARNED:
         return
@@ -39,6 +40,10 @@ def _warn_slow_boundary_fallback(reason: str) -> None:
 
 
 def _extract_complex_data_python(simplex_tree, simplices=None, max_dim=None):
+    """Pure-Python boundary extraction from a GUDHI simplex tree.
+
+    Builds cellular boundary matrices `d_k` by enumerating codimension-1 faces.
+    """
     boundaries = {}
     if max_dim is None:
         max_dim = simplex_tree.dimension()
@@ -81,7 +86,9 @@ def _extract_complex_data_python(simplex_tree, simplices=None, max_dim=None):
 
 def extract_complex_data(simplex_tree, *, include_metadata: bool = True):
     """
-    Extracts boundary matrices, cells, and simplex mappings from a GUDHI SimplexTree.
+    Extract boundary matrices, cell counts, and simplex index maps from a simplex tree.
+
+    Uses Julia acceleration when available and falls back to pure Python otherwise.
     """
     simplices = list(simplex_tree.get_skeleton(simplex_tree.dimension()))
     max_dim = simplex_tree.dimension()
@@ -121,7 +128,7 @@ def extract_complex_data(simplex_tree, *, include_metadata: bool = True):
 
 
 def extract_boundary_chain_data(simplex_tree):
-    """Lightweight extraction for callers that only need boundary operators and cell counts."""
+    """Return only boundary operators and cell counts for chain-level consumers."""
     boundaries, cells, _, _ = extract_complex_data(simplex_tree, include_metadata=False)
     return boundaries, cells
 

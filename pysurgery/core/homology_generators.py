@@ -32,6 +32,7 @@ Cycle = List[Edge]
 
 
 def _all_simplices_by_dim(simplices: Iterable[Tuple[int, ...]]) -> dict[int, list[tuple[int, ...]]]:
+    """Build simplicial closure grouped by dimension from input simplices."""
     by_dim: dict[int, list[tuple[int, ...]]] = {}
     for s in simplices:
         t = tuple(sorted(int(x) for x in s))
@@ -48,6 +49,7 @@ def _all_simplices_by_dim(simplices: Iterable[Tuple[int, ...]]) -> dict[int, lis
 
 
 def _infer_num_vertices(simplices: Iterable[Tuple[int, ...]], num_vertices: int) -> int:
+    """Infer vertex count from simplices when not supplied by the caller."""
     if num_vertices > 0:
         return int(num_vertices)
     max_v = -1
@@ -96,6 +98,7 @@ def _boundary_mod2_matrix(
 
 
 def _rref_mod2(A: np.ndarray) -> tuple[np.ndarray, list[int]]:
+    """Compute row-reduced echelon form over GF(2)."""
     M = (A.astype(np.int64) & 1).copy()
     m, n = M.shape
     row = 0
@@ -121,6 +124,7 @@ def _rref_mod2(A: np.ndarray) -> tuple[np.ndarray, list[int]]:
 
 
 def _nullspace_basis_mod2(A: np.ndarray) -> list[np.ndarray]:
+    """Return a basis for the nullspace of `A` over GF(2)."""
     # A is m x n over F2; basis vectors are in F2^n.
     _, n = A.shape
     rref, pivots = _rref_mod2(A)
@@ -137,6 +141,7 @@ def _nullspace_basis_mod2(A: np.ndarray) -> list[np.ndarray]:
 
 
 def _rank_mod2(A: np.ndarray) -> int:
+    """Compute matrix rank over GF(2)."""
     _, pivots = _rref_mod2(A)
     return len(pivots)
 
@@ -146,6 +151,7 @@ def _components_h0_generators(
     num_vertices: int,
     point_cloud: Optional[np.ndarray] = None,
 ) -> HomologyBasisResult:
+    """Compute H0 generators as one representative per connected component."""
     if num_vertices <= 0:
         return HomologyBasisResult(
             dimension=0,
@@ -212,6 +218,7 @@ def _components_h0_generators(
 
 
 def _weight_k_chain(chain: np.ndarray, k_simplices: list[tuple[int, ...]], point_cloud: Optional[np.ndarray]) -> float:
+    """Compute a geometric/algebraic proxy weight for an active k-chain."""
     active = [k_simplices[i] for i, bit in enumerate(chain) if bit & 1]
     if not active:
         return 0.0
@@ -233,6 +240,7 @@ def _weight_k_chain(chain: np.ndarray, k_simplices: list[tuple[int, ...]], point
 
 
 def _independent_mod_image(v: np.ndarray, basis_cols: list[np.ndarray]) -> bool:
+    """Check if `v` increases span rank modulo 2 over current basis columns."""
     if not basis_cols:
         return bool(np.any(v & 1))
     M = np.column_stack([*(b & 1 for b in basis_cols), v & 1]).astype(np.int64)
@@ -248,6 +256,7 @@ def _hk_generators_mod2(
     point_cloud: Optional[np.ndarray],
     mode: Literal["valid", "optimal"],
 ) -> HomologyBasisResult:
+    """Compute H_k representatives over Z/2 via kernel/image quotient."""
     simplices_list = [tuple(int(x) for x in s) for s in simplices]
     by_dim = _all_simplices_by_dim(simplices_list)
     if dimension == 0:
@@ -323,12 +332,14 @@ def _hk_generators_mod2(
 
 
 def _edge_weight(u: int, v: int, points: Optional[np.ndarray]) -> float:
+    """Return edge length weight (or unit weight when no geometry is provided)."""
     if points is None:
         return 1.0
     return float(np.linalg.norm(points[u] - points[v]))
 
 
 def _normalize_edges_triangles(simplices: Iterable[Tuple[int, ...]]) -> tuple[list[Edge], list[Triangle], set[int]]:
+    """Extract normalized edge/triangle lists plus observed vertex ids."""
     edges: list[Edge] = []
     triangles: list[Triangle] = []
     vertex_ids: set[int] = set()
@@ -346,6 +357,7 @@ def _normalize_edges_triangles(simplices: Iterable[Tuple[int, ...]]) -> tuple[li
 
 
 def _minimum_spanning_edges(edges: list[Edge], weights: Dict[Edge, float], num_vertices: int) -> set[Edge]:
+    """Return Kruskal minimum-spanning-forest edges of the 1-skeleton."""
     parent = list(range(max(num_vertices, 1)))
     rank = [0] * max(num_vertices, 1)
 
@@ -380,6 +392,7 @@ def annot_edge(
     num_vertices: int,
     edge_weights: Optional[Dict[Edge, float]] = None,
 ) -> tuple[Dict[Edge, np.ndarray], int]:
+    """Compute edge annotations for cycle-space independence over Z/2."""
     edges, triangles, _ = _normalize_edges_triangles(simplices)
     weights = {e: float(edge_weights.get(e, 1.0)) if edge_weights else 1.0 for e in edges}
 
@@ -422,6 +435,7 @@ def annot_edge(
 
 
 def _shortest_path_tree(root: int, adjacency: Dict[int, List[Tuple[int, float]]]) -> tuple[Dict[int, int], set[Edge]]:
+    """Build a shortest-path tree from one root using Dijkstra."""
     dist = {root: 0.0}
     parent = {root: -1}
     pq = [(0.0, root)]
@@ -445,6 +459,7 @@ def _shortest_path_tree(root: int, adjacency: Dict[int, List[Tuple[int, float]]]
 
 
 def _path_between(u: int, v: int, parent: Dict[int, int]) -> List[int]:
+    """Return tree-path vertices between two nodes from parent pointers."""
     path_u: list[int] = []
     seen_u = set()
     x = u
@@ -467,10 +482,12 @@ def _path_between(u: int, v: int, parent: Dict[int, int]) -> List[int]:
 
 
 def _path_edges(path_vertices: List[int]) -> List[Edge]:
+    """Convert a vertex path to normalized undirected edges."""
     return [tuple(sorted((path_vertices[i], path_vertices[i + 1]))) for i in range(len(path_vertices) - 1)]
 
 
 def _cycle_weight(cycle: Cycle, edge_weights: Dict[Edge, float], point_cloud: Optional[np.ndarray]) -> float:
+    """Compute cycle weight using supplied edge weights or geometric fallback."""
     total = 0.0
     for u, v in cycle:
         e = tuple(sorted((u, v)))
@@ -490,6 +507,7 @@ def generator_cycles_from_simplices(
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
 ) -> List[Cycle]:
+    """Generate candidate H1 cycles from simplices via shortest-path trees."""
     edges, _, vertex_ids = _normalize_edges_triangles(simplices)
     return _generator_cycles_from_normalized_edges(
         edges,
@@ -512,6 +530,7 @@ def _generator_cycles_from_normalized_edges(
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
 ) -> List[Cycle]:
+    """Generate cycle candidates from normalized edge lists."""
     if not edges:
         return []
 
@@ -547,6 +566,7 @@ def _generator_cycles_from_normalized_edges(
 
 
 def _cycle_annotation(cycle: Cycle, simplex_annotations: Dict[Edge, np.ndarray], vec_len: int) -> np.ndarray:
+    """Assemble the annotation vector of a cycle by XOR-combining edge labels."""
     ann = np.zeros(vec_len, dtype=np.int64)
     for e in cycle:
         se = tuple(sorted(e))
@@ -556,6 +576,7 @@ def _cycle_annotation(cycle: Cycle, simplex_annotations: Dict[Edge, np.ndarray],
 
 
 def _is_independent_wrt(cv: np.ndarray, pivots: Dict[int, np.ndarray]) -> bool:
+    """Check independence against a pivot map over Z/2 and update pivots."""
     work = cv.copy()
     for i in range(work.shape[0]):
         if work[i] == 0:
@@ -574,6 +595,7 @@ def greedy_h1_basis(
     num_vertices: int,
     point_cloud: Optional[np.ndarray] = None,
 ) -> List[Cycle]:
+    """Select a greedy independent H1 basis from cycle candidates."""
     edges, triangles, vertex_ids = _normalize_edges_triangles(simplices)
     return _greedy_h1_basis_from_normalized(
         cycles,
@@ -593,6 +615,7 @@ def _greedy_h1_basis_from_normalized(
     num_vertices: int,
     point_cloud: Optional[np.ndarray] = None,
 ) -> List[Cycle]:
+    """Internal greedy H1 basis selection on normalized complexes."""
     if not edges:
         for cyc in cycles:
             edges.extend(cyc)
@@ -624,6 +647,11 @@ def compute_optimal_h1_basis_from_simplices(
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
 ) -> HomologyBasisResult:
+    """Compute a data-grounded optimal H1 basis from simplices.
+
+    Uses Julia's optimized backend when available, otherwise falls back to the
+    Python shortest-path candidate + greedy-independence pipeline.
+    """
     simplices_list = [tuple(int(x) for x in s) for s in simplices]
     basis: Optional[list[Cycle]] = None
     used_julia = False
@@ -703,6 +731,11 @@ def compute_homology_basis_from_simplices(
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
 ) -> HomologyBasisResult:
+    """Compute H_k generator representatives from simplices over Z/2.
+
+    `mode="valid"` returns any independent quotient basis, while
+    `mode="optimal"` applies the small-support/short-cycle heuristic.
+    """
     if dimension < 0:
         raise ValueError("dimension must be >= 0")
     if mode not in {"valid", "optimal"}:
@@ -784,6 +817,7 @@ def compute_homology_basis_from_simplex_tree(
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
 ) -> HomologyBasisResult:
+    """Compute H_k generators directly from a simplex-tree object."""
     simplices = [
         tuple(s[0])
         for s in simplex_tree.get_skeleton(max(dimension + 1, 1))
@@ -811,6 +845,7 @@ def compute_optimal_h1_basis_from_simplex_tree(
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
 ) -> HomologyBasisResult:
+    """Compute an optimal H1 basis directly from a simplex-tree object."""
     simplices = [tuple(s[0]) for s in simplex_tree.get_skeleton(2) if len(s[0]) in (2, 3)]
     vertices = [int(s[0][0]) for s in simplex_tree.get_skeleton(0)]
     num_vertices = (max(vertices) + 1) if vertices else 0

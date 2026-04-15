@@ -16,6 +16,7 @@ class JuliaBridge:
     _lock = threading.RLock()
 
     def __new__(cls):
+        """Return a process-wide singleton bridge instance."""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -31,6 +32,7 @@ class JuliaBridge:
         return cls._instance
 
     def _initialize(self):
+        """Initialize Julia runtime and load backend module lazily."""
         if self._initialized:
             return
 
@@ -68,6 +70,7 @@ class JuliaBridge:
         self._run_warmup(mode)
 
     def _minimal_warmup_workloads(self) -> list[tuple[str, callable]]:
+        """Return a small workload set that compiles common topology paths."""
         square_simplices = [(0, 1), (1, 2), (2, 3), (3, 0)]
         square_pts = np.array(
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
@@ -151,6 +154,7 @@ class JuliaBridge:
         ]
 
     def _full_warmup_workloads(self) -> list[tuple[str, callable]]:
+        """Return the extended warm-up workload set for all heavy kernels."""
         def _sparse_rank_q_workload():
             import scipy.sparse as sp
 
@@ -214,6 +218,7 @@ class JuliaBridge:
         ]
 
     def _run_warmup(self, mode: str) -> dict:
+        """Execute warm-up workloads and cache the resulting status report."""
         target_level = 2 if mode == "full" else 1
         with self._lock:
             if self._warmup_level >= target_level:
@@ -273,6 +278,7 @@ class JuliaBridge:
         return self._run_warmup("full")
 
     def _ensure_initialized(self):
+        """Initialize the bridge on first use."""
         if self._initialized:
             return
         with self._lock:
@@ -282,21 +288,25 @@ class JuliaBridge:
 
     @property
     def available(self) -> bool:
+        """Whether Julia backend is initialized and available for compute calls."""
         self._ensure_initialized()
         return self._available
 
     @available.setter
     def available(self, value: bool):
+        """Test hook to override availability without reinitializing Julia."""
         # Allow tests to monkeypatch availability while preserving singleton API.
         self._initialized = True
         self._available = bool(value)
 
     def require_julia(self):
+        """Raise a structured error when Julia backend is unavailable."""
         from pysurgery.core.exceptions import SurgeryError
         if not self.available:
             raise SurgeryError(f"High-performance exact algebra requires Julia: {self.error}")
 
     def _coo_cache_key(self, matrix) -> tuple:
+        """Build a stable cache key for sparse COO triplet conversion."""
         data_ptr = None
         try:
             data_ptr = int(matrix.data.__array_interface__["data"][0])
@@ -305,6 +315,7 @@ class JuliaBridge:
         return (id(matrix), int(matrix.shape[0]), int(matrix.shape[1]), int(matrix.nnz), data_ptr)
 
     def _coo_triplets_cached(self, matrix) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return cached COO triplets `(rows, cols, vals)` for a sparse matrix."""
         key = self._coo_cache_key(matrix)
         cached = self._coo_cache.get(key)
         if cached is not None:
@@ -323,6 +334,7 @@ class JuliaBridge:
         return triplets
 
     def _flatten_simplices(self, simplices: list) -> tuple[np.ndarray, np.ndarray]:
+        """Flatten ragged simplex lists into `(flat_vertices, offsets)` arrays."""
         offsets = np.zeros(len(simplices) + 1, dtype=np.int64)
         total = 0
         for i, simplex in enumerate(simplices, start=1):
@@ -338,6 +350,7 @@ class JuliaBridge:
         return flat, offsets
 
     def compute_hermitian_signature(self, matrix_array: np.ndarray) -> int:
+        """Compute the signature of a symmetric real matrix via Julia backend."""
         self.require_julia()
         # Direct zero-copy passing to Julia via PyArray
         return int(self.backend.hermitian_signature(np.asarray(matrix_array, dtype=np.float64)))
@@ -471,6 +484,7 @@ class JuliaBridge:
         )
 
     def group_ring_multiply(self, coeffs1: dict, coeffs2: dict, group_order: int) -> dict:
+        """Multiply sparse group-ring coefficient dictionaries in the Julia backend."""
         self.require_julia()
         # Direct passing of dictionaries; Julia side now uses pyconvert for speed.
         res_keys, res_vals = self.backend.group_ring_multiply(coeffs1, coeffs2, int(group_order))

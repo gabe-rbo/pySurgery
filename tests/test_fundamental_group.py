@@ -216,6 +216,28 @@ def test_infer_standard_group_descriptor_recognizes_finite_cyclic_via_gcd_of_rel
     assert infer_standard_group_descriptor(pi) == "Z_2"
 
 
+def test_infer_standard_group_descriptor_recognizes_torus_pi1_as_zx_z():
+    pi = FundamentalGroup(
+        generators=["a", "b"],
+        relations=[["a", "b", "a^-1", "b^-1"]],
+    )
+    assert infer_standard_group_descriptor(pi) == "Z x Z"
+
+
+def test_infer_standard_group_descriptor_recognizes_abelian_torsion_product():
+    # <a,b | [a,b], a^2, b^3> ~= Z_2 x Z_3
+    pi = FundamentalGroup(
+        generators=["a", "b"],
+        relations=[
+            ["a", "b", "a^-1", "b^-1"],
+            ["a", "a"],
+            ["b", "b", "b"],
+        ],
+    )
+    # Canonical SNF form collapses coprime torsion factors to Z_6.
+    assert infer_standard_group_descriptor(pi) == "Z_6"
+
+
 @pytest.mark.parametrize("name, builder, bettis, torsion, euler", get_surfaces() if 'get_surfaces' in globals() else [])
 def test_discrete_surface_fundamental_group(name, builder, bettis, torsion, euler):
     st = builder()

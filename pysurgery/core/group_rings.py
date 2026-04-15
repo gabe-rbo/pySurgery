@@ -12,6 +12,7 @@ class GroupRingElement:
 
     @staticmethod
     def _normalize_key(g: str) -> str:
+        """Normalize group-element labels to a canonical key."""
         gs = str(g).strip()
         try:
             gs = normalize_word_token(gs)
@@ -23,6 +24,7 @@ class GroupRingElement:
 
     @classmethod
     def _parse_cyclic_power(cls, g: str, group_order: int) -> int:
+        """Parse a cyclic generator label and return exponent modulo group order."""
         gn = cls._normalize_key(g)
         if gn == "1":
             return 0
@@ -40,6 +42,7 @@ class GroupRingElement:
         inverse_law: Optional[Callable[[str], str]] = None,
         mul_table: Optional[Dict[str, Dict[str, str]]] = None,
     ):
+        """Create a sparse group-ring element with normalized coefficients."""
         normalized = {}
         for g, c in coeffs.items():
             if c == 0:
@@ -53,6 +56,7 @@ class GroupRingElement:
         self.mul_table = mul_table
 
     def __add__(self, other: 'GroupRingElement') -> 'GroupRingElement':
+        """Add two elements from the same group ring."""
         if self.group_order != other.group_order:
             raise GroupRingError(f"Cannot add elements from different group rings. Group orders |G|={self.group_order} and |H|={other.group_order} do not match.")
         if self.group_law is not other.group_law:
@@ -63,6 +67,7 @@ class GroupRingElement:
         return GroupRingElement(res, self.group_order, self.group_law, self.inverse_law, self.mul_table)
 
     def __mul__(self, other: 'GroupRingElement') -> 'GroupRingElement':
+        """Multiply two group-ring elements using exact backend or cyclic fallback."""
         if self.group_order != other.group_order:
             raise GroupRingError("Cannot multiply elements from different group rings.")
         if self.group_law is not other.group_law:

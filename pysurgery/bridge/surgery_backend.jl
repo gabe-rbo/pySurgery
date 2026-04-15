@@ -33,6 +33,12 @@ catch
 end
 
 # Use AbstractArray/AbstractVector for zero-copy NumPy integration via juliacall/PythonCall
+"""
+    hermitian_signature(matrix)
+
+Compute the signature `(#positive) - (#negative)` of a real symmetric matrix.
+Uses Hermitian eigendecomposition with a scale-aware numerical tolerance.
+"""
 function hermitian_signature(matrix::AbstractMatrix{Float64})
     # eigvals(Hermitian(mat)) requires a dense Matrix in Julia.
     # Matrix(matrix) is a copy, but necessary for the LAPACK call.
@@ -44,6 +50,12 @@ function hermitian_signature(matrix::AbstractMatrix{Float64})
     return pos - neg
 end
 
+"""
+    exact_snf_sparse(rows, cols, vals, m, n)
+
+Compute Smith normal form invariant factors from sparse integer COO data.
+This is the exact integer path used for torsion-sensitive computations.
+"""
 function exact_snf_sparse(rows::AbstractVector{Int64}, cols::AbstractVector{Int64}, vals::AbstractVector{Int64}, m::Int, n::Int)
     if !HAS_ABSTRACT_ALGEBRA
         error("AbstractAlgebra unavailable")
@@ -67,6 +79,12 @@ function exact_snf_sparse(rows::AbstractVector{Int64}, cols::AbstractVector{Int6
     end
 end
 
+"""
+    exact_sparse_cohomology_basis(...)
+
+Compute an integral cohomology basis from sparse coboundary data.
+Prefers exact AbstractAlgebra kernels; falls back to numerical linear algebra when unavailable.
+"""
 function exact_sparse_cohomology_basis(
     d_np1_rows::AbstractVector{Int64}, d_np1_cols::AbstractVector{Int64}, d_np1_vals::AbstractVector{Int64}, d_np1_m::Int, d_np1_n::Int,
     d_n_rows::AbstractVector{Int64}, d_n_cols::AbstractVector{Int64}, d_n_vals::AbstractVector{Int64}, d_n_m::Int, d_n_n::Int
@@ -127,6 +145,11 @@ function exact_sparse_cohomology_basis(
     return hcat(quotient_basis...)
 end
 
+"""
+    rank_q_sparse(rows, cols, vals, m, n)
+
+Rank over `Q` from sparse COO input.
+"""
 function rank_q_sparse(rows::AbstractVector{Int64}, cols::AbstractVector{Int64}, vals::AbstractVector{Int64}, m::Int, n::Int)
     isempty(rows) && return Int64(0)
     A = sparse(rows .+ 1, cols .+ 1, Float64.(vals), m, n)
@@ -149,6 +172,11 @@ function _rank_mod_p_dense!(M::Matrix{Int64}, p::Int)
     return Int64(rk)
 end
 
+"""
+    rank_mod_p_sparse(rows, cols, vals, m, n, p)
+
+Rank over `Z/pZ` from sparse COO input using dense modular elimination.
+"""
 function rank_mod_p_sparse(rows::AbstractVector{Int64}, cols::AbstractVector{Int64}, vals::AbstractVector{Int64}, m::Int, n::Int, p::Int)
     p <= 1 && error("modulus p must be > 1")
     isempty(rows) && return Int64(0)
@@ -188,6 +216,11 @@ function _independent_mod_p(v::Vector{Int64}, cols::Vector{Vector{Int64}}, p::In
     M_prev = hcat(cols...); M_new = hcat(M_prev, vv); return _rank_mod_p_dense!(copy(M_new), p) > _rank_mod_p_dense!(copy(M_prev), p)
 end
 
+"""
+    sparse_cohomology_basis_mod_p(..., p)
+
+Compute cohomology representatives modulo `p` via nullspace and quotient filtering.
+"""
 function sparse_cohomology_basis_mod_p(
     d_np1_rows::AbstractVector{Int64}, d_np1_cols::AbstractVector{Int64}, d_np1_vals::AbstractVector{Int64}, d_np1_m::Int, d_np1_n::Int,
     d_n_rows::AbstractVector{Int64}, d_n_cols::AbstractVector{Int64}, d_n_vals::AbstractVector{Int64}, d_n_m::Int, d_n_n::Int,
@@ -235,6 +268,12 @@ function _compute_boundary_data_internal_flat(flat_vertices::AbstractVector{Int6
     return boundaries, cells, dim_simplices, simplex_to_idx
 end
 
+"""
+    compute_boundary_payload_from_flat_simplices(flat_vertices, simplex_offsets, max_dim; include_metadata=true)
+
+Build boundary payloads (COO-style) from flattened simplex storage.
+Input indices are expected to be zero-based on the Python side.
+"""
 function compute_boundary_payload_from_flat_simplices(flat_vertices::AbstractVector{Int64}, simplex_offsets::AbstractVector{Int64}, max_dim::Int, include_metadata::Bool=true)
     return _compute_boundary_data_internal_flat(flat_vertices, simplex_offsets, max_dim)
 end
@@ -263,6 +302,12 @@ function _parse_group_element(g_raw)
     return endswith(g_str, "^-1") ? -val : val
 end
 
+"""
+    group_ring_multiply(py_coeffs1, py_coeffs2, group_order)
+
+Multiply two group-ring elements represented as sparse coefficient dictionaries.
+Implements cyclic group multiplication on parsed group elements.
+"""
 function group_ring_multiply(py_coeffs1, py_coeffs2, group_order::Int)
     c1, c2 = _normalize_group_ring_coeffs(py_coeffs1), _normalize_group_ring_coeffs(py_coeffs2)
     res_dict = Dict{String, Int}()
@@ -276,6 +321,11 @@ function group_ring_multiply(py_coeffs1, py_coeffs2, group_order::Int)
     return final_k, final_v
 end
 
+"""
+    multisignature(matrix, p)
+
+Compute total twisted signature over non-trivial `p`-th roots of unity.
+"""
 function multisignature(matrix::AbstractMatrix{Float64}, p::Int)
     mat = Matrix{Float64}(matrix); n = size(mat, 1); total = 0
     for k in 1:(p-1)
@@ -286,6 +336,11 @@ function multisignature(matrix::AbstractMatrix{Float64}, p::Int)
     return total
 end
 
+"""
+    integral_lattice_isometry(matrix1, matrix2)
+
+Search for an integral isometry `U` with `U' * A * U == B` via bounded backtracking.
+"""
 function integral_lattice_isometry(matrix1::AbstractMatrix{Int64}, matrix2::AbstractMatrix{Int64})
     A, B = Matrix{Int64}(matrix1), Matrix{Int64}(matrix2); n = size(A, 1)
     evals_a = eigvals(Hermitian(Matrix{Float64}(A))); evals_b = eigvals(Hermitian(Matrix{Float64}(B)))
@@ -313,6 +368,12 @@ function integral_lattice_isometry(matrix1::AbstractMatrix{Int64}, matrix2::Abst
     return backtrack(1)
 end
 
+"""
+    compute_trimesh_boundary_data_flat(face_vertices, face_offsets, n_vertices)
+
+Construct `d1`/`d2` boundary payloads from polygonal face lists.
+Outputs zero-based COO fields compatible with Python bridge consumers.
+"""
 function compute_trimesh_boundary_data_flat(face_vertices::AbstractVector{Int64}, face_offsets::AbstractVector{Int64}, n_vertices::Int)
     n_faces = length(face_offsets) - 1; edge_to_idx = Dict{Tuple{Int, Int}, Int}(); edges = Tuple{Int, Int}[]
     d2_rows, d2_cols, d2_data = Int64[], Int64[], Int64[]
@@ -448,15 +509,36 @@ function _compute_boundary_data_internal(simplex_entries, max_dim::Int)
     return boundaries, cells, sorted_dim_simplices, simplex_to_idx
 end
 
+"""
+    compute_boundary_payload_from_simplices(simplex_entries, max_dim; include_metadata=true)
+
+Build boundary payloads and optional simplex metadata from simplex entries.
+"""
 function compute_boundary_payload_from_simplices(simplex_entries, max_dim::Int, include_metadata::Bool=true)
     boundaries, cells, dim_simplices, simplex_to_idx = _compute_boundary_data_internal(simplex_entries, max_dim)
     return include_metadata ? (boundaries, cells, dim_simplices, simplex_to_idx) : (boundaries, cells)
 end
 
+"""
+    compute_boundary_data_from_simplices(simplex_entries, max_dim)
+
+Return full boundary/coface indexing data from simplex entries.
+"""
 function compute_boundary_data_from_simplices(simplex_entries, max_dim::Int)
     return _compute_boundary_data_internal(simplex_entries, max_dim)
 end
 
+"""
+    pi1_trace_candidates_from_d1(d1_rows, d1_cols, d1_vals, n_vertices, n_edges)
+
+Construct raw pi1 generator trace candidates from `d1` COO data.
+
+Algorithm:
+- Build 1-skeleton adjacency and oriented edge table.
+- Compute spanning forest with BFS.
+- For each non-tree edge, form the generator loop as
+  `edge + tree_path(back_to_start)`.
+"""
 function pi1_trace_candidates_from_d1(d1_rows::AbstractVector{Int64}, d1_cols::AbstractVector{Int64}, d1_vals::AbstractVector{Int64}, n_vertices::Int, n_edges::Int)
     adj = Dict{Int64, Vector{Tuple{Int64, Int64, Int64}}}()
     for i in 0:(n_vertices - 1)
@@ -608,6 +690,11 @@ function _as_string_vector(x)
     return [string(v) for v in pyconvert(Vector{Any}, x)]
 end
 
+"""
+    abelianize_group(generators, relations)
+
+Compute abelianization rank and torsion invariants from a presentation.
+"""
 function abelianize_group(generators::Vector{String}, relations::Vector{String})
     n_gens = length(generators); gen_idx = Dict{String, Int}(g => i for (i, g) in enumerate(generators))
     n_rels = length(relations); M = zeros(Int, n_rels, n_gens)
@@ -626,6 +713,11 @@ function abelianize_group(generators, relations)
     return abelianize_group(_as_string_vector(generators), _as_string_vector(relations))
 end
 
+"""
+    compute_boundary_mod2_matrix(source_simplices, target_simplices)
+
+Compute boundary incidence over `Z/2Z` between adjacent simplex dimensions.
+"""
 function compute_boundary_mod2_matrix(source_simplices, target_simplices)
     source, target = [_to_vertices_simplex(s) for s in source_simplices], [_to_vertices_simplex(t) for t in target_simplices]
     m, n = length(target), length(source); if m == 0 || n == 0; return Dict("rows" => Int64[], "cols" => Int64[], "data" => Int64[], "m" => Int64(m), "n" => Int64(n)); end
@@ -637,6 +729,11 @@ function compute_boundary_mod2_matrix(source_simplices, target_simplices)
     return Dict("rows" => rows, "cols" => cols, "data" => data, "m" => Int64(m), "n" => Int64(n))
 end
 
+"""
+    compute_alexander_whitney_cup(alpha, beta, p, q, simplices_pq, s_to_idx_p, s_to_idx_q; modulus=nothing)
+
+Evaluate the Alexander-Whitney cup product on `(p+q)`-simplices.
+"""
 function compute_alexander_whitney_cup(alpha::AbstractVector, beta::AbstractVector, p::Int, q::Int, simplices_pq, s_to_idx_p, s_to_idx_q, modulus=nothing)
     idx_p, idx_q = pyconvert(Dict{Tuple{Vararg{Int}}, Int64}, s_to_idx_p), pyconvert(Dict{Tuple{Vararg{Int}}, Int64}, s_to_idx_q)
     res = zeros(Int64, length(simplices_pq))
@@ -675,6 +772,17 @@ function _is_independent_wrt(ann::Vector{Int8}, pivots::Dict{Int, Vector{Int8}})
     return false, -1, curr
 end
 
+"""
+    optgen_from_simplices(simplices, num_vertices, pts=nothing, max_roots=nothing, root_stride=1, max_cycles=nothing)
+
+Compute a short-cycle H1 basis heuristic.
+
+Algorithm:
+- Build weighted 1-skeleton.
+- Use MST + triangle annotation reduction.
+- Generate cycle candidates from shortest-path trees.
+- Select an independent basis greedily by weight.
+"""
 function optgen_from_simplices(simplices, num_vertices::Int, pts=nothing, max_roots=nothing, root_stride::Int=1, max_cycles=nothing)
     if !HAS_GRAPHS
         error("Graphs.jl or SimpleWeightedGraphs.jl unavailable.")
@@ -975,6 +1083,14 @@ function _independent_mod_image(v::Vector{Int8}, basis_cols::Vector{Vector{Int8}
     return _rank_mod2(M_new) > _rank_mod2(M_prev)
 end
 
+"""
+    homology_generators_from_simplices(simplices, num_vertices, dimension, mode="valid", ...)
+
+Return data-grounded homology generators from simplicial input.
+
+`mode="valid"` keeps any independent quotient basis; `mode="optimal"`
+sorts cycle candidates by geometric/algebraic weight before selection.
+"""
 function homology_generators_from_simplices(simplices, num_vertices::Int, dimension::Int, mode::String="valid", pts=nothing, mr=nothing, rs::Int=1, mc=nothing)
     if dimension == 0
         edges = Tuple{Int64, Int64}[]
@@ -1081,6 +1197,11 @@ function homology_generators_from_simplices(simplices, num_vertices::Int, dimens
     return results
 end
 
+"""
+    triangulate_surface_delaunay(points; tolerance=1e-10)
+
+Project 3D points to a PCA plane and triangulate via DelaunayTriangulation.jl.
+"""
 function triangulate_surface_delaunay(points::AbstractMatrix{Float64}, tolerance::Real=1e-10)
     if !HAS_DELAUNAY
         error("DelaunayTriangulation.jl is not available. Please install it to use Julia-accelerated triangulation.")

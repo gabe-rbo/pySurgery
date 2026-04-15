@@ -5,6 +5,7 @@ from sympy.matrices.normalforms import smith_normal_form as sympy_smith_normal_f
 
 @numba.njit
 def swap_rows(A, i, j):
+    """In-place row swap for integer elimination kernels."""
     if i == j:
         return
     for k in range(A.shape[1]):
@@ -14,6 +15,7 @@ def swap_rows(A, i, j):
 
 @numba.njit
 def swap_cols(A, i, j):
+    """In-place column swap for integer elimination kernels."""
     if i == j:
         return
     for k in range(A.shape[0]):
@@ -23,6 +25,7 @@ def swap_cols(A, i, j):
 
 @numba.njit
 def extended_gcd(a, b):
+    """Return `(g, x, y)` such that `ax + by = g = gcd(a, b)`."""
     x0, x1, y0, y1 = 1, 0, 0, 1
     while b != 0:
         q, r = divmod(a, b)
