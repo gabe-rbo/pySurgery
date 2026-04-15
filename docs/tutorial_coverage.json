@@ -145,7 +145,22 @@
         "extract_pi_1_with_traces",
         "compute_optimal_h1_basis_from_simplices"
       ]
+    },
+    {
+      "id": "workflow.homology_generators_small_figures",
+      "kind": "workflow",
+      "target": "homology_generator_workshop",
+      "notebooks": ["examples/13_homology_generators_small_figures.ipynb"],
+      "required_snippets": [
+        "julia_engine",
+        "extract_complex_data",
+        "compute_homology_basis_from_simplex_tree",
+        "compute_optimal_h1_basis_from_simplex_tree",
+        "HomologyGenerator",
+        "build_three_isolated_points_and_triangle_loop",
+        "build_tetrahedron_boundary",
+        "build_torus_4x4"
+      ]
     }
   ]
 }
-

@@ -549,7 +549,6 @@ def build_homeomorphism_witness(
             cohomology_ring_signature_2=cohomology_ring_signature_2,
             cup_product_signature_1=cup_product_signature_1,
             cup_product_signature_2=cup_product_signature_2,
-            recognition_certificate=recognition_certificate,
         )
 
     if dim == 3:
@@ -565,6 +564,7 @@ def build_homeomorphism_witness(
             cohomology_ring_signature_2=cohomology_ring_signature_2,
             cup_product_signature_1=cup_product_signature_1,
             cup_product_signature_2=cup_product_signature_2,
+            recognition_certificate=recognition_certificate,
         )
 
     if dim >= 5:
@@ -602,5 +602,4 @@ def build_homeomorphism_witness(
         theorem=None,
         missing_data=["Supported dimension (2, 3, 4, or >=5)"],
     )
-
 

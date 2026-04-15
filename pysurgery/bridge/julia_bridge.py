@@ -1,6 +1,7 @@
 import os
 import threading
 import importlib.util
+import warnings
 from collections import OrderedDict
 import numpy as np
 
@@ -12,7 +13,7 @@ class JuliaBridge:
     Replaces subprocess mocks with native memory sharing via `juliacall`.
     """
     _instance = None
-    _lock = threading.Lock()
+    _lock = threading.RLock()
 
     def __new__(cls):
         if cls._instance is None:
@@ -25,6 +26,8 @@ class JuliaBridge:
                     cls._instance.jl = None
                     cls._instance.backend = None
                     cls._instance._coo_cache = OrderedDict()
+                    cls._instance._warmup_level = 0
+                    cls._instance._warmup_report = {}
         return cls._instance
 
     def _initialize(self):
@@ -44,22 +47,220 @@ class JuliaBridge:
             self.jl.include(backend_script)
             self.backend = self.jl.SurgeryBackend
             self._available = True
+            # Mark initialized before warm-up workloads so require_julia() checks
+            # do not recursively re-enter _initialize().
+            self._initialized = True
             self._warm_up_compilers()
         except Exception as e:
             self.error = f"Failed to initialize Julia backend: {e!r}"
             self._available = False
+            self._initialized = True
         finally:
             self._initialized = True
 
     def _warm_up_compilers(self) -> None:
-        """Best-effort, silent precompile warmup for first-call latency."""
-        if not self._available or self.jl is None or self.backend is None:
+        """Best-effort automatic warm-up on first Julia initialization."""
+        mode = os.getenv("PYSURGERY_JULIA_WARMUP_MODE", "minimal").strip().lower()
+        if mode in {"", "off", "0", "false", "none"}:
             return
-        try:
-            # Note: Julia side now handles warming up via @compile_workload
-            pass
-        except Exception:
-            return
+        if mode not in {"minimal", "full"}:
+            mode = "minimal"
+        self._run_warmup(mode)
+
+    def _minimal_warmup_workloads(self) -> list[tuple[str, callable]]:
+        square_simplices = [(0, 1), (1, 2), (2, 3), (3, 0)]
+        square_pts = np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            dtype=np.float64,
+        )
+        tetra_faces = [(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)]
+        tetra_pts = np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 0.9, 0.0], [0.5, 0.3, 0.8]],
+            dtype=np.float64,
+        )
+        payload_simplices = [
+            (0,),
+            (1,),
+            (2,),
+            (3,),
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (0, 3),
+            (0, 1, 2),
+            (0, 2, 3),
+        ]
+
+        return [
+            (
+                "h1_opt_square",
+                lambda: self.compute_optimal_h1_basis_from_simplices(
+                    square_simplices,
+                    4,
+                    point_cloud=square_pts,
+                    max_cycles=4,
+                ),
+            ),
+            (
+                "h1_valid_square",
+                lambda: self.compute_homology_basis_from_simplices(
+                    square_simplices,
+                    4,
+                    1,
+                    point_cloud=square_pts,
+                    mode="valid",
+                    max_cycles=4,
+                ),
+            ),
+            (
+                "h2_tetra_boundary",
+                lambda: self.compute_homology_basis_from_simplices(
+                    tetra_faces,
+                    4,
+                    2,
+                    point_cloud=tetra_pts,
+                    mode="valid",
+                    max_cycles=2,
+                ),
+            ),
+            (
+                "boundary_payload",
+                lambda: self.compute_boundary_payload_from_simplices(
+                    payload_simplices,
+                    2,
+                    include_metadata=False,
+                ),
+            ),
+            (
+                "boundary_mod2",
+                lambda: self.compute_boundary_mod2_matrix(
+                    [(0, 1, 2), (0, 2, 3)],
+                    [(0, 1), (1, 2), (0, 2), (2, 3), (0, 3)],
+                ),
+            ),
+        ]
+
+    def _full_warmup_workloads(self) -> list[tuple[str, callable]]:
+        def _sparse_rank_q_workload():
+            import scipy.sparse as sp
+
+            m = sp.csr_matrix(np.array([[1, 0], [0, 1]], dtype=np.int64))
+            return self.compute_sparse_rank_q(m)
+
+        def _sparse_rank_mod_p_workload():
+            import scipy.sparse as sp
+
+            m = sp.csr_matrix(np.array([[1, 1], [0, 1]], dtype=np.int64))
+            return self.compute_sparse_rank_mod_p(m, 2)
+
+        def _sparse_cohomology_workload():
+            import scipy.sparse as sp
+
+            d_np1 = sp.csr_matrix(np.zeros((1, 0), dtype=np.int64))
+            d_n = sp.csr_matrix(np.array([[1], [0]], dtype=np.int64))
+            return self.compute_sparse_cohomology_basis(d_np1, d_n, cn_size=1)
+
+        return [
+            (
+                "sparse_snf",
+                lambda: self.compute_sparse_snf(
+                    np.array([0, 1], dtype=np.int64),
+                    np.array([0, 1], dtype=np.int64),
+                    np.array([1, 1], dtype=np.int64),
+                    (2, 2),
+                ),
+            ),
+            ("sparse_rank_q", _sparse_rank_q_workload),
+            ("sparse_rank_mod_p", _sparse_rank_mod_p_workload),
+            ("sparse_cohomology_basis", _sparse_cohomology_workload),
+            (
+                "alexander_whitney_cup",
+                lambda: self.compute_alexander_whitney_cup(
+                    np.array([1, 0, 1], dtype=np.int64),
+                    np.array([1, 1, 0], dtype=np.int64),
+                    1,
+                    1,
+                    [(0, 1, 2)],
+                    {(0, 1): 0, (1, 2): 1, (0, 2): 2},
+                    {(0, 1): 0, (1, 2): 1, (0, 2): 2},
+                    modulus=2,
+                ),
+            ),
+            (
+                "group_ring_multiply",
+                lambda: self.group_ring_multiply({(0,): 1}, {(0,): 1}, 2),
+            ),
+            (
+                "abelianize_and_bhs_rank",
+                lambda: self.abelianize_and_bhs_rank(["a"], [["a", "a"]]),
+            ),
+            (
+                "integral_lattice_isometry",
+                lambda: self.integral_lattice_isometry(
+                    np.array([[1, 0], [0, 1]], dtype=np.int64),
+                    np.array([[1, 0], [0, 1]], dtype=np.int64),
+                ),
+            ),
+        ]
+
+    def _run_warmup(self, mode: str) -> dict:
+        target_level = 2 if mode == "full" else 1
+        with self._lock:
+            if self._warmup_level >= target_level:
+                report = dict(self._warmup_report)
+                report["cached"] = True
+                return report
+
+            if not self._available or self.jl is None or self.backend is None:
+                report = {
+                    "mode": mode,
+                    "available": False,
+                    "completed": [],
+                    "failed": {},
+                    "cached": False,
+                }
+                self._warmup_report = report
+                return report
+
+            workloads = list(self._minimal_warmup_workloads())
+            if mode == "full":
+                workloads.extend(self._full_warmup_workloads())
+
+            report = {
+                "mode": mode,
+                "available": True,
+                "completed": [],
+                "failed": {},
+                "cached": False,
+            }
+            for name, workload in workloads:
+                try:
+                    workload()
+                    report["completed"].append(name)
+                except Exception as exc:
+                    report["failed"][name] = repr(exc)
+
+            self._warmup_level = max(self._warmup_level, target_level)
+            self._warmup_report = report
+            if report["failed"]:
+                warnings.warn(
+                    "Julia warm-up completed with partial failures; regular execution will still proceed. "
+                    f"Failed workloads: {sorted(report['failed'].keys())}",
+                    stacklevel=2,
+                )
+            return report
+
+    def warmup(self) -> dict:
+        """Fully warm up Julia-backed bridge paths (best-effort, non-fatal)."""
+        if not self.available:
+            return {
+                "mode": "full",
+                "available": False,
+                "completed": [],
+                "failed": {"initialize": self.error or "Julia unavailable"},
+                "cached": False,
+            }
+        return self._run_warmup("full")
 
     def _ensure_initialized(self):
         if self._initialized:

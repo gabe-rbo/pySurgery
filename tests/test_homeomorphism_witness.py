@@ -8,6 +8,7 @@ from pysurgery.homeomorphism_witness import (
     build_3d_homeomorphism_witness,
     build_4d_homeomorphism_witness,
     build_high_dim_homeomorphism_witness,
+    build_homeomorphism_witness,
 )
 from pysurgery.structure_set import NormalInvariantsResult, SurgeryExactSequenceResult
 from pysurgery.wall_groups import ObstructionResult
@@ -284,3 +285,40 @@ def test_build_high_dim_witness_accepts_product_assembly_certificate_inputs():
     assert res.witness.certificates.get("product_assembly_certificate") is not None
 
 
+def test_build_homeomorphism_witness_dim2_dispatch_does_not_forward_3d_only_kwargs():
+    d1 = sp.csr_matrix(np.zeros((1, 0), dtype=np.int64))
+    d2 = sp.csr_matrix(np.zeros((0, 1), dtype=np.int64))
+    c = ChainComplex(
+        boundaries={1: d1, 2: d2},
+        dimensions=[0, 1, 2],
+        cells={0: 1, 1: 0, 2: 1},
+    )
+
+    res = build_homeomorphism_witness(c1=c, c2=c, dim=2, recognition_certificate={"provided": True})
+    assert res.status in {"success", "inconclusive"}
+
+
+def test_build_homeomorphism_witness_dim3_dispatch_forwards_recognition_certificate():
+    d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
+    d2 = sp.csr_matrix(np.array([[3]], dtype=np.int64))
+    d3 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
+    c = ChainComplex(
+        boundaries={1: d1, 2: d2, 3: d3},
+        dimensions=[0, 1, 2, 3],
+        cells={0: 1, 1: 1, 2: 1, 3: 1},
+    )
+    pi = FundamentalGroup(generators=["g"], relations=[["g", "g", "g"]])
+
+    cert = {"provided": True, "source": "dispatch-test", "exact": True, "validated": True}
+    res = build_homeomorphism_witness(
+        c1=c,
+        c2=c,
+        dim=3,
+        pi1_1=pi,
+        pi1_2=pi,
+        recognition_certificate=cert,
+    )
+
+    assert res.status == "success"
+    assert res.witness is not None
+    assert res.witness.certificates.get("recognition_certificate") is not None

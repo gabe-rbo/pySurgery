@@ -239,16 +239,35 @@ function compute_boundary_payload_from_flat_simplices(flat_vertices::AbstractVec
     return _compute_boundary_data_internal_flat(flat_vertices, simplex_offsets, max_dim)
 end
 
-function group_ring_multiply(py_coeffs1::Py, py_coeffs2::Py, group_order::Int)
-    c1, c2 = pyconvert(Dict{String, Int}, py_coeffs1), pyconvert(Dict{String, Int}, py_coeffs2)
-    res_dict = Dict{String, Int}()
-    function parse_gen(g_str)
-        (g_str == "e" || g_str == "1") && return 0
-        m = match(r"g_?(\d+)(?:\^-1)?", g_str); m === nothing && return 0
-        val = parse(Int, m.captures[1]); return endswith(g_str, "^-1") ? -val : val
+function _normalize_group_ring_coeffs(coeffs_any)
+    raw = coeffs_any isa AbstractDict ? coeffs_any : pyconvert(Dict{Any, Any}, coeffs_any)
+    out = Dict{Any, Int}()
+    for (k, v) in raw
+        out[k] = Int(v)
     end
+    return out
+end
+
+function _parse_group_element(g_raw)
+    if g_raw isa Integer
+        return Int(g_raw)
+    elseif g_raw isa Tuple || g_raw isa AbstractVector
+        isempty(g_raw) && return 0
+        return Int(first(g_raw))
+    end
+    g_str = string(g_raw)
+    (g_str == "e" || g_str == "1") && return 0
+    m = match(r"g_?(\d+)(?:\^-1)?", g_str)
+    m === nothing && return 0
+    val = parse(Int, m.captures[1])
+    return endswith(g_str, "^-1") ? -val : val
+end
+
+function group_ring_multiply(py_coeffs1, py_coeffs2, group_order::Int)
+    c1, c2 = _normalize_group_ring_coeffs(py_coeffs1), _normalize_group_ring_coeffs(py_coeffs2)
+    res_dict = Dict{String, Int}()
     for (k1, v1) in c1, (k2, v2) in c2
-        p_res = mod(parse_gen(k1) + parse_gen(k2), group_order)
+        p_res = mod(_parse_group_element(k1) + _parse_group_element(k2), group_order)
         g_str = p_res == 0 ? "1" : "g_$(p_res)"
         res_dict[g_str] = get(res_dict, g_str, 0) + v1 * v2
     end
@@ -438,16 +457,31 @@ function compute_boundary_data_from_simplices(simplex_entries, max_dim::Int)
     return _compute_boundary_data_internal(simplex_entries, max_dim)
 end
 
+function _as_string_vector(x)
+    if x isa Vector{String}
+        return x
+    elseif x isa AbstractVector
+        return [string(v) for v in x]
+    end
+    return [string(v) for v in pyconvert(Vector{Any}, x)]
+end
+
 function abelianize_group(generators::Vector{String}, relations::Vector{String})
     n_gens = length(generators); gen_idx = Dict{String, Int}(g => i for (i, g) in enumerate(generators))
     n_rels = length(relations); M = zeros(Int, n_rels, n_gens)
     for i in 1:n_rels; for m in eachmatch(r"([a-zA-Z0-9_]+)(?:\^(-?\d+))?", relations[i])
-        base_w = m.captures[1]; haskey(gen_idx, base_w) && (M[i, gen_idx[base_w]] += parse(Int, m.captures[2] || "1"))
+        base_w = m.captures[1]
+        exp_str = isnothing(m.captures[2]) ? "1" : m.captures[2]
+        haskey(gen_idx, base_w) && (M[i, gen_idx[base_w]] += parse(Int, exp_str))
     end; end
     if !HAS_ABSTRACT_ALGEBRA; return Int(n_gens - rank(Matrix{Float64}(M))), Int[]; end
     ZZ = AbstractAlgebra.ZZ; M_aa = AbstractAlgebra.matrix(ZZ, M); S_aa = AbstractAlgebra.snf(M_aa)
     diag = [Int64(S_aa[i, i]) for i in 1:min(n_rels, n_gens)]; nonzero = filter(x -> x != 0, diag)
     return n_gens - length(nonzero), filter(x -> x > 1, nonzero)
+end
+
+function abelianize_group(generators, relations)
+    return abelianize_group(_as_string_vector(generators), _as_string_vector(relations))
 end
 
 function compute_boundary_mod2_matrix(source_simplices, target_simplices)

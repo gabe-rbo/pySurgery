@@ -79,6 +79,16 @@ Pkg.add("DelaunayTriangulation")
 Pkg.add("Combinatorics")
 ```
 
+For notebooks and benchmark scripts, you can eagerly warm up Julia-backed kernels once per process:
+
+```python
+from pysurgery.bridge.julia_bridge import julia_engine
+
+if julia_engine.available:
+    report = julia_engine.warmup()
+    print("Julia warm-up workloads:", len(report.get("completed", [])))
+```
+
 ---
 
 ## Examples and tutorials
@@ -96,7 +106,8 @@ A step-by-step interactive curriculum is provided in `examples/` (Jupyter notebo
 9. `09_branch_matrix_and_failure_modes.ipynb` — success/impediment/inconclusive/surgery-required branch matrix
 10. `10_witness_builder_reference.ipynb` — witness-builder API reference and dispatcher coverage
 11. `11_capstone_end_to_end_workflow.ipynb` — one full problem-solving pipeline using the library end-to-end
-12. `12_torus_surgery.ipynb` — torus triangulation, homology extraction, and surgery-style 2D witness diagnostics
+12. `12_cube_surgery.ipynb` — cube triangulation, homology extraction, and surgery-style 2D witness diagnostics
+13. `13_homology_generators_small_figures.ipynb` — five tiny complexes showing how `H_0`, `H_1`, and `H_2` generators are found and visualized
 
 ---
 
