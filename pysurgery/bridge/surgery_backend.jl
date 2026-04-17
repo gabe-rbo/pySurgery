@@ -8,7 +8,7 @@ using Combinatorics
 using PythonCall: pyconvert, Py
 import PrecompileTools
 
-export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay
+export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance
 
 const HAS_ABSTRACT_ALGEBRA = try
     @eval import AbstractAlgebra
@@ -50,6 +50,91 @@ function hermitian_signature(matrix::AbstractMatrix{Float64})
     return pos - neg
 end
 
+function _reduce_snf(A::SparseMatrixCSC{Int64, Int64})
+    m, n = size(A)
+    rows, cols, vals = findnz(A)
+    
+    row_active = trues(m)
+    col_active = trues(n)
+    
+    row_nz = zeros(Int, m)
+    col_nz = zeros(Int, n)
+    
+    row_entries = [Tuple{Int, Int}[] for _ in 1:m]
+    col_entries = [Tuple{Int, Int}[] for _ in 1:n]
+    for (r, c, v) in zip(rows, cols, vals)
+        row_nz[r] += 1
+        col_nz[c] += 1
+        push!(row_entries[r], (c, v))
+        push!(col_entries[c], (r, v))
+    end
+    
+    ones_count = 0
+    changed = true
+    while changed
+        changed = false
+        
+        for r in 1:m
+            if row_active[r] && row_nz[r] == 1
+                for (c, v) in row_entries[r]
+                    if col_active[c]
+                        if abs(v) == 1
+                            ones_count += 1
+                            row_active[r] = false
+                            col_active[c] = false
+                            changed = true
+                            for (rr, vv) in col_entries[c]
+                                if row_active[rr]
+                                    row_nz[rr] -= 1
+                                end
+                            end
+                        end
+                        break
+                    end
+                end
+            end
+        end
+        
+        for c in 1:n
+            if col_active[c] && col_nz[c] == 1
+                for (r, v) in col_entries[c]
+                    if row_active[r]
+                        if abs(v) == 1
+                            ones_count += 1
+                            col_active[c] = false
+                            row_active[r] = false
+                            changed = true
+                            for (cc, vv) in row_entries[r]
+                                if col_active[cc]
+                                    col_nz[cc] -= 1
+                                end
+                            end
+                        end
+                        break
+                    end
+                end
+            end
+        end
+    end
+    
+    core_rows = findall(row_active)
+    core_cols = findall(col_active)
+    
+    core_mat = zeros(Int, length(core_rows), length(core_cols))
+    row_map = Dict(r => i for (i, r) in enumerate(core_rows))
+    col_map = Dict(c => i for (i, c) in enumerate(core_cols))
+    
+    for r in core_rows
+        for (c, v) in row_entries[r]
+            if col_active[c]
+                core_mat[row_map[r], col_map[c]] = v
+            end
+        end
+    end
+    
+    return ones_count, core_mat
+end
+
 """
     exact_snf_sparse(rows, cols, vals, m, n)
 
@@ -63,14 +148,20 @@ function exact_snf_sparse(rows::AbstractVector{Int64}, cols::AbstractVector{Int6
     # sparse() constructor is efficient with these vectors.
     A = sparse(rows .+ 1, cols .+ 1, vals, m, n)
     try
-        ZZ = AbstractAlgebra.ZZ
-        A_aa = AbstractAlgebra.matrix(ZZ, Matrix(A))
-        S_aa = AbstractAlgebra.snf(A_aa)
-        factors = Int64[]
-        for i in 1:min(m, n)
-            val = Int64(S_aa[i, i])
-            if val != 0
-                push!(factors, abs(val))
+        ones_count, core_mat = _reduce_snf(A)
+        factors = ones(Int64, ones_count)
+        
+        if length(core_mat) > 0
+            ZZ = AbstractAlgebra.ZZ
+            A_aa = AbstractAlgebra.matrix(ZZ, core_mat)
+            S_aa = AbstractAlgebra.snf(A_aa)
+            for i in 1:min(size(core_mat)...)
+                val = Int64(S_aa[i, i])
+                if val != 0 && abs(val) > 1
+                    push!(factors, abs(val))
+                elseif val != 0 && abs(val) == 1
+                    push!(factors, 1)
+                end
             end
         end
         return sort(factors)
@@ -182,6 +273,75 @@ function rank_mod_p_sparse(rows::AbstractVector{Int64}, cols::AbstractVector{Int
     isempty(rows) && return Int64(0)
     A = sparse(rows .+ 1, cols .+ 1, vals, m, n)
     return _rank_mod_p_dense!(Matrix{Int64}(A), p)
+end
+
+"""
+    normal_surface_residual_norms(rows, cols, vals, m, n, coordinate_matrix)
+
+Compute batched Euclidean residual norms `||A * x_i||_2` for normal-surface
+coordinate columns `x_i`.
+"""
+function normal_surface_residual_norms(
+    rows::AbstractVector{Int64},
+    cols::AbstractVector{Int64},
+    vals::AbstractVector{Int64},
+    m::Int,
+    n::Int,
+    coordinate_matrix::AbstractMatrix{Int64},
+)
+    size(coordinate_matrix, 1) == n || error("coordinate_matrix row count must match matrix column count")
+    k = size(coordinate_matrix, 2)
+    k == 0 && return Float64[]
+    m == 0 && return zeros(Float64, k)
+
+    A = isempty(rows) ? spzeros(Float64, m, n) : sparse(rows .+ 1, cols .+ 1, Float64.(vals), m, n)
+    R = A * Matrix{Float64}(coordinate_matrix)
+    return vec(sqrt.(sum(abs2, R; dims=1)))
+end
+
+"""
+    embedding_broad_phase_pairs(centroids, radii, tol)
+
+Compute candidate simplex index pairs `(i, j)` with `i < j` using centroid-ball
+distance bounds. This is a fast broad-phase filter for PL self-intersection checks.
+"""
+function embedding_broad_phase_pairs(
+    centroids::AbstractMatrix{Float64},
+    radii::AbstractVector{Float64},
+    tol::Float64,
+)
+    n = size(centroids, 1)
+    size(centroids, 2) >= 1 || return Matrix{Int64}(undef, 0, 2)
+    length(radii) == n || error("radii length must match centroid count")
+    n <= 1 && return Matrix{Int64}(undef, 0, 2)
+
+    pairs = Vector{NTuple{2, Int64}}()
+    @inbounds for i in 1:(n - 1)
+        ci = @view centroids[i, :]
+        ri = radii[i]
+        for j in (i + 1):n
+            cj = @view centroids[j, :]
+            bound = ri + radii[j] + tol
+            sq = 0.0
+            for k in 1:size(centroids, 2)
+                d = ci[k] - cj[k]
+                sq += d * d
+            end
+            if sq <= bound * bound
+                push!(pairs, (Int64(i - 1), Int64(j - 1)))
+            end
+        end
+    end
+
+    if isempty(pairs)
+        return Matrix{Int64}(undef, 0, 2)
+    end
+    out = Matrix{Int64}(undef, length(pairs), 2)
+    @inbounds for (idx, p) in enumerate(pairs)
+        out[idx, 1] = p[1]
+        out[idx, 2] = p[2]
+    end
+    return out
 end
 
 function _rref_mod_p_dense(M::Matrix{Int64}, p::Int)
@@ -1252,7 +1412,164 @@ function triangulate_surface_delaunay(points::AbstractMatrix{Float64}, tolerance
     return faces
 end
 
-PrecompileTools.@setup_workload begin
+# --- Metric Spaces & Alignment ---
+
+"""
+    orthogonal_procrustes(A::AbstractMatrix, B::AbstractMatrix)
+
+Aligns B to A by finding an orthogonal matrix R that minimizes ||A - B*R||_F.
+Returns (R, B_aligned, disparity).
+"""
+function orthogonal_procrustes(A::AbstractMatrix{Float64}, B::AbstractMatrix{Float64})
+    M = transpose(B) * A
+    F = svd(M)
+    R = F.U * transpose(F.Vt)
+    if det(R) < 0
+        U = copy(F.U)
+        U[:, end] .*= -1
+        R = U * transpose(F.Vt)
+    end
+    B_aligned = B * R
+    disparity = norm(A - B_aligned)
+    return R, B_aligned, disparity
+end
+
+"""
+    pairwise_distance_matrix(data::AbstractMatrix, metric::String)
+
+Computes the pairwise distance matrix for the given metric ("euclidean", "manhattan", "chebyshev").
+"""
+function pairwise_distance_matrix(data::AbstractMatrix{Float64}, metric::String)
+    n = size(data, 1)
+    D = zeros(Float64, n, n)
+    if metric == "euclidean"
+        for i in 1:n
+            for j in 1:i-1
+                d = 0.0
+                for k in 1:size(data, 2)
+                    d += (data[i, k] - data[j, k])^2
+                end
+                D[i, j] = D[j, i] = sqrt(d)
+            end
+        end
+    elseif metric == "manhattan"
+        for i in 1:n
+            for j in 1:i-1
+                d = 0.0
+                for k in 1:size(data, 2)
+                    d += abs(data[i, k] - data[j, k])
+                end
+                D[i, j] = D[j, i] = d
+            end
+        end
+    elseif metric == "chebyshev"
+        for i in 1:n
+            for j in 1:i-1
+                d = 0.0
+                for k in 1:size(data, 2)
+                    d = max(d, abs(data[i, k] - data[j, k]))
+                end
+                D[i, j] = D[j, i] = d
+            end
+        end
+    else
+        error("Unsupported metric: " * metric)
+    end
+    return D
+end
+
+"""
+    frechet_distance(curve_a::AbstractMatrix, curve_b::AbstractMatrix)
+
+Computes the Discrete Fréchet distance between two polygonal curves.
+"""
+function frechet_distance(curve_a::AbstractMatrix{Float64}, curve_b::AbstractMatrix{Float64})
+    n = size(curve_a, 1)
+    m = size(curve_b, 1)
+    ca = fill(-1.0, n, m)
+
+    function dist(i, j)
+        d = 0.0
+        for k in 1:size(curve_a, 2)
+            d += (curve_a[i, k] - curve_b[j, k])^2
+        end
+        return sqrt(d)
+    end
+
+    ca[1, 1] = dist(1, 1)
+    for i in 2:n
+        ca[i, 1] = max(ca[i-1, 1], dist(i, 1))
+    end
+    for j in 2:m
+        ca[1, j] = max(ca[1, j-1], dist(1, j))
+    end
+
+    for i in 2:n
+        for j in 2:m
+            ca[i, j] = max(min(ca[i-1, j], ca[i, j-1], ca[i-1, j-1]), dist(i, j))
+        end
+    end
+
+    return ca[n, m]
+end
+
+"""
+    gromov_wasserstein_distance(D_A, D_B, p, q, epsilon, max_iter)
+
+Computes the Entropic Gromov-Wasserstein distance between two metric spaces.
+"""
+function gromov_wasserstein_distance(
+    D_A::AbstractMatrix{Float64}, 
+    D_B::AbstractMatrix{Float64}, 
+    p::AbstractVector{Float64}, 
+    q::AbstractVector{Float64}, 
+    epsilon::Float64, 
+    max_iter::Int
+)
+    n = size(D_A, 1)
+    m = size(D_B, 1)
+
+    T = p * transpose(q)
+
+    C1 = (D_A .^ 2) * p * ones(1, m)
+    C2 = ones(n, 1) * transpose(q) * transpose(D_B .^ 2)
+    const_C = C1 .+ C2
+
+    for iter in 1:max_iter
+        L = const_C .- 2.0 .* (D_A * T * transpose(D_B))
+        K = exp.(-L ./ epsilon)
+
+        u = ones(n) ./ n
+        v = ones(m) ./ m
+        for s in 1:20
+            v = q ./ (transpose(K) * u .+ 1e-10)
+            u = p ./ (K * v .+ 1e-10)
+        end
+
+        T_new = u .* K .* transpose(v)
+
+        if norm(T_new - T) < 1e-6
+            T = T_new
+            break
+        end
+        T = T_new
+    end
+
+    gw_dist = 0.0
+    for i in 1:n
+        for j in 1:m
+            for k in 1:n
+                for l in 1:m
+                    gw_dist += (D_A[i, k] - D_B[j, l])^2 * T[i, j] * T[k, l]
+                end
+            end
+        end
+    end
+
+    return sqrt(gw_dist)
+end
+
+@PrecompileTools.setup_workload begin
     # 1. Sparse Integer Matrix Setup (COO format) - 3x3 boundary-like with 1, -1, 0
     # Chain complex boundaries are strictly integer based.
     r_idx = Int64[0, 1, 2, 0]
@@ -1281,6 +1598,13 @@ PrecompileTools.@setup_workload begin
     # 5. New function dummies
     pts_3d = Float64[0 0 0; 1 0 0; 0 1 0; 0 0 1]
     simplices_h1 = [[0, 1], [1, 2], [2, 0], [0, 1, 2]]
+
+    # 6. Metric variables
+    pts_A = Float64[0 0; 1 0; 0 1]
+    pts_B = Float64[0 1; 1 1; 0 0]
+    p_gw = ones(Float64, 3) ./ 3.0
+    q_gw = ones(Float64, 3) ./ 3.0
+    D_A = Float64[0 1 1; 1 0 1.414; 1 1.414 0]
 
     PrecompileTools.@compile_workload begin
         # --- Heavy Paths: Sparse Rank, SNF, and Cohomology ---
@@ -1317,6 +1641,12 @@ PrecompileTools.@setup_workload begin
             triangulate_surface_delaunay(pts_3d)
             homology_generators_from_simplices(simplices_h1, 3, 1)
             optgen_from_simplices(simplices_h1, 3)
+            
+            # Metric & Alignment operations
+            orthogonal_procrustes(pts_A, pts_B)
+            pairwise_distance_matrix(pts_A, "euclidean")
+            frechet_distance(pts_A, pts_B)
+            gromov_wasserstein_distance(D_A, D_A, p_gw, q_gw, 0.01, 2)
         catch
         end
     end

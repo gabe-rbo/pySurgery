@@ -3,7 +3,7 @@
 [![Tests](https://github.com/gabe-rbo/pysurgery/actions/workflows/tests.yml/badge.svg)](https://github.com/gabe-rbo/pysurgery/actions/workflows/tests.yml)
 [![Lint](https://github.com/gabe-rbo/pysurgery/actions/workflows/lint.yml/badge.svg)](https://github.com/gabe-rbo/pysurgery/actions/workflows/lint.yml)
 
-**pySurgery** is a Python library for *computational algebraic topology* and *computational surgery theory*: it turns discrete data (CW/simplicial complexes, meshes, TDA pipelines) into **integer** invariants strong enough to go beyond Betti numbers—e.g. **torsion**, **cup products**, **intersection forms**, and (in key cases) **homeomorphism classification signals**.
+**pySurgery** is a Python library for *computational algebraic topology* and *computational surgery theory*: it turns discrete data (CW/simplicial complexes, meshes, TDA pipelines) into **integer** invariants strong enough to go beyond Betti numbers-e.g. **torsion**, **cup products**, **intersection forms**, and (in key cases) **homeomorphism classification signals**.
 
 If you’ve ever felt “persistent homology is informative, but not decisive,” pySurgery is aimed at the next layer of structure.
 
@@ -13,10 +13,15 @@ If you’ve ever felt “persistent homology is informative, but not decisive,�
 
 Most numerical linear-algebra approaches over $\mathbb{R}$ lose information that lives over $\mathbb{Z}$ (especially torsion). pySurgery focuses on *exact* and *structure-aware* invariants:
 
+* **Native combinatorial spaces** via `SimplicialComplex`, `CWComplex`, and `ChainComplex`
 * **Homology & cohomology over $\mathbb{Z}$** via **Smith Normal Form (SNF)** (captures torsion)
 * **Coefficient support** for `Z`, `Q`, and `Z/pZ` (including composite moduli via UCT decomposition)
-* **Cup product** (Alexander–Whitney) to extract intersection information
+* **GUDHI interoperability** (`SimplexTree <-> SimplicialComplex`) with optional filtration roundtrip
+* **Lazy cached derivations** for reusable structural/algebraic computations
+* **Cup product** (Alexander-Whitney) to extract intersection information
 * **Intersection forms** for 4-manifolds (rank/signature/parity)
+* **Geometry modules** for embedding/immersion checks, intrinsic dimension, uniformization, and 3D geometrization heuristics
+* **Metric spaces & alignment**: Orthogonal Procrustes, discrete Fréchet distance, Gromov-Wasserstein, and `SimplicialComplex` construction directly from arbitrary distance matrices.
 * Hooks for **surgery-theoretic** obstructions and higher-dimensional classification workflows
 
 ---
@@ -93,21 +98,20 @@ if julia_engine.available:
 
 ## Examples and tutorials
 
-A step-by-step interactive curriculum is provided in `examples/` (Jupyter notebooks), covering topics from algebraic topology basics to surgery-theoretic workflows:
+The recommended newcomer-first curriculum is now in:
 
-1. `01_basic_homology_and_cohomology.ipynb` — CW complexes, SNF, UCT
-2. `02_intersection_forms.ipynb` — 4D classification concepts, spin checks
-3. `03_algebraic_surgery.ipynb` — isotropic classes and algebraic surgery mechanics
-4. `04_advanced_tda_and_surgery_theory.ipynb` — raw data → GUDHI → cup product → intersection form
-5. `05_omni_dimensional_homeomorphisms.ipynb` — how classification behavior changes by dimension
-6. `06_kirby_calculus_and_characteristic_classes.ipynb` — characteristic classes & Kirby-style ideas
-7. `07_fundamental_group_and_structure_set.ipynb` — $\pi_1$ extraction, Whitehead data, and typed structure-set workflows
-8. `08_certificate_workflows.ipynb` — explicit homeomorphism witnesses, obstruction interference, and surgery planning
-9. `09_branch_matrix_and_failure_modes.ipynb` — success/impediment/inconclusive/surgery-required branch matrix
-10. `10_witness_builder_reference.ipynb` — witness-builder API reference and dispatcher coverage
-11. `11_capstone_end_to_end_workflow.ipynb` — one full problem-solving pipeline using the library end-to-end
-12. `12_cube_surgery.ipynb` — cube triangulation, homology extraction, and surgery-style 2D witness diagnostics
-13. `13_homology_generators_small_figures.ipynb` — five tiny complexes showing how `H_0`, `H_1`, and `H_2` generators are found and visualized
+* `examples/00_pipeline_v2_index.ipynb`
+* `examples/pipeline_v2/README.md`
+
+This **pipeline_v2** track contains 24 ordered notebooks from foundations to capstone, covering:
+
+1. core spaces/chain-complexes and exact algebra,
+2. GUDHI interoperability and caching-aware workflows,
+3. surgery exact-sequence and certificate/witness assembly,
+4. embedding/immersion, intrinsic dimension, uniformization, and geometrization,
+5. failure modes, optional integrations, and end-to-end reproducible pipelines.
+
+Legacy notebooks in `examples/01_...13_...` remain available as reference material.
 
 ---
 
@@ -314,17 +318,16 @@ This is an explicit algebraic certificate for the lattice isomorphism part of th
 ```text
 pysurgery/
 ├── core/
-│   ├── cup_product.py
 │   ├── complexes.py
-│   ├── characteristic_classes.py
-│   ├── exceptions.py
+│   ├── embedding.py
+│   ├── intrinsic_dimension.py
+│   ├── uniformization.py
+│   ├── geometrization_3d.py
 │   ├── fundamental_group.py
-│   ├── group_rings.py
 │   ├── intersection_forms.py
-│   ├── k_theory.py
-│   ├── kirby_calculus.py
-│   ├── math_core.py
-│   └── quadratic_forms.py
+│   ├── structure_set.py
+│   ├── wall_groups.py
+│   └── ...
 ├── bridge/
 │   ├── julia_bridge.py
 │   └── surgery_backend.jl
@@ -338,7 +341,11 @@ pysurgery/
 
 Key modules:
 
-* `pysurgery.core.complexes` — `CWComplex`, `ChainComplex`
+* `pysurgery.core.complexes` — `SimplicialComplex`, `CWComplex`, `ChainComplex` (with lazy cache + GUDHI interop helpers)
+* `pysurgery.core.embedding` — PL immersion/embedding checks and self-intersection diagnostics
+* `pysurgery.core.intrinsic_dimension` — MLE/TwoNN/PCA dimension estimators
+* `pysurgery.core.uniformization` — discrete conformal/uniformization workflows for surfaces
+* `pysurgery.core.geometrization_3d` — normal-surface candidates, decomposition heuristics, certificate conversion
 * `pysurgery.core.intersection_forms` — lattice math, parity checks, surgery engine
 * `pysurgery.core.math_core` — SNF / exact integer computation core
 * `pysurgery.homeomorphism` — dimension-aware analyzers

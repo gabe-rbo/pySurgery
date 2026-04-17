@@ -158,6 +158,18 @@ class JuliaBridge:
                     n_edges=1,
                 ),
             ),
+            (
+                "metrics_warmup",
+                lambda: (
+                    self.orthogonal_procrustes(np.eye(2), np.eye(2)),
+                    self.pairwise_distance_matrix(np.array([[0., 0.], [1., 1.]]), "euclidean"),
+                    self.frechet_distance(np.array([[0., 0.], [1., 1.]]), np.array([[0., 1.], [1., 0.]])),
+                    self.gromov_wasserstein_distance(
+                        np.array([[0., 1.], [1., 0.]]), np.array([[0., 1.], [1., 0.]]), 
+                        np.array([0.5, 0.5]), np.array([0.5, 0.5]), 0.01, 2
+                    )
+                ),
+            ),
         ]
 
     def _full_warmup_workloads(self) -> list[tuple[str, callable]]:
@@ -181,6 +193,13 @@ class JuliaBridge:
             d_np1 = sp.csr_matrix(np.zeros((1, 0), dtype=np.int64))
             d_n = sp.csr_matrix(np.array([[1], [0]], dtype=np.int64))
             return self.compute_sparse_cohomology_basis(d_np1, d_n, cn_size=1)
+
+        def _normal_surface_residual_workload():
+            import scipy.sparse as sp
+
+            m = sp.csr_matrix(np.array([[1, -1], [0, 1]], dtype=np.int64))
+            v = np.array([[1, 0], [0, 1]], dtype=np.int64)
+            return self.compute_normal_surface_residual_norms(m, v)
 
         return [
             (
@@ -223,7 +242,74 @@ class JuliaBridge:
                     np.array([[1, 0], [0, 1]], dtype=np.int64),
                 ),
             ),
+            (
+                "normal_surface_residual_norms",
+                _normal_surface_residual_workload,
+            ),
         ]
+
+    def compute_normal_surface_residual_norms(
+        self,
+        matrix,
+        coordinate_matrix: np.ndarray,
+    ) -> np.ndarray:
+        """Compute `||A * x_i||_2` in batch for normal-surface coordinate columns."""
+        self.require_julia()
+        coords = np.asarray(coordinate_matrix, dtype=np.int64)
+        if coords.ndim != 2:
+            raise ValueError("coordinate_matrix must be a 2D array")
+        if matrix is None:
+            raise ValueError("matrix is required")
+        if int(matrix.shape[1]) != int(coords.shape[0]):
+            raise ValueError(
+                "coordinate_matrix row count must match matrix column count"
+            )
+        if coords.shape[1] == 0:
+            return np.zeros(0, dtype=np.float64)
+        if int(matrix.shape[0]) == 0:
+            return np.zeros(coords.shape[1], dtype=np.float64)
+
+        if matrix.nnz == 0:
+            rows = np.array([], dtype=np.int64)
+            cols = np.array([], dtype=np.int64)
+            vals = np.array([], dtype=np.int64)
+        else:
+            rows, cols, vals = self._coo_triplets_cached(matrix)
+
+        norms = self.backend.normal_surface_residual_norms(
+            rows,
+            cols,
+            vals,
+            int(matrix.shape[0]),
+            int(matrix.shape[1]),
+            coords,
+        )
+        return np.asarray(norms, dtype=np.float64)
+
+    def compute_broad_phase_pairs(
+        self,
+        centroids: np.ndarray,
+        radii: np.ndarray,
+        *,
+        tol: float,
+    ) -> np.ndarray:
+        """Compute candidate simplex index pairs `(i, j)` with `i < j` via Julia."""
+        self.require_julia()
+        ctr = np.asarray(centroids, dtype=np.float64)
+        rad = np.asarray(radii, dtype=np.float64).reshape(-1)
+        if ctr.ndim != 2:
+            raise ValueError("centroids must be a 2D array")
+        if rad.ndim != 1:
+            raise ValueError("radii must be a 1D array")
+        if ctr.shape[0] != rad.shape[0]:
+            raise ValueError("centroids and radii must have the same number of rows")
+        if ctr.shape[0] <= 1:
+            return np.zeros((0, 2), dtype=np.int64)
+        pairs = self.backend.embedding_broad_phase_pairs(ctr, rad, float(tol))
+        out = np.asarray(pairs, dtype=np.int64)
+        if out.size == 0:
+            return np.zeros((0, 2), dtype=np.int64)
+        return out.reshape(-1, 2)
 
     def _run_warmup(self, mode: str) -> dict:
         """Execute warm-up workloads and cache the resulting status report."""
@@ -801,6 +887,42 @@ class JuliaBridge:
             np.asarray(points, dtype=np.float64), float(tolerance)
         )
         return [list(tri) for tri in triangles]
+
+    def orthogonal_procrustes(self, A: np.ndarray, B: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+        self.require_julia()
+        res = self.backend.orthogonal_procrustes(
+            np.asarray(A, dtype=np.float64), np.asarray(B, dtype=np.float64)
+        )
+        # res is a Tuple: (R, B_aligned, disparity)
+        return np.asarray(res[0]), np.asarray(res[1]), float(res[2])
+
+    def pairwise_distance_matrix(self, data: np.ndarray, metric: str = "euclidean") -> np.ndarray:
+        self.require_julia()
+        res = self.backend.pairwise_distance_matrix(
+            np.asarray(data, dtype=np.float64), str(metric)
+        )
+        return np.asarray(res)
+
+    def frechet_distance(self, curve_a: np.ndarray, curve_b: np.ndarray) -> float:
+        self.require_julia()
+        res = self.backend.frechet_distance(
+            np.asarray(curve_a, dtype=np.float64), np.asarray(curve_b, dtype=np.float64)
+        )
+        return float(res)
+
+    def gromov_wasserstein_distance(
+        self, D_A: np.ndarray, D_B: np.ndarray, p: np.ndarray, q: np.ndarray, epsilon: float, max_iter: int
+    ) -> float:
+        self.require_julia()
+        res = self.backend.gromov_wasserstein_distance(
+            np.asarray(D_A, dtype=np.float64),
+            np.asarray(D_B, dtype=np.float64),
+            np.asarray(p, dtype=np.float64),
+            np.asarray(q, dtype=np.float64),
+            float(epsilon),
+            int(max_iter)
+        )
+        return float(res)
 
 
 julia_engine = JuliaBridge()

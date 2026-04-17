@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
+import builtins
 
 from pysurgery.integrations import trimesh_bridge, pytorch_geometric_bridge
+from pysurgery.core.complexes import SimplicialComplex
 
 
 class _FakeTensor:
@@ -47,3 +49,18 @@ def test_pyg_scope_edge_index_shape_check(monkeypatch):
     data = _FakePyGData(edge_index=edge_index, num_nodes=2)
     with pytest.raises(ValueError):
         pytorch_geometric_bridge.pyg_to_cw_complex(data)
+
+
+def test_simplicial_to_gudhi_import_guard(monkeypatch):
+    sc = SimplicialComplex.from_maximal_simplices([(0, 1, 2)])
+    original_import = builtins.__import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name == "gudhi":
+            raise ImportError("missing gudhi")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+    with pytest.raises(ImportError):
+        sc.to_gudhi_simplex_tree()
+

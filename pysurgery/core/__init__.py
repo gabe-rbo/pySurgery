@@ -1,4 +1,47 @@
-from .complexes import ChainComplex, CWComplex
+from .complexes import ChainComplex, CWComplex, SimplicialComplex
+from .embedding import (
+    EmbeddingResult,
+    ImmersionResult,
+    PLMap,
+    ProjectionResult,
+    SelfIntersectionReport,
+    SimplexIntersectionWitness,
+    analyze_embedding,
+    check_immersion,
+    detect_self_intersections,
+    jitter_coordinates,
+    project_coordinates,
+)
+from .intrinsic_dimension import (
+    IntrinsicDimensionMethodResult,
+    IntrinsicDimensionResult,
+    estimate_intrinsic_dimension,
+    levina_bickel_mle,
+    local_pca_tangent_space_dimension,
+    twonn,
+)
+from .geometrization_3d import (
+    GeometrizationResult,
+    NormalSurfaceCandidate,
+    PieceDecomposition,
+    Triangulated3Manifold,
+    analyze_geometrization,
+    crush_normal_surface,
+    jsj_decomposition,
+    normal_surface_candidates,
+    normal_surface_matching_matrix,
+    prime_decomposition,
+)
+from .uniformization import (
+    SurfaceMesh,
+    SurfaceUniformizationResult,
+    circle_packing_uniformization,
+    cotangent_laplacian,
+    discrete_ricci_flow,
+    surface_target_curvature,
+    uniformize_surface,
+    vertex_gaussian_curvature,
+)
 from .intersection_forms import IntersectionForm
 from .quadratic_forms import QuadraticForm, arf_invariant_gf2
 from .group_rings import GroupRingElement
@@ -53,10 +96,52 @@ from .pi1_group_ring_scaffold import (
     Phase2Readiness,
     evaluate_phase2_readiness,
 )
+from .metrics import (
+    orthogonal_procrustes,
+    compute_distance_matrix,
+    frechet_distance,
+    gromov_wasserstein_distance,
+)
 
 __all__ = [
     "ChainComplex",
     "CWComplex",
+    "SimplicialComplex",
+    "EmbeddingResult",
+    "ImmersionResult",
+    "PLMap",
+    "ProjectionResult",
+    "SelfIntersectionReport",
+    "SimplexIntersectionWitness",
+    "analyze_embedding",
+    "check_immersion",
+    "detect_self_intersections",
+    "jitter_coordinates",
+    "project_coordinates",
+    "IntrinsicDimensionMethodResult",
+    "IntrinsicDimensionResult",
+    "estimate_intrinsic_dimension",
+    "levina_bickel_mle",
+    "local_pca_tangent_space_dimension",
+    "twonn",
+    "GeometrizationResult",
+    "NormalSurfaceCandidate",
+    "PieceDecomposition",
+    "Triangulated3Manifold",
+    "analyze_geometrization",
+    "crush_normal_surface",
+    "jsj_decomposition",
+    "normal_surface_candidates",
+    "normal_surface_matching_matrix",
+    "prime_decomposition",
+    "SurfaceMesh",
+    "SurfaceUniformizationResult",
+    "circle_packing_uniformization",
+    "cotangent_laplacian",
+    "discrete_ricci_flow",
+    "surface_target_curvature",
+    "uniformize_surface",
+    "vertex_gaussian_curvature",
     "IntersectionForm",
     "QuadraticForm",
     "arf_invariant_gf2",
@@ -100,4 +185,8 @@ __all__ = [
     "GroupRingContext",
     "Phase2Readiness",
     "evaluate_phase2_readiness",
+    "orthogonal_procrustes",
+    "compute_distance_matrix",
+    "frechet_distance",
+    "gromov_wasserstein_distance",
 ]

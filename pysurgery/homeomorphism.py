@@ -353,6 +353,13 @@ def _normalize_3d_recognition_certificate(
 ) -> ThreeManifoldRecognitionCertificate:
     if isinstance(recognition_certificate, ThreeManifoldRecognitionCertificate):
         return recognition_certificate
+    if hasattr(recognition_certificate, "to_recognition_certificate"):
+        try:
+            candidate = recognition_certificate.to_recognition_certificate()
+            if isinstance(candidate, ThreeManifoldRecognitionCertificate):
+                return candidate
+        except Exception:
+            pass
     if isinstance(recognition_certificate, dict):
         return ThreeManifoldRecognitionCertificate(
             provided=bool(recognition_certificate.get("provided", True)),

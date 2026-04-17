@@ -1,4 +1,47 @@
-from .core.complexes import ChainComplex, CWComplex
+from .core.complexes import ChainComplex, CWComplex, SimplicialComplex
+from .core.embedding import (
+    EmbeddingResult,
+    ImmersionResult,
+    PLMap,
+    ProjectionResult,
+    SelfIntersectionReport,
+    SimplexIntersectionWitness,
+    analyze_embedding,
+    check_immersion,
+    detect_self_intersections,
+    jitter_coordinates,
+    project_coordinates,
+)
+from .core.intrinsic_dimension import (
+    IntrinsicDimensionMethodResult,
+    IntrinsicDimensionResult,
+    estimate_intrinsic_dimension,
+    levina_bickel_mle,
+    local_pca_tangent_space_dimension,
+    twonn,
+)
+from .core.geometrization_3d import (
+    GeometrizationResult,
+    NormalSurfaceCandidate,
+    PieceDecomposition,
+    Triangulated3Manifold,
+    analyze_geometrization,
+    crush_normal_surface,
+    jsj_decomposition,
+    normal_surface_candidates,
+    normal_surface_matching_matrix,
+    prime_decomposition,
+)
+from .core.uniformization import (
+    SurfaceMesh,
+    SurfaceUniformizationResult,
+    circle_packing_uniformization,
+    cotangent_laplacian,
+    discrete_ricci_flow,
+    surface_target_curvature,
+    uniformize_surface,
+    vertex_gaussian_curvature,
+)
 from .core.intersection_forms import IntersectionForm
 from .core.quadratic_forms import QuadraticForm, arf_invariant_gf2
 from .core.group_rings import GroupRingElement
@@ -97,10 +140,46 @@ from .homeomorphism_witness import (
 )
 from . import integrations
 
-__version__ = "1.0.0"
+__version__ = "1.3.0"
 __all__ = [
     "ChainComplex",
     "CWComplex",
+    "SimplicialComplex",
+    "EmbeddingResult",
+    "ImmersionResult",
+    "PLMap",
+    "ProjectionResult",
+    "SelfIntersectionReport",
+    "SimplexIntersectionWitness",
+    "analyze_embedding",
+    "check_immersion",
+    "detect_self_intersections",
+    "jitter_coordinates",
+    "project_coordinates",
+    "IntrinsicDimensionMethodResult",
+    "IntrinsicDimensionResult",
+    "estimate_intrinsic_dimension",
+    "levina_bickel_mle",
+    "local_pca_tangent_space_dimension",
+    "twonn",
+    "GeometrizationResult",
+    "NormalSurfaceCandidate",
+    "PieceDecomposition",
+    "Triangulated3Manifold",
+    "analyze_geometrization",
+    "crush_normal_surface",
+    "jsj_decomposition",
+    "normal_surface_candidates",
+    "normal_surface_matching_matrix",
+    "prime_decomposition",
+    "SurfaceMesh",
+    "SurfaceUniformizationResult",
+    "circle_packing_uniformization",
+    "cotangent_laplacian",
+    "discrete_ricci_flow",
+    "surface_target_curvature",
+    "uniformize_surface",
+    "vertex_gaussian_curvature",
     "IntersectionForm",
     "QuadraticForm",
     "arf_invariant_gf2",

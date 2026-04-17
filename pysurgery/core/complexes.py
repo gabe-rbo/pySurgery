@@ -1,11 +1,13 @@
+import itertools
+import hashlib
 import numpy as np
 import warnings
 import sympy as sp
 from functools import reduce
 from math import lcm
 from scipy.sparse import csr_matrix
-from typing import Dict, List, Tuple
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Dict, Iterable, List, Tuple, Union, cast
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from .math_core import get_sparse_snf_diagonal
 from ..bridge.julia_bridge import julia_engine
 
@@ -24,6 +26,544 @@ def _parse_coefficient_ring(ring: str) -> tuple[str, int | None]:
             raise ValueError("Z/pZ requires p > 1.")
         return "ZMOD", p
     raise ValueError(f"Unsupported coefficient ring '{ring}'. Use 'Z', 'Q', or 'Z/pZ'.")
+
+
+def _coerce_csr_matrix(matrix: csr_matrix | np.ndarray | list | tuple) -> csr_matrix:
+    """Coerce sparse/dense matrix-like data to CSR with integer entries."""
+    if isinstance(matrix, csr_matrix):
+        return matrix.copy().astype(np.int64)
+    return csr_matrix(np.asarray(matrix, dtype=np.int64), dtype=np.int64)
+
+
+def _normalize_simplex(simplex: Iterable[int]) -> tuple[int, ...]:
+    """Return a canonical, sorted simplex tuple with distinct integer vertices."""
+    vertices = tuple(sorted(int(v) for v in simplex))
+    if len(vertices) == 0:
+        raise ValueError("Simplices must be non-empty.")
+    if len(set(vertices)) != len(vertices):
+        raise ValueError(f"Simplex vertices must be distinct: {simplex!r}")
+    return vertices
+
+
+def _canonicalize_simplices_by_dim(
+    simplices_by_dim: Dict[int, Iterable[Iterable[int]]],
+) -> dict[int, list[tuple[int, ...]]]:
+    """Normalize a simplex table to sorted unique tuples per dimension."""
+    canonical: dict[int, list[tuple[int, ...]]] = {}
+    for dim, simplices in simplices_by_dim.items():
+        dim_int = int(dim)
+        seen: set[tuple[int, ...]] = set()
+        cleaned: list[tuple[int, ...]] = []
+        for simplex in simplices:
+            t = _normalize_simplex(simplex)
+            if len(t) - 1 != dim_int:
+                raise ValueError(
+                    f"Simplex {t!r} has dimension {len(t) - 1}, expected {dim_int}."
+                )
+            if t not in seen:
+                cleaned.append(t)
+                seen.add(t)
+        canonical[dim_int] = sorted(cleaned)
+    return canonical
+
+
+def _simplicial_closure_from_generators(
+    simplices: Iterable[Iterable[int]],
+) -> dict[int, list[tuple[int, ...]]]:
+    """Build the face closure of a finite simplicial generating set."""
+    by_dim: dict[int, list[tuple[int, ...]]] = {}
+    for simplex in simplices:
+        t = _normalize_simplex(simplex)
+        for r in range(1, len(t) + 1):
+            dim = r - 1
+            for face in itertools.combinations(t, r):
+                by_dim.setdefault(dim, []).append(tuple(face))
+    return _canonicalize_simplices_by_dim(by_dim)
+
+
+def _boundary_matrix_from_simplices(
+    source: list[tuple[int, ...]],
+    target: list[tuple[int, ...]],
+) -> csr_matrix:
+    """Construct the oriented boundary matrix between consecutive simplex sets."""
+    if not source or not target:
+        return csr_matrix((len(target), len(source)), dtype=np.int64)
+
+    target_index = {simplex: row for row, simplex in enumerate(target)}
+    rows: list[int] = []
+    cols: list[int] = []
+    data: list[int] = []
+
+    for col, simplex in enumerate(source):
+        if len(simplex) <= 1:
+            continue
+        for face_index in range(len(simplex)):
+            face = simplex[:face_index] + simplex[face_index + 1 :]
+            row = target_index.get(face)
+            if row is None:
+                continue
+            rows.append(row)
+            cols.append(col)
+            data.append(-1 if face_index % 2 else 1)
+
+    return csr_matrix((data, (rows, cols)), shape=(len(target), len(source)), dtype=np.int64)
+
+
+def _clone_cache_value(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, csr_matrix):
+        return value.copy()
+    if isinstance(value, list):
+        return [_clone_cache_value(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_cache_value(v) for v in value)
+    if isinstance(value, dict):
+        return {k: _clone_cache_value(v) for k, v in value.items()}
+    return value
+
+
+def _csr_matrix_signature(matrix: csr_matrix) -> tuple[int, int, int, str]:
+    m = _coerce_csr_matrix(matrix)
+    if m.nnz == 0:
+        return int(m.shape[0]), int(m.shape[1]), 0, "0"
+    coo = m.tocoo()
+    rows = np.asarray(coo.row, dtype=np.int64)
+    cols = np.asarray(coo.col, dtype=np.int64)
+    data = np.asarray(coo.data, dtype=np.int64)
+    order = np.lexsort((cols, rows))
+    rows = rows[order]
+    cols = cols[order]
+    data = data[order]
+    h = hashlib.blake2b(digest_size=16)
+    h.update(np.asarray(m.shape, dtype=np.int64).tobytes())
+    h.update(rows.tobytes())
+    h.update(cols.tobytes())
+    h.update(data.tobytes())
+    return int(m.shape[0]), int(m.shape[1]), int(m.nnz), h.hexdigest()
+
+
+class SimplicialComplex(BaseModel):
+    """Finite simplicial complex with sparse boundary operators and face-closure helpers."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    _simplices_table: Dict[int, List[Tuple[int, ...]]] = PrivateAttr(default_factory=dict)
+    coefficient_ring: str = "Z"
+    filtration: Dict[Tuple[int, ...], float] = Field(default_factory=dict)
+
+    _cache_enabled: bool = PrivateAttr(default=True)
+    _cache: dict[tuple[object, ...], object] = PrivateAttr(default_factory=dict)
+    _cache_hits: int = PrivateAttr(default=0)
+    _cache_misses: int = PrivateAttr(default=0)
+    _cache_signature: tuple[object, ...] | None = PrivateAttr(default=None)
+
+    def __init__(self, **data):
+        if "simplices" in data and not isinstance(data["simplices"], dict):
+             # Handle possible list-of-lists input if any legacy code did that
+             pass 
+        super().__init__(**data)
+        # Initialize the private table from the pydantic-validated public field if needed
+        # But wait, pydantic might overwrite it. 
+        # Better: keep 'simplices' as a field for serialization, 
+        # but let it be a property that returns the method.
+        # No, that's complex.
+        
+    @model_validator(mode="before")
+    @classmethod
+    def _move_simplices_to_table(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "simplices" in data:
+            # We keep it in data for pydantic validation of the 'simplices' field
+            pass
+        return data
+
+    @property
+    def simplices_dict(self) -> Dict[int, List[Tuple[int, ...]]]:
+        """Backward-compatible access to the raw simplices dictionary."""
+        return self.simplices_field
+
+    def simplices(self) -> List[Tuple[int, ...]]:
+        """Return all simplices in the complex as a flat list."""
+        key = ("simplicial", "all_simplices_flat")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cast(List[Tuple[int, ...]], cached)
+        out = [
+            simplex
+            for dim in sorted(self.simplices_field.keys())
+            for simplex in self.simplices_field[dim]
+        ]
+        self._cache_set(key, out)
+        return out
+
+    def n_simplices(self, dim: int) -> List[Tuple[int, ...]]:
+        """Return the list of simplices for a given dimension."""
+        return self.simplices_field.get(int(dim), [])
+
+    def count_simplices(self, dim: int | None = None) -> int:
+        """Return the count of simplices for a given dimension, or the total count if dim is None."""
+        if dim is None:
+            return sum(len(s) for s in self.simplices_field.values())
+        return len(self.simplices_field.get(int(dim), []))
+
+    simplices_field: Dict[int, List[Tuple[int, ...]]] = Field(default_factory=dict, alias="simplices")
+
+    @model_validator(mode="after")
+    def _normalize_model(self):
+        object.__setattr__(self, "simplices_field", _canonicalize_simplices_by_dim(self.simplices_field))
+        object.__setattr__(self, "coefficient_ring", str(self.coefficient_ring))
+        filt: dict[tuple[int, ...], float] = {}
+        simplex_set = {
+            simplex
+            for simplices in self.simplices_field.values()
+            for simplex in simplices
+        }
+        for simplex, value in self.filtration.items():
+            key = _normalize_simplex(simplex)
+            if key in simplex_set:
+                filt[key] = float(value)
+        object.__setattr__(self, "filtration", filt)
+        return self
+
+    def _structure_signature(self) -> tuple[object, ...]:
+        simplex_sig = tuple(
+            (int(dim), tuple(tuple(int(v) for v in simplex) for simplex in simplices))
+            for dim, simplices in sorted(self.simplices_field.items())
+        )
+        filtration_sig = tuple(
+            (tuple(int(v) for v in simplex), float(value))
+            for simplex, value in sorted(self.filtration.items())
+        )
+        return simplex_sig, str(self.coefficient_ring), filtration_sig
+
+    def _ensure_cache_valid(self) -> None:
+        current = self._structure_signature()
+        if self._cache_signature != current:
+            self._cache.clear()
+            self._cache_signature = current
+
+    def _cache_get(self, key: tuple[object, ...]) -> object | None:
+        self._ensure_cache_valid()
+        if not self._cache_enabled:
+            return None
+        if key in self._cache:
+            self._cache_hits += 1
+            return _clone_cache_value(self._cache[key])
+        self._cache_misses += 1
+        return None
+
+    def _cache_set(self, key: tuple[object, ...], value: object) -> None:
+        self._ensure_cache_valid()
+        if not self._cache_enabled:
+            return
+        self._cache[key] = _clone_cache_value(value)
+
+    def clear_cache(self, namespace: str | None = None) -> None:
+        if namespace is None:
+            self._cache.clear()
+            return
+        prefix = (str(namespace),)
+        keys = [k for k in self._cache if k[:1] == prefix]
+        for key in keys:
+            self._cache.pop(key, None)
+
+    def cache_info(self) -> dict[str, object]:
+        self._ensure_cache_valid()
+        return {
+            "enabled": bool(self._cache_enabled),
+            "size": int(len(self._cache)),
+            "hits": int(self._cache_hits),
+            "misses": int(self._cache_misses),
+            "keys": [list(map(str, key)) for key in sorted(self._cache.keys(), key=repr)],
+        }
+
+    def set_cache_enabled(self, enabled: bool, *, clear_when_disabled: bool = True) -> None:
+        self._cache_enabled = bool(enabled)
+        if not self._cache_enabled and clear_when_disabled:
+            self._cache.clear()
+
+    @classmethod
+    def from_simplices(
+        cls,
+        simplices: Iterable[Iterable[int]],
+        coefficient_ring: str = "Z",
+        *,
+        close_under_faces: bool = True,
+    ) -> "SimplicialComplex":
+        """Create a simplicial complex from generators, optionally taking the full closure."""
+        if close_under_faces:
+            simplex_table = _simplicial_closure_from_generators(simplices)
+        else:
+            grouped: dict[int, list[tuple[int, ...]]] = {}
+            for simplex in simplices:
+                t = _normalize_simplex(simplex)
+                grouped.setdefault(len(t) - 1, []).append(t)
+            simplex_table = _canonicalize_simplices_by_dim(grouped)
+        return cls(simplices=simplex_table, coefficient_ring=coefficient_ring)
+
+    @classmethod
+    def from_maximal_simplices(
+        cls,
+        maximal_simplices: Iterable[Iterable[int]],
+        coefficient_ring: str = "Z",
+    ) -> "SimplicialComplex":
+        """Build the full simplicial closure from a list of maximal simplices."""
+        return cls.from_simplices(
+            maximal_simplices,
+            coefficient_ring=coefficient_ring,
+            close_under_faces=True,
+        )
+
+    @classmethod
+    def from_distance_matrix(
+        cls,
+        distance_matrix: np.ndarray,
+        max_edge_length: float | None = None,
+        max_dimension: int = 2,
+        coefficient_ring: str = "Z"
+    ) -> "SimplicialComplex":
+        """Builds a Rips complex directly from a pre-computed distance matrix."""
+        try:
+            import gudhi
+        except ImportError as exc:
+            raise ImportError("GUDHI is required for distance-based Rips complexes. Install via 'pip install gudhi'.") from exc
+            
+        rips = gudhi.RipsComplex(distance_matrix=distance_matrix, max_edge_length=max_edge_length or float('inf'))
+        st = rips.create_simplex_tree(max_dimension=max_dimension)
+        return cls.from_gudhi_simplex_tree(st, coefficient_ring=coefficient_ring, include_filtration=True, close_under_faces=False)
+
+    @classmethod
+    def from_metric_space(
+        cls, 
+        data: np.ndarray, 
+        metric: str = "euclidean", 
+        max_edge_length: float | None = None,
+        max_dimension: int = 2,
+        coefficient_ring: str = "Z"
+    ) -> "SimplicialComplex":
+        """Computes the distance matrix and delegates to from_distance_matrix."""
+        from .metrics import compute_distance_matrix
+        D = compute_distance_matrix(np.asarray(data, dtype=float), metric=metric)
+        return cls.from_distance_matrix(D, max_edge_length=max_edge_length, max_dimension=max_dimension, coefficient_ring=coefficient_ring)
+
+    @classmethod
+    def from_gudhi_simplex_tree(
+        cls,
+        simplex_tree: object,
+        *,
+        coefficient_ring: str = "Z",
+        include_filtration: bool = True,
+        close_under_faces: bool = False,
+    ) -> "SimplicialComplex":
+        if not hasattr(simplex_tree, "get_filtration"):
+            raise TypeError("Expected a GUDHI-like SimplexTree with get_filtration().")
+        simplices: list[tuple[int, ...]] = []
+        filtration: dict[tuple[int, ...], float] = {}
+        for simplex, value in simplex_tree.get_filtration():
+            s = _normalize_simplex(simplex)
+            simplices.append(s)
+            if include_filtration:
+                val = float(value)
+                if s in filtration:
+                    filtration[s] = min(filtration[s], val)
+                else:
+                    filtration[s] = val
+        sc = cls.from_simplices(
+            simplices,
+            coefficient_ring=coefficient_ring,
+            close_under_faces=close_under_faces,
+        )
+        if include_filtration:
+            sc.filtration = {
+                simplex: filtration.get(simplex, 0.0)
+                for simplices_dim in sc.simplices_field.values()
+                for simplex in simplices_dim
+            }
+        return sc
+
+    def to_gudhi_simplex_tree(
+        self,
+        *,
+        use_filtration: bool = False,
+        default_filtration: float = 0.0,
+    ) -> object:
+        try:
+            import gudhi  # type: ignore
+        except Exception as exc:
+            raise ImportError("GUDHI is required. Install via 'pip install gudhi'.") from exc
+
+        cache_key = ("interop", "to_gudhi", bool(use_filtration), float(default_filtration))
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        st = gudhi.SimplexTree()
+        for dim in sorted(self.simplices_field):
+            for simplex in self.simplices_field[dim]:
+                filt = (
+                    float(self.filtration.get(simplex, default_filtration))
+                    if use_filtration
+                    else float(default_filtration)
+                )
+                st.insert(list(simplex), filtration=filt)
+        self._cache_set(cache_key, st)
+        return st
+
+    @property
+    def dimension(self) -> int:
+        return max(self.simplices_field.keys(), default=-1)
+
+    @property
+    def dimensions(self) -> list[int]:
+        return sorted(self.simplices_field.keys())
+
+    def simplices(self) -> List[Tuple[int, ...]]:
+        """Return all simplices in the complex as a flat list."""
+        key = ("simplicial", "all_simplices_flat")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cast(List[Tuple[int, ...]], cached)
+        out = [
+            simplex
+            for dim in sorted(self.simplices_field.keys())
+            for simplex in self.simplices_field[dim]
+        ]
+        self._cache_set(key, out)
+        return out
+
+    def n_simplices(self, dim: int) -> List[Tuple[int, ...]]:
+        """Return the list of simplices for a given dimension."""
+        return self.simplices_field.get(int(dim), [])
+
+    def count_simplices(self, dim: int | None = None) -> int:
+        """Return the count of simplices for a given dimension, or the total count if dim is None."""
+        if dim is None:
+            return sum(len(s) for s in self.simplices_field.values())
+        return len(self.simplices_field.get(int(dim), []))
+
+    def simplex_index(self, dim: int) -> dict[tuple[int, ...], int]:
+        """Return a stable index map for simplices in a fixed dimension."""
+        d = int(dim)
+        key = ("simplicial", "simplex_index", d)
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+        out = {simplex: idx for idx, simplex in enumerate(self.n_simplices(d))}
+        self._cache_set(key, out)
+        return out
+
+    def f_vector(self) -> dict[int, int]:
+        """Return the f-vector as a dimension-to-simplex-count dictionary."""
+        key = ("simplicial", "f_vector")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cast(dict[int, int], cached)
+        out = {dim: len(simplices) for dim, simplices in self.simplices_field.items()}
+        self._cache_set(key, out)
+        return out
+
+    def euler_characteristic(self) -> int:
+        key = ("simplicial", "euler_characteristic")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return int(cast(int, cached))
+        out = int(sum(((-1) ** dim) * len(simplices) for dim, simplices in self.simplices_field.items()))
+        self._cache_set(key, int(out))
+        return int(out)
+
+    def is_closed_under_faces(self) -> bool:
+        """Check whether all codimension-1 faces are present in the table."""
+        key = ("simplicial", "is_closed_under_faces")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return bool(cached)
+        for dim, simplices in self.simplices_field.items():
+            if dim <= 0:
+                continue
+            target = set(self.simplices_field.get(dim - 1, []))
+            for simplex in simplices:
+                for i in range(len(simplex)):
+                    if simplex[:i] + simplex[i + 1 :] not in target:
+                        self._cache_set(key, False)
+                        return False
+        self._cache_set(key, True)
+        return True
+
+    def hasse_edges(self) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
+        """Return the codimension-one relations of the Hasse diagram."""
+        key = ("simplicial", "hasse_edges")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+        edges: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+        for dim in sorted(self.simplices_field.keys()):
+            if dim <= 0:
+                continue
+            target = set(self.simplices_field.get(dim - 1, []))
+            for simplex in self.simplices_field.get(dim, []):
+                for i in range(len(simplex)):
+                    face = simplex[:i] + simplex[i + 1 :]
+                    if face in target:
+                        edges.append((simplex, face))
+        self._cache_set(key, edges)
+        return edges
+
+    def boundary_matrix(self, dim: int) -> csr_matrix:
+        """Compute the oriented boundary matrix d_dim : C_dim -> C_{dim-1}."""
+        dim = int(dim)
+        key = ("simplicial", "boundary_matrix", dim)
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cast(csr_matrix, cached)
+        if dim <= 0:
+            out = csr_matrix((0, self.count_simplices(dim)), dtype=np.int64)
+            self._cache_set(key, out)
+            return out
+        out = _boundary_matrix_from_simplices(
+            self.n_simplices(dim), self.n_simplices(dim - 1)
+        )
+        self._cache_set(key, out)
+        return out
+
+    def boundary_matrices(self) -> dict[int, csr_matrix]:
+        """Compute all nontrivial boundary matrices keyed by dimension."""
+        key = ("simplicial", "boundary_matrices")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cast(dict[int, csr_matrix], cached)
+        out = {dim: self.boundary_matrix(dim) for dim in self.dimensions if dim > 0}
+        self._cache_set(key, out)
+        return out
+
+    def chain_complex(self, coefficient_ring: str | None = None) -> "ChainComplex":
+        """Convert the simplicial complex to a sparse chain complex.
+
+        Parameters
+        ----------
+        coefficient_ring:
+            Optional ring override (for example ``"Q"`` or ``"Z/2Z"``).
+            When omitted, the complex default ``self.coefficient_ring`` is used.
+        """
+        ring = self.coefficient_ring if coefficient_ring is None else str(coefficient_ring)
+        _parse_coefficient_ring(ring)
+        key = ("simplicial", "chain_complex", ring)
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cast(ChainComplex, cached)
+        boundaries = self.boundary_matrices()
+        cells = {dim: len(simplices) for dim, simplices in self.simplices_field.items()}
+        out = ChainComplex(
+            boundaries=boundaries,
+            dimensions=self.dimensions,
+            cells=cells,
+            coefficient_ring=ring,
+        )
+        self._cache_set(key, out)
+        return out
+
+    def cellular_chain_complex(self, coefficient_ring: str | None = None) -> "ChainComplex":
+        """Alias for `chain_complex` for compatibility with cellular workflows."""
+        return self.chain_complex(coefficient_ring=coefficient_ring)
 
 
 def _rank_mod_p(A: np.ndarray, p: int) -> int:
@@ -196,8 +736,107 @@ class ChainComplex(BaseModel):
     cells: Dict[int, int] = Field(default_factory=dict)
     coefficient_ring: str = "Z"
 
+    _cache_enabled: bool = PrivateAttr(default=True)
+    _cache: dict[tuple[object, ...], object] = PrivateAttr(default_factory=dict)
+    _cache_hits: int = PrivateAttr(default=0)
+    _cache_misses: int = PrivateAttr(default=0)
+    _cache_signature: tuple[object, ...] | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _normalize_model(self):
+        object.__setattr__(
+            self,
+            "boundaries",
+            {int(dim): _coerce_csr_matrix(mat) for dim, mat in self.boundaries.items()},
+        )
+        object.__setattr__(self, "dimensions", sorted({int(dim) for dim in self.dimensions}))
+        object.__setattr__(self, "cells", {int(dim): int(count) for dim, count in self.cells.items()})
+        object.__setattr__(self, "coefficient_ring", str(self.coefficient_ring))
+        return self
+
+    def _structure_signature(self) -> tuple[object, ...]:
+        boundary_sig = tuple(
+            (int(dim), _csr_matrix_signature(mat))
+            for dim, mat in sorted(self.boundaries.items())
+        )
+        cells_sig = tuple((int(dim), int(count)) for dim, count in sorted(self.cells.items()))
+        return boundary_sig, tuple(self.dimensions), cells_sig, str(self.coefficient_ring)
+
+    def _ensure_cache_valid(self) -> None:
+        current = self._structure_signature()
+        if self._cache_signature != current:
+            self._cache.clear()
+            self._cache_signature = current
+
+    def _cache_get(self, key: tuple[object, ...]) -> object | None:
+        self._ensure_cache_valid()
+        if not self._cache_enabled:
+            return None
+        if key in self._cache:
+            self._cache_hits += 1
+            return _clone_cache_value(self._cache[key])
+        self._cache_misses += 1
+        return None
+
+    def _cache_set(self, key: tuple[object, ...], value: object) -> None:
+        self._ensure_cache_valid()
+        if not self._cache_enabled:
+            return
+        self._cache[key] = _clone_cache_value(value)
+
+    def clear_cache(self, namespace: str | None = None) -> None:
+        if namespace is None:
+            self._cache.clear()
+            return
+        prefix = (str(namespace),)
+        keys = [k for k in self._cache if k[:1] == prefix]
+        for key in keys:
+            self._cache.pop(key, None)
+
+    def cache_info(self) -> dict[str, object]:
+        self._ensure_cache_valid()
+        return {
+            "enabled": bool(self._cache_enabled),
+            "size": int(len(self._cache)),
+            "hits": int(self._cache_hits),
+            "misses": int(self._cache_misses),
+            "keys": [list(map(str, key)) for key in sorted(self._cache.keys(), key=repr)],
+        }
+
+    def set_cache_enabled(self, enabled: bool, *, clear_when_disabled: bool = True) -> None:
+        self._cache_enabled = bool(enabled)
+        if not self._cache_enabled and clear_when_disabled:
+            self._cache.clear()
+
+    def _homological_dimensions(self) -> List[int]:
+        """Return sorted degrees that have meaningful chain data."""
+        key = ("chain", "homological_dimensions")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+
+        dims: set[int] = set()
+        dims.update(int(dim) for dim in self.dimensions if int(dim) >= 0)
+        dims.update(int(dim) for dim in self.cells.keys() if int(dim) >= 0)
+        for dim in self.boundaries.keys():
+            dim_int = int(dim)
+            if dim_int >= 0:
+                dims.add(dim_int)
+            if dim_int - 1 >= 0:
+                dims.add(dim_int - 1)
+
+        out = sorted(dims)
+        self._cache_set(key, out)
+        return out
+
     def _homology_over_z(self, n: int) -> Tuple[int, List[int]]:
         """Exact integral homology helper used by coefficient-change formulas."""
+        n = int(n)
+        key = ("chain", "homology_over_z", n)
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+
         dn = self.boundaries.get(n)
         dn_plus_1 = self.boundaries.get(n + 1)
 
@@ -207,7 +846,9 @@ class ChainComplex(BaseModel):
             and dn is None
             and dn_plus_1 is None
         ):
-            return 0, []
+            out = (0, [])
+            self._cache_set(key, out)
+            return out
 
         if n in self.cells:
             c_n_size = self.cells[n]
@@ -216,11 +857,12 @@ class ChainComplex(BaseModel):
         elif dn_plus_1 is not None:
             c_n_size = dn_plus_1.shape[0]
         else:
-            return 0, []
+            out = (0, [])
+            self._cache_set(key, out)
+            return out
 
         if dn is not None and dn.nnz > 0:
-            snf_n = get_sparse_snf_diagonal(dn)
-            rank_n = np.count_nonzero(snf_n)
+            rank_n = _matrix_rank_for_ring(dn, ring_kind="Q")
         else:
             rank_n = 0
         dim_ker_n = c_n_size - rank_n
@@ -238,11 +880,18 @@ class ChainComplex(BaseModel):
             rank_im_n_plus_1 = 0
             torsion = []
         betti_n = max(0, dim_ker_n - rank_im_n_plus_1)
-        return int(betti_n), torsion
+        out = (int(betti_n), torsion)
+        self._cache_set(key, out)
+        return out
 
-    def homology(self, n: int) -> Tuple[int, List[int]]:
+    def homology(
+        self, n: int | None = None
+    ) -> Tuple[int, List[int]] | Dict[int, Tuple[int, List[int]]]:
         """
         Compute the n-th homology group H_n(C) = ker(d_n) / im(d_{n+1}).
+
+        If `n` is omitted, computes homology for all known nonnegative degrees
+        and returns a dictionary `{degree: (rank, torsion)}`.
 
         Returns
         -------
@@ -251,6 +900,21 @@ class ChainComplex(BaseModel):
         torsion : List[int]
             The torsion coefficients (invariant factors > 1).
         """
+        if n is None:
+            key_all = ("chain", "homology", "all", str(self.coefficient_ring))
+            cached_all = self._cache_get(key_all)
+            if cached_all is not None:
+                return cached_all
+            out_all = {dim: self.homology(dim) for dim in self._homological_dimensions()}
+            self._cache_set(key_all, out_all)
+            return out_all
+
+        n = int(n)
+        key = ("chain", "homology", n, str(self.coefficient_ring))
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+
         # d_n : C_n -> C_{n-1}
         # d_{n+1} : C_{n+1} -> C_n
         ring_kind, p = _parse_coefficient_ring(self.coefficient_ring)
@@ -268,7 +932,9 @@ class ChainComplex(BaseModel):
             rank_mod, torsion_mod = _composite_mod_uct_decomposition(
                 r_n, t_n, t_nm1, modulus
             )
-            return int(rank_mod), torsion_mod
+            out = (int(rank_mod), torsion_mod)
+            self._cache_set(key, out)
+            return out
 
         dn = self.boundaries.get(n)
         dn_plus_1 = self.boundaries.get(n + 1)
@@ -281,7 +947,9 @@ class ChainComplex(BaseModel):
             and dn is None
             and dn_plus_1 is None
         ):
-            return 0, []
+            out = (0, [])
+            self._cache_set(key, out)
+            return out
 
         # Number of n-cells (columns of d_n or rows of d_{n+1})
         if n in self.cells:
@@ -292,7 +960,9 @@ class ChainComplex(BaseModel):
             c_n_size = dn_plus_1.shape[0]
         else:
             # Isolated dimension with no boundaries and no explicit cell count
-            return 0, []
+            out = (0, [])
+            self._cache_set(key, out)
+            return out
 
         # 1. Find rank of d_n to get dim(ker(d_n))
         if dn is not None and dn.nnz > 0:
@@ -329,13 +999,35 @@ class ChainComplex(BaseModel):
             rank_im_n_plus_1 = 0
             torsion = []
         betti_n = max(0, dim_ker_n - rank_im_n_plus_1)
-        return int(betti_n), torsion
+        out = (int(betti_n), torsion)
+        self._cache_set(key, out)
+        return out
 
-    def cohomology(self, n: int) -> Tuple[int, List[int]]:
+    def cohomology(
+        self, n: int | None = None
+    ) -> Tuple[int, List[int]] | Dict[int, Tuple[int, List[int]]]:
         r"""
         Compute the n-th cohomology group H^n(C) using the Universal Coefficient Theorem:
         H^n(C, Z) \cong Hom(H_n(C), Z) \oplus Ext(H_{n-1}(C), Z).
+
+        If `n` is omitted, computes cohomology for all known nonnegative degrees
+        and returns a dictionary `{degree: (rank, torsion)}`.
         """
+        if n is None:
+            key_all = ("chain", "cohomology", "all", str(self.coefficient_ring))
+            cached_all = self._cache_get(key_all)
+            if cached_all is not None:
+                return cached_all
+            out_all = {dim: self.cohomology(dim) for dim in self._homological_dimensions()}
+            self._cache_set(key_all, out_all)
+            return out_all
+
+        n = int(n)
+        key = ("chain", "cohomology", n, str(self.coefficient_ring))
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+
         ring_kind, _ = _parse_coefficient_ring(self.coefficient_ring)
         if ring_kind == "ZMOD":
             _, p = _parse_coefficient_ring(self.coefficient_ring)
@@ -346,12 +1038,84 @@ class ChainComplex(BaseModel):
                 rank_mod, torsion_mod = _composite_mod_uct_decomposition(
                     r_n, t_n, t_nm1, modulus
                 )
-                return int(rank_mod), torsion_mod
+                out = (int(rank_mod), torsion_mod)
+                self._cache_set(key, out)
+                return out
         free_rank, _ = self.homology(n)
         if ring_kind == "Z":
             _, prev_torsion = self.homology(n - 1)
-            return free_rank, prev_torsion
-        return free_rank, []
+            out = (free_rank, prev_torsion)
+            self._cache_set(key, out)
+            return out
+        out = (free_rank, [])
+        self._cache_set(key, out)
+        return out
+
+    def _chain_group_rank_for_degree(self, n: int) -> int:
+        """Return rank(C_n), inferred from cells or boundary matrix shapes."""
+        n = int(n)
+        if n in self.cells:
+            return int(self.cells[n])
+
+        dn = self.boundaries.get(n)
+        if dn is not None:
+            return int(dn.shape[1])
+
+        dn_plus_1 = self.boundaries.get(n + 1)
+        if dn_plus_1 is not None:
+            return int(dn_plus_1.shape[0])
+
+        return 0
+
+    def rank(self, n: int | None = None) -> int | Dict[int, int]:
+        """Return chain-group rank(s), i.e., rank(C_n)."""
+        if n is None:
+            key_all = ("chain", "rank", "all", str(self.coefficient_ring))
+            cached_all = self._cache_get(key_all)
+            if cached_all is not None:
+                return cached_all
+            out_all = {
+                dim: self._chain_group_rank_for_degree(dim)
+                for dim in self._homological_dimensions()
+            }
+            self._cache_set(key_all, out_all)
+            return out_all
+
+        n = int(n)
+        key = ("chain", "rank", n, str(self.coefficient_ring))
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+        out = int(self._chain_group_rank_for_degree(n))
+        self._cache_set(key, out)
+        return out
+
+    def betti_number(self, n: int | None = None) -> int | Dict[int, int]:
+        """Return Betti number(s), i.e., free ranks of homology groups."""
+        if n is None:
+            key_all = ("chain", "betti_number", "all", str(self.coefficient_ring))
+            cached_all = self._cache_get(key_all)
+            if cached_all is not None:
+                return cached_all
+            hom_all = self.homology()
+            out_all = {dim: rank for dim, (rank, _) in hom_all.items()}
+            self._cache_set(key_all, out_all)
+            return out_all
+
+        n = int(n)
+        key = ("chain", "betti_number", n, str(self.coefficient_ring))
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+        rank, _ = self.homology(n)
+        out = int(rank)
+        self._cache_set(key, out)
+        return out
+
+    def betti_numbers(self) -> Dict[int, int]:
+        """Return Betti numbers for all known nonnegative degrees."""
+        out = self.betti_number()
+        return out
 
     def cohomology_basis(self, n: int) -> List[np.ndarray]:
         """
@@ -364,6 +1128,12 @@ class ChainComplex(BaseModel):
 
         For massive matrices, this seamlessly offloads to optimized float SVDs or Julia.
         """
+        n = int(n)
+        key = ("chain", "cohomology_basis", n, str(self.coefficient_ring))
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+
         dn_plus_1 = self.boundaries.get(n + 1)
         dn = self.boundaries.get(n)
 
@@ -375,7 +1145,9 @@ class ChainComplex(BaseModel):
         elif dn_plus_1 is not None:
             cn_size = dn_plus_1.shape[0]
         else:
-            return []  # Isolated dimension
+            out: List[np.ndarray] = []
+            self._cache_set(key, out)
+            return out  # Isolated dimension
 
         ring_kind, p = _parse_coefficient_ring(self.coefficient_ring)
 
@@ -401,21 +1173,25 @@ class ChainComplex(BaseModel):
                 e = np.zeros(cn_size, dtype=np.int64)
                 e[len(out) % cn_size] = 1
                 out.append(e)
+            self._cache_set(key, out)
             return out
 
         if ring_kind in {"Q", "ZMOD"}:
             if julia_engine.available:
                 try:
                     if ring_kind == "Q":
-                        return julia_engine.compute_sparse_cohomology_basis(
+                        out = julia_engine.compute_sparse_cohomology_basis(
                             dn_plus_1, dn, cn_size=cn_size
                         )
-                    return julia_engine.compute_sparse_cohomology_basis_mod_p(
-                        dn_plus_1,
-                        dn,
-                        int(p),
-                        cn_size=cn_size,
-                    )
+                    else:
+                        out = julia_engine.compute_sparse_cohomology_basis_mod_p(
+                            dn_plus_1,
+                            dn,
+                            int(p),
+                            cn_size=cn_size,
+                        )
+                    self._cache_set(key, out)
+                    return out
                 except Exception as exc:
                     warnings.warn(
                         "Topological Hint: Julia field cohomology basis backend failed in "
@@ -489,14 +1265,17 @@ class ChainComplex(BaseModel):
                 if ring_kind == "ZMOD":
                     arr = arr % int(p)
                 out.append(arr)
+            self._cache_set(key, out)
             return out
 
         if julia_engine.available:
             try:
                 # Use exact sparse linear algebra in Julia to perfectly compute Z^n / B^n
-                return julia_engine.compute_sparse_cohomology_basis(
+                out = julia_engine.compute_sparse_cohomology_basis(
                     dn_plus_1, dn, cn_size=cn_size
                 )
+                self._cache_set(key, out)
+                return out
             except Exception as e:
                 msg = (
                     f"Topological Hint: Julia bridge failed ({e!r}). Falling back to pure Python computation. "
@@ -568,6 +1347,7 @@ class ChainComplex(BaseModel):
             int_v = np.array([int(x * common_lcm) for x in v], dtype=np.int64)
             int_basis.append(int_v)
 
+        self._cache_set(key, int_basis)
         return int_basis
 
 
@@ -580,13 +1360,129 @@ class CWComplex(BaseModel):
 
     cells: Dict[int, int]
     attaching_maps: Dict[int, csr_matrix]
+    dimensions: List[int] = Field(default_factory=list)
     coefficient_ring: str = "Z"
 
-    def cellular_chain_complex(self) -> ChainComplex:
-        """Convert the CW object into a `ChainComplex` view."""
-        return ChainComplex(
-            boundaries=self.attaching_maps,
-            dimensions=sorted(self.cells.keys()),
-            cells=self.cells,
-            coefficient_ring=self.coefficient_ring,
+    _cache_enabled: bool = PrivateAttr(default=True)
+    _cache: dict[tuple[object, ...], object] = PrivateAttr(default_factory=dict)
+    _cache_hits: int = PrivateAttr(default=0)
+    _cache_misses: int = PrivateAttr(default=0)
+    _cache_signature: tuple[object, ...] | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _normalize_model(self):
+        object.__setattr__(self, "cells", {int(dim): int(count) for dim, count in self.cells.items()})
+        object.__setattr__(
+            self,
+            "attaching_maps",
+            {int(dim): _coerce_csr_matrix(mat) for dim, mat in self.attaching_maps.items()},
         )
+        object.__setattr__(
+            self,
+            "dimensions",
+            sorted({int(dim) for dim in self.dimensions} | set(self.cells.keys()) | set(self.attaching_maps.keys())),
+        )
+        object.__setattr__(self, "coefficient_ring", str(self.coefficient_ring))
+        return self
+
+    def _structure_signature(self) -> tuple[object, ...]:
+        cell_sig = tuple((int(dim), int(count)) for dim, count in sorted(self.cells.items()))
+        attach_sig = tuple(
+            (int(dim), _csr_matrix_signature(mat))
+            for dim, mat in sorted(self.attaching_maps.items())
+        )
+        return tuple(self.dimensions), cell_sig, attach_sig, str(self.coefficient_ring)
+
+    def _ensure_cache_valid(self) -> None:
+        current = self._structure_signature()
+        if self._cache_signature != current:
+            self._cache.clear()
+            self._cache_signature = current
+
+    def _cache_get(self, key: tuple[object, ...]) -> object | None:
+        self._ensure_cache_valid()
+        if not self._cache_enabled:
+            return None
+        if key in self._cache:
+            self._cache_hits += 1
+            return _clone_cache_value(self._cache[key])
+        self._cache_misses += 1
+        return None
+
+    def _cache_set(self, key: tuple[object, ...], value: object) -> None:
+        self._ensure_cache_valid()
+        if not self._cache_enabled:
+            return
+        self._cache[key] = _clone_cache_value(value)
+
+    def clear_cache(self, namespace: str | None = None) -> None:
+        if namespace is None:
+            self._cache.clear()
+            return
+        prefix = (str(namespace),)
+        keys = [k for k in self._cache if k[:1] == prefix]
+        for key in keys:
+            self._cache.pop(key, None)
+
+    def cache_info(self) -> dict[str, object]:
+        self._ensure_cache_valid()
+        return {
+            "enabled": bool(self._cache_enabled),
+            "size": int(len(self._cache)),
+            "hits": int(self._cache_hits),
+            "misses": int(self._cache_misses),
+            "keys": [list(map(str, key)) for key in sorted(self._cache.keys(), key=repr)],
+        }
+
+    def boundary_matrix(self, dim: int) -> csr_matrix:
+        """Return the cellular boundary matrix in the given dimension."""
+        dim = int(dim)
+        key = ("cw", "boundary_matrix", dim)
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+        matrix = self.attaching_maps.get(dim)
+        if matrix is None:
+            out = csr_matrix((self.cells.get(dim - 1, 0), self.cells.get(dim, 0)), dtype=np.int64)
+            self._cache_set(key, out)
+            return out
+        self._cache_set(key, matrix)
+        return matrix
+
+    def boundary_matrices(self) -> dict[int, csr_matrix]:
+        """Return all available cellular boundary matrices."""
+        key = ("cw", "boundary_matrices")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+        out = {dim: self.boundary_matrix(dim) for dim in self.dimensions if dim > 0}
+        self._cache_set(key, out)
+        return out
+
+    def cellular_chain_complex(self, coefficient_ring: str | None = None) -> ChainComplex:
+        """Convert the CW object into a `ChainComplex` view.
+
+        Parameters
+        ----------
+        coefficient_ring:
+            Optional ring override (for example ``"Q"`` or ``"Z/2Z"``).
+            When omitted, the complex default ``self.coefficient_ring`` is used.
+        """
+        ring = self.coefficient_ring if coefficient_ring is None else str(coefficient_ring)
+        _parse_coefficient_ring(ring)
+        key = ("cw", "cellular_chain_complex", ring)
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+        out = ChainComplex(
+            boundaries=self.boundary_matrices(),
+            dimensions=self.dimensions,
+            cells=self.cells,
+            coefficient_ring=ring,
+        )
+        self._cache_set(key, out)
+        return out
+
+
+__all__ = ["SimplicialComplex", "ChainComplex", "CWComplex"]
+
