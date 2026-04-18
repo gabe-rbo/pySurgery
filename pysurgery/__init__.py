@@ -140,7 +140,7 @@ from .homeomorphism_witness import (
 )
 from . import integrations
 
-__version__ = "1.3.0"
+__version__ = "1.3"
 __all__ = [
     "ChainComplex",
     "CWComplex",
