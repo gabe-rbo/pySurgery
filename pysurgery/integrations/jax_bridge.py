@@ -1,10 +1,8 @@
 import numpy as np
 
 try:
-    import jax
     import jax.numpy as jnp
     from jax import jit, vmap, lax
-    from jax.numpy.linalg import eigh
 
     HAS_JAX = True
 except ImportError:

@@ -1,0 +1,4 @@
+# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/core/fundamental_group.py
+# hypothesis_version: 6.151.10
+
+[256, ' x ', ', ', '1', 'Z', '^-1', 'backend_used', 'component_root', 'direct_product', 'directed_edge_path', 'edge_index', 'generator', 'generator_mode', 'integer', 'julia', 'optimized', 'product', 'python', 'raw', 'trivial', 'undirected_edge_path', 'vertex_path', 'z']

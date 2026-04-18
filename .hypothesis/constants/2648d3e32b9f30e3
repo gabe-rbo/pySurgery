@@ -1,0 +1,4 @@
+# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/bridge/julia_bridge.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-10, 0.01, 0.3, 0.5, 0.8, 0.9, 1.0, '0', 'Julia unavailable', 'a', 'available', 'boundary_mod2', 'boundary_payload', 'cached', 'certified_cycle', 'cols', 'completed', 'component_root', 'd1_cols', 'd1_data', 'd1_rows', 'd2_cols', 'd2_data', 'd2_rows', 'data', 'dimension', 'directed_edge_path', 'edge_index', 'euclidean', 'failed', 'false', 'full', 'generator', 'group_ring_multiply', 'h1_opt_square', 'h1_valid_square', 'h2_tetra_boundary', 'initialize', 'juliacall', 'm', 'matrix is required', 'metrics_warmup', 'minimal', 'mode', 'n', 'n_cols', 'n_edges', 'n_faces', 'n_rows', 'n_vertices', 'none', 'off', 'pi1_abelianization', 'pi1_raw_traces', 'rows', 'sparse_rank_mod_p', 'sparse_rank_q', 'sparse_snf', 'support_edges', 'support_simplices', 'surgery_backend.jl', 'undirected_edge_path', 'valid', 'vertex_path', 'weight']

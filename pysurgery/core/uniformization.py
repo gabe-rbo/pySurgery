@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Discrete surface uniformization tools.
 
 This module implements a practical, exact-topology / numeric-geometry bridge for
@@ -21,6 +19,8 @@ References
 - Thurston, ``The Geometry and Topology of Three-Manifolds`` (circle packing ideas).
 - Springborn, Schröder, Pinkall, discrete conformal equivalence / variational methods.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math

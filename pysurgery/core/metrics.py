@@ -138,8 +138,8 @@ def gromov_wasserstein_distance(
     for i in range(n):
         for j in range(m):
             for k in range(n):
-                for l in range(m):
-                    gw_dist += ((dist_matrix_A[i, k] - dist_matrix_B[j, l])**2) * T[i, j] * T[k, l]
+                for l_idx in range(m):
+                    gw_dist += ((dist_matrix_A[i, k] - dist_matrix_B[j, l_idx])**2) * T[i, j] * T[k, l_idx]
                     
     return float(np.sqrt(gw_dist))
 

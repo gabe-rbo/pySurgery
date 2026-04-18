@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Piecewise-linear embedding and immersion checks.
 
 This module provides a native geometry layer for pySurgery. It is intentionally
@@ -29,6 +27,8 @@ Supported exact checks
 For higher-dimensional simplices, the module falls back to conservative
 heuristics and returns ``inconclusive`` rather than overclaiming.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional, Sequence

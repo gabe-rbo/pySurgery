@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Intrinsic-dimension estimators for point clouds and latent embeddings.
 
 The estimators in this module are numerical diagnostics rather than exact
@@ -21,6 +19,8 @@ References
   neighborhood information".
 - Local PCA / tangent-space dimension estimation from manifold learning literature.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional, Sequence

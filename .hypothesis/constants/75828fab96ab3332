@@ -1,0 +1,4 @@
+# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/wall_groups.py
+# hypothesis_version: 6.151.10
+
+[' + ', ' x ', '0', '1', 'LDirectSumElement', 'L_{4k+1}(Z)', 'L_{4k}(1)', 'L_{4k}(Z)', 'ObstructionResult', 'Z', 'Z_', 'Z_2', '_', 'computable', 'dimension', 'exact', 'factor_surrogate', 'message', 'modulus', 'multiplicity', 'obstructs', 'pi', 'scalar', 'shaneson', 'shaneson_direct_sum', 'shaneson_partial', 'shift', 'single_factor', 'symbol', 'value', 'x', 'zero_certified']

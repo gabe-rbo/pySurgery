@@ -1,0 +1,4 @@
+# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/integrations/gudhi_bridge.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-12, 1e-10, 1e-08, 1e-06, 0.5, 2.0, 'SM', 'Z', 'birth', 'cols', 'data', 'death', 'dimension', 'f', 'inf', 'n_cols', 'n_rows', 'recommendation', 'rows']

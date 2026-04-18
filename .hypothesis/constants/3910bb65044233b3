@@ -1,0 +1,4 @@
+# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/integrations/trimesh_bridge.py
+# hypothesis_version: 6.151.10
+
+[1000, 'd1_cols', 'd1_data', 'd1_rows', 'd2_cols', 'd2_data', 'd2_rows', 'n_edges', 'n_faces', 'n_vertices']

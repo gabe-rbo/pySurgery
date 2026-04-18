@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Computational 3-manifold geometrization scaffolding.
 
 This module implements a practical, conservative combinatorial workflow for
@@ -25,6 +23,8 @@ References
 - Matveev, algorithmic topology of 3-manifolds.
 - Thurston / Perelman geometrization, for the classification targets.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from itertools import combinations

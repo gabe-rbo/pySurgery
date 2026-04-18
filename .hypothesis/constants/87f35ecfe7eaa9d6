@@ -1,0 +1,4 @@
+# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/homeomorphism_witness.py
+# hypothesis_version: 6.151.10
+
+['Both chain complexes', 'available', 'computable', 'dimension', 'exact', 'explicit_map', 'freedman_indefinite', 'inconclusive', 'intersection_form_1', 'intersection_form_2', 'isometry_matrix', 'ks1', 'ks2', 'modulus', 'obstructs', 'pi', 'pi1', 'pi1_1', 'pi1_2', 'pi_group', 'poincare_conjecture', 'simply_connected', 'success', 'surgery_required', 'surgery_sequence', 'to_legacy_dict', 'value', 'wall_form', 'wall_obstruction', 'zero_certified']
