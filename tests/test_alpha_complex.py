@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 from pysurgery.core.complexes import SimplicialComplex
 
 def test_alpha_complex_tiny_S2():

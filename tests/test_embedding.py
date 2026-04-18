@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
-from pysurgery.bridge.julia_bridge import julia_engine
-from pysurgery.core import embedding as emb
 from pysurgery.core.complexes import SimplicialComplex
 from pysurgery.core.embedding import PLMap, analyze_embedding
 
