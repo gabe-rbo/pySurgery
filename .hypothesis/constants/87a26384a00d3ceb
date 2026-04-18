@@ -1,0 +1,4 @@
+# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/integrations/jax_bridge.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-12, 1e-10, 0.01, 0.9, 1.0, 2.0, 10.0, 100, 'JAX is required.', 'JAX not installed', 'Warmup complete', 'available', 'exact', 'status']
