@@ -3,46 +3,80 @@
 [![Tests](https://github.com/gabe-rbo/pysurgery/actions/workflows/tests.yml/badge.svg)](https://github.com/gabe-rbo/pysurgery/actions/workflows/tests.yml)
 [![Lint](https://github.com/gabe-rbo/pysurgery/actions/workflows/lint.yml/badge.svg)](https://github.com/gabe-rbo/pysurgery/actions/workflows/lint.yml)
 
-**pySurgery** is a Python library for *computational algebraic topology* and *computational surgery theory*: it turns discrete data (CW/simplicial complexes, meshes, TDA pipelines) into **integer** invariants strong enough to go beyond Betti numbers-e.g. **torsion**, **cup products**, **intersection forms**, and (in key cases) **homeomorphism classification signals**.
+**pySurgery** is a high-performance Python library for exact computational algebraic topology, computational surgery theory, and geometric analysis. It is designed to compute discrete topological invariants—such as integer homology (including exact torsion), intersection forms, cup products, $L$-group obstructions, and homeomorphism certificates—at massive scale.
 
-If you’ve ever felt “persistent homology is informative, but not decisive,” pySurgery is aimed at the next layer of structure.
-
----
-
-## Why this exists
-
-Most numerical linear-algebra approaches over $\mathbb{R}$ lose information that lives over $\mathbb{Z}$ (especially torsion). pySurgery focuses on *exact* and *structure-aware* invariants:
-
-* **Native combinatorial spaces** via `SimplicialComplex`, `CWComplex`, and `ChainComplex`
-* **Homology & cohomology over $\mathbb{Z}$** via **Smith Normal Form (SNF)** (captures torsion)
-* **Coefficient support** for `Z`, `Q`, and `Z/pZ` (including composite moduli via UCT decomposition)
-* **GUDHI interoperability** (`SimplexTree <-> SimplicialComplex`) with optional filtration roundtrip
-* **Lazy cached derivations** for reusable structural/algebraic computations
-* **Cup product** (Alexander-Whitney) to extract intersection information
-* **Intersection forms** for 4-manifolds (rank/signature/parity)
-* **Geometry modules** for embedding/immersion checks, intrinsic dimension, uniformization, and 3D geometrization heuristics
-* **Metric spaces & alignment**: Orthogonal Procrustes, discrete Fréchet distance, Gromov-Wasserstein, and `SimplicialComplex` construction directly from arbitrary distance matrices.
-* Hooks for **surgery-theoretic** obstructions and higher-dimensional classification workflows
+The library leverages a tri-language architecture (Python, Julia, and JAX/XLA) to rigorously evaluate complex topological structures, scaling to point clouds exceeding 100,000 points while operating within strict memory bounds.
 
 ---
 
-## Quickstart
+## Architectural Principles
 
-### Install
+pySurgery relies on three foundational pillars to ensure both scale and mathematical fidelity:
 
-Requires **Python >= 3.10+**.
+1. **Exact Integer Homology:** Computations of $H_n(X; \mathbb{Z})$ and corresponding torsion invariants are resolved using exact Smith Normal Form (SNF) over $\mathbb{Z}$. To prevent $\mathcal{O}(N^4)$ coefficient swell on massive matrices, the library employs a multi-threaded Julia backend featuring an optimal $\mathcal{O}(V+E)$ leaf-peeling pre-processor.
+2. **Native Sparse Complexes:** The package natively constructs Alpha, Vietoris-Rips, and Witness complexes without opaque external C++ wrappers. It utilizes memory-efficient combinatorial algorithms (bounded sparse DFS, exact algebraic circumradius filtrations) that drop memory complexity from $\mathcal{O}(N^2)$ to $\mathcal{O}(N)$.
+3. **Hardware-Accelerated Geometric Metrics:** Continuous geometric operations, including Sinkhorn-approximated Gromov-Wasserstein distances, Local PCA tangent-space estimations, and continuous relaxations of topological invariants, are fully vectorized and JIT-compiled via **JAX/XLA**.
 
-Project metadata (including version and Python requirement) is defined in `pyproject.toml`.
+---
 
-#### Install from PyPI (recommended)
+## Comprehensive Capabilities
+
+pySurgery goes beyond standard persistent homology, exposing the deep algebraic structures required for manifold classification and surgery theory.
+
+### 1. Combinatorial Topology & Complex Generation
+* **Discrete Spaces:** Robust native classes for `SimplicialComplex`, `CWComplex`, and `ChainComplex` with lazy-evaluated, cached topological properties (f-vectors, boundaries).
+* **Massive Point Clouds:** Native construction of memory-efficient **Alpha Complexes** (2D/3D via Delaunay circumradius filtration), **Vietoris-Rips** (via sparse clique enumeration), and **Witness Complexes** (via Farthest Point Sampling).
+* **Homology & Cohomology:** Exact computation of Betti numbers and torsion coefficients over $\mathbb{Z}$, $\mathbb{Q}$, and $\mathbb{Z}/p\mathbb{Z}$. Includes Universal Coefficient Theorem (UCT) decompositions for composite moduli.
+* **Optimal Generators:** Data-grounded $H_1$ generator extraction, yielding cycle representatives optimized by minimum geometric weight over $\mathbb{F}_2$ annotations.
+
+### 2. Algebraic Topology & Cohomological Operations
+* **Cup Products:** Full simplicial implementation of the Alexander-Whitney diagonal approximation to evaluate $\alpha \smile \beta$, exposing the ring structure of cohomology.
+* **Characteristic Classes:** Extraction of Stiefel-Whitney classes (e.g., $w_2$) via Wu's formula to evaluate spin/pin structures and orientability.
+* **Fundamental Group ($\pi_1$):** Extraction of group presentations via spanning-tree retractions, supporting both raw and optimized (reduced trace) generator modes.
+* **Whitehead Torsion:** $K$-theoretic heuristics for evaluating Whitehead groups ($Wh(\pi_1)$) and s-cobordism obstructions.
+
+### 3. 4-Manifold Topology & Intersection Forms
+* **Intersection Forms ($Q$):** Rigorous extraction of symmetric bilinear forms $Q: H_2(M) \times H_2(M) \to \mathbb{Z}$ evaluated on fundamental classes.
+* **Algebraic Classification:** Exact classification of $\mathbb{Z}$-forms by Rank, Signature, Parity (Type I/II), and Definiteness. Detects foundational components like $E_8$ and Hyperbolic ($H$) forms.
+* **Quadratic Refinements:** Evaluation of $q(\alpha)$ refinements to compute the **Arf Invariant** over $\mathbb{Z}/2\mathbb{Z}$ via symplectic basis reductions.
+* **Kirby Calculus:** Tracking 4-manifold surgery diagrams through algorithmic handle slides and blow-ups/blow-downs.
+
+### 4. Surgery Theory & High-Dimensional Classification
+* **Wall Groups ($L_n(\pi_1)$):** Algorithmic evaluation of surgery obstructions mapping into $L$-groups. Supports product-group decompositions and Shaneson splitting sequences.
+* **Twisted Multisignatures:** Multi-threaded Julia kernels for computing exact twisted signatures over group rings $\mathbb{Z}[\pi]$ using roots of unity.
+* **Structure Sets ($\mathcal{S}(M)$):** Navigation of the Surgery Exact Sequence, calculating normal invariants over $\mathbb{Z}$ and $\mathbb{Z}/2\mathbb{Z}$ to determine the existence and uniqueness of manifold structures.
+
+### 5. Homeomorphism Certification & Witnesses
+* **Dimension-Aware Analyzers:** Specialized homeomorphism classification signals tailored for 2D (genus/orientability), 3D (prime decomposition signals), 4D (Freedman/Donaldson invariants), and 5D+ (Surgery theory).
+* **Structured Witnesses:** The `homeomorphism_witness` module does not just return True/False; it generates rigorous certificate objects containing the exact theorems invoked, explicit isometry matrices ($U^T Q_1 U = Q_2$), and explicit delineations of missing obstruction data if surgery is required.
+
+### 6. Geometric Analysis & Immersion
+* **PL Embeddings:** High-performance $\mathcal{O}(N \log N)$ KDTree-bounded broad-phase and exact narrow-phase checks for piecewise-linear self-intersections and immersions.
+* **Intrinsic Dimension:** Hardware-accelerated manifold dimension estimators using Maximum Likelihood (Levina-Bickel), Two-NN, and Local PCA tangent-space approximations.
+* **Metric Alignment:** Orthogonal Procrustes, discrete Fréchet distances, and JAX-accelerated Entropic Gromov-Wasserstein alignment for comparing ambient metric spaces.
+* **Geometrization & Uniformization:** Heuristics for Thurston's 8 geometries, normal surface residual norms, and discrete conformal equivalence metrics for 2D meshes.
+
+### 7. Integrations & Interoperability
+* **JAX:** Differentiable soft-signatures and high-throughput metric tensors.
+* **Lean 4:** Export functionality to translate discrete simplicial complexes into formal theorem-prover syntax.
+* **PyTorch Geometric:** Bridging topological complexes to graph neural network (GNN) architectures.
+* **Trimesh:** Direct import of 3D asset geometries into rigorous CW/Simplicial complexes.
+
+---
+
+## Installation
+
+**Requirements:** Python $\ge 3.10$.
+
+### 1. Python Package
+
+Install directly from PyPI:
 
 ```bash
 pip install pysurgery
 ```
 
-PyPI package: https://pypi.org/project/pysurgery/
-
-#### Install from source (development)
+Or install from source:
 
 ```bash
 git clone https://github.com/gabe-rbo/pySurgery.git
@@ -50,336 +84,44 @@ cd pySurgery
 pip install -e .
 ```
 
-Optional dependency groups:
+### 2. High-Performance Backends (Required for Scale)
 
+To process point clouds exceeding $N=1,000$ or to compute exact integer torsion on dense manifolds, the underlying accelerator backends must be configured.
+
+**JAX (GPU/TPU Acceleration):**
 ```bash
-# Topological Data Analysis integration
-pip install "pysurgery[tda]"
-
-# Mesh integration
-pip install "pysurgery[mesh]"
-
-# ML-oriented integrations
 pip install "pysurgery[ml]"
-
-# Everything optional
-pip install "pysurgery[all]"
 ```
 
-
-### Julia backend (optional, for large-scale exact integer computations)
-
-pySurgery can offload some exact integer workloads to Julia (recommended for very large sparse exact-$\mathbb{Z}$ computations).
-
-* Ensure `julia` is on your `PATH`
-* Install required Julia backend packages in your Julia environment:
-
+**Julia (Exact Integer Engine):**
+Ensure `julia` is available on your `PATH`, then install the required exact algebra dependencies:
 ```julia
 import Pkg
-Pkg.add("AbstractAlgebra")
-Pkg.add("PrecompileTools")
-Pkg.add("Graphs")
-Pkg.add("SimpleWeightedGraphs")
-Pkg.add("DelaunayTriangulation")
-Pkg.add("Combinatorics")
+Pkg.add(["AbstractAlgebra", "PrecompileTools", "Combinatorics"])
 ```
 
-For notebooks and benchmark scripts, you can eagerly warm up Julia-backed kernels once per process:
-
-```python
-from pysurgery.bridge.julia_bridge import julia_engine
-
-if julia_engine.available:
-    report = julia_engine.warmup()
-    print("Julia warm-up workloads:", len(report.get("completed", [])))
-```
+The bridge will automatically detect the Julia environment and distribute SNF and multisignature kernels across available CPU threads.
 
 ---
 
-## Examples and tutorials
+## Documentation and Examples
 
-The recommended newcomer-first curriculum is now in:
+For comprehensive theoretical backgrounds and executable pipelines, refer to the tutorial notebooks located in `examples/pipeline_v2/`. 
 
-* `examples/00_pipeline_v2_index.ipynb`
-* `examples/pipeline_v2/README.md`
-
-This **pipeline_v2** track contains 24 ordered notebooks from foundations to capstone, covering:
-
-1. core spaces/chain-complexes and exact algebra,
-2. GUDHI interoperability and caching-aware workflows,
-3. surgery exact-sequence and certificate/witness assembly,
-4. embedding/immersion, intrinsic dimension, uniformization, and geometrization,
-5. failure modes, optional integrations, and end-to-end reproducible pipelines.
-
-Legacy notebooks in `examples/01_...13_...` remain available as reference material.
+The curriculum covers:
+1. Exact algebra and chain complexes from scratch.
+2. Homology, cohomology, and the Alexander-Whitney cup product.
+3. Surgery exact sequences and structure-set navigation.
+4. End-to-end topological certification and homeomorphism witness generation.
 
 ---
 
-## Mathematical basis
+## Academic Reference
 
-pySurgery bridges discrete geometry to topological classification using several key concepts.
-
-### 1) Homology & cohomology via Smith Normal Form (over $\mathbb{Z}$)
-
-When computing homology,
-
-$$
-H_n(X)=\ker(d_n)/\mathrm{im}(d_{n+1})
-$$
-
-floating-point linear algebra misses **torsion**. pySurgery implements **Smith Normal Form** over $\mathbb{Z}$ to recover:
-
-* Betti ranks (free part)
-* torsion coefficients (e.g. $\mathbb{Z}_k$ factors)
-
-Cohomology is computed via the **Universal Coefficient Theorem**.
-
-### 2) Alexander–Whitney cup product
-
-To classify 4-manifolds, surfaces intersect—cup products encode that intersection.
-
-Given cocycles $\alpha, \beta$:
-
-$$
-(\alpha \smile \beta)([v_0,\dots,v_4])=\alpha([v_0,v_1,v_2])\cdot\beta([v_2,v_3,v_4]).
-$$
-
-Summing over a fundamental class yields intersection form entries.
-
-pySurgery also provides simplicial cup-$i$ operations (`i >= 0`) for higher-order cochain interactions.
-
-### 3) Intersection forms & 4D classification signals
-
-For 4-manifolds, pySurgery constructs the **intersection form** $Q$, computes rank/signature/parity, and supports workflows inspired by Freedman-style classification (with attention to needed hypotheses/invariants).
-
-### 4) Algebraic surgery
-
-Given a class $x$ representing a “hole,” pySurgery supports algorithmic manipulations that mirror algebraic surgery operations—checking isotropy $Q(x,x)=0$, finding dual classes, and updating lattice data.
-
-### 5) Characteristic classes & spin structures
-
-pySurgery extracts characteristic-class information from intersection-form data; using **Wu’s formula**, it computes $w_2$ (mod 2) to test spin conditions.
-
-### 6) High-dimensional structure signals
-
-In dimensions $n \ge 5$, classification interacts with $\pi_1$, Whitehead torsion, and Wall’s surgery groups $L_n(\pi_1)$. pySurgery includes tooling aimed at discrete extraction of group presentations and surgery-sequence-adjacent invariants (where computationally feasible).
-
-### 7) Fundamental-group generators: raw vs optimized
-
-For source complexes with a 1-skeleton and 2-cells, `extract_pi_1_with_traces(...)` returns a typed presentation plus edge-path traces for the surviving generators.
-
-You can choose the generator mode explicitly:
-
-* `generator_mode="raw"` — keep the full spanning-forest generator set
-* `generator_mode="optimized"` — simplify the presentation and keep a reduced trace set
-
-The result object records `mode_used`, `backend_used`, `raw_generator_count`, and `optimized_generator_count` so notebooks and benchmarks can compare the two modes directly.
-
-Quick benchmark helper:
-
-```bash
-python scripts/benchmark_pi1_modes.py
-python scripts/benchmark_pi1_modes.py --force-python
-```
-
-### 8) Dimension-aware behavior
-
-* **2D**: orientability/genus signals via low-dimensional homology
-* **3D**: homology-sphere style signals and 3-manifold context
-* **4D**: intersection forms + parity/signature style invariants
-* **5D+**: surgery-theoretic invariants and $\pi_1$-sensitive obstructions
-
-### 8) Data-grounded optimal homology generators
-
-For discrete simplicial data, pySurgery includes data-grounded generator extraction for $H_1$ (cycle representatives as edge-level elements of the input complex), with Julia-accelerated and Python fallback paths.
-
-The generator/optimality pipeline follows the "Generators and Optimality" framework in:
-
-* Tamal K. Dey and Yusu Wang, *Computational Topology for Data Analysis*.
-
----
-
-## Computational optimizations
-
-Discrete topology can blow up combinatorially (e.g., large point clouds). pySurgery includes:
-
-1. **Sparse fallbacks** when exact dense integer work is too large
-2. **NumPy/Numba acceleration** for inner loops (e.g., cup product sweeps)
-3. **Julia bridge** for large exact-$\mathbb{Z}$ workloads when Python becomes the bottleneck
-
-Approximate (floating-point) fallbacks exist in selected large/sparse workflows, but are opt-in where mathematically sensitive and emit explicit warnings when exact integer guarantees are weakened.
-
-### Exactness policy
-
-pySurgery defaults to exact integer-topology workflows whenever practical.
-
-* **Default mode:** exact-first (`allow_approx=False` in APIs that expose it)
-* **Approximate mode:** explicitly opt in via `allow_approx=True`
-* **Warnings:** approximate paths emit warnings when torsion/exact-cycle guarantees may be weakened
-
-For mathematically rigorous classification/proof-oriented workflows, prefer exact mode and treat approximate mode as exploratory.
-
-#### Example: exact vs approximate fundamental class extraction
-
-```python
-from pysurgery.integrations.gudhi_bridge import simplex_tree_to_intersection_form
-
-# Exact-first: raise if exact extraction cannot be completed.
-q_exact = simplex_tree_to_intersection_form(st, allow_approx=False)
-
-# Exploratory fallback: allows numerical approximation with warnings.
-q_fast = simplex_tree_to_intersection_form(st, allow_approx=True)
-```
-
-#### Example: exact vs approximate dimension-aware homeomorphism analysis
-
-```python
-from pysurgery.homeomorphism import analyze_homeomorphism_2d
-
-# Exact-first classification attempt.
-ok_exact, msg_exact = analyze_homeomorphism_2d(c1, c2, allow_approx=False)
-
-# Permissive fallback for noisy/large pipelines.
-ok_fast, msg_fast = analyze_homeomorphism_2d(c1, c2, allow_approx=True)
-```
-
-### Homeomorphism witness builders
-
-`pysurgery.homeomorphism` answers: **"is a homeomorphism certified by invariants/obstructions?"**
-
-`pysurgery.homeomorphism_witness` goes further and returns a **structured witness object** when exact data is sufficient.
-
-```python
-from pysurgery.homeomorphism_witness import build_homeomorphism_witness
-
-res = build_homeomorphism_witness(c1=c1, c2=c2, dim=2)
-if res.status == "success":
-    print(res.witness.kind)        # e.g. "surface_classification"
-    print(res.witness.theorem)     # theorem branch used
-    print(res.witness.certificates)
-else:
-    print(res.reasoning)
-    print(res.missing_data)
-```
-
-#### Dimension-specific builders
-
-```python
-from pysurgery.homeomorphism_witness import (
-    build_surface_homeomorphism_witness,
-    build_3d_homeomorphism_witness,
-    build_4d_homeomorphism_witness,
-    build_high_dim_homeomorphism_witness,
-)
-```
-
-* `build_surface_homeomorphism_witness(...)` (2D)
-* `build_3d_homeomorphism_witness(...)` (3D)
-* `build_4d_homeomorphism_witness(...)` (Freedman branch)
-* `build_high_dim_homeomorphism_witness(...)` (`n >= 5`, surgery-theoretic branch)
-
-For `n >= 5`, an explicit completion certificate can be supplied via
-`homotopy_completion_certificate={"provided": True, "exact": True, "validated": True, ...}`.
-Certified success requires this certificate to be decision-ready (`exact` and `validated`).
-Legacy `homotopy_witness_hook` inputs are still accepted and bridged for compatibility.
-For nontrivial product groups, factor-wise Wall decompositions are exposed as structured surrogate certificates;
-exact success still requires assembly-certified product-group obstruction data.
-
-For 3D geometric-recognition completion, you can provide
-`recognition_certificate={"provided": True, "exact": True, "validated": True, ...}`.
-This allows exact success in non-Poincare branches when the certificate is decision-ready.
-
-For high-dimensional nontrivial product groups, provide
-`product_assembly_certificate={"provided": True, "exact": True, "validated": True, ...}`
-to upgrade surrogate product decompositions into decision-ready assembly evidence.
-
-#### 4D explicit algebraic witness
-
-In definite 4D cases, the witness may include an integer isometry matrix `U` (stored in `witness.certificates["isometry_matrix"]`) such that:
-
-$$
-U^T Q_1 U = Q_2.
-$$
-
-This is an explicit algebraic certificate for the lattice isomorphism part of the classification branch.
-
-#### Interpreting witness results
-
-* `status="success"`: exact theorem/certificate path produced a witness.
-* `status="inconclusive"`: not enough exact data to construct a certified witness (check `missing_data`).
-* `status="surgery_required"`: obstruction branch indicates surgery-level impediment instead of direct witness construction.
-
-`witness.exact` indicates whether the returned witness is exact-topology certified (`True`) or exploratory/heuristic (`False`).
-
----
-
-## Package layout
-
-```text
-pysurgery/
-├── core/
-│   ├── complexes.py
-│   ├── embedding.py
-│   ├── intrinsic_dimension.py
-│   ├── uniformization.py
-│   ├── geometrization_3d.py
-│   ├── fundamental_group.py
-│   ├── intersection_forms.py
-│   ├── structure_set.py
-│   ├── wall_groups.py
-│   └── ...
-├── bridge/
-│   ├── julia_bridge.py
-│   └── surgery_backend.jl
-├── integrations/
-│   ├── gudhi_bridge.py
-│   ├── trimesh_bridge.py
-│   ├── pytorch_geometric_bridge.py
-│   ├── jax_bridge.py
-│   └── lean_export.py
-```
-
-Key modules:
-
-* `pysurgery.core.complexes` — `SimplicialComplex`, `CWComplex`, `ChainComplex` (with lazy cache + GUDHI interop helpers)
-* `pysurgery.core.embedding` — PL immersion/embedding checks and self-intersection diagnostics
-* `pysurgery.core.intrinsic_dimension` — MLE/TwoNN/PCA dimension estimators
-* `pysurgery.core.uniformization` — discrete conformal/uniformization workflows for surfaces
-* `pysurgery.core.geometrization_3d` — normal-surface candidates, decomposition heuristics, certificate conversion
-* `pysurgery.core.intersection_forms` — lattice math, parity checks, surgery engine
-* `pysurgery.core.math_core` — SNF / exact integer computation core
-* `pysurgery.homeomorphism` — dimension-aware analyzers
-* `pysurgery.homeomorphism_witness` — explicit witness/certificate builders
-* `pysurgery.integrations`
-
-  * `gudhi_bridge` — TDA point clouds → topology objects
-  * `trimesh_bridge` — meshes → topology objects
-  * `pytorch_geometric_bridge` — graph/ML integration
-  * `jax_bridge` — differentiable / approximation-oriented integration ideas
-
----
-
-## Contributing
-
-PRs are welcome—especially for:
-
-* minimal examples (“one function call → one invariant” demos)
-* improved docs around mathematical assumptions and failure modes
-* performance improvements and additional exact-$\mathbb{Z}$ backends
-* more datasets and reproducible example pipelines
-
-If you’re unsure where to start, open an issue describing your use-case and dataset type.
-
----
-
-## Roadmap (selected)
-
-* Non-abelian / twisted coefficient systems ($\pi_1$-sensitive homology)
-* Deeper algebraic surgery tooling (Ranicki-style formulations)
-* Learning on structure-set features via GNNs (experimental)
+If you utilize pySurgery in your research, please refer to the `CITATION.cff` file for appropriate attribution. The algorithms implemented herein are grounded in standard computational topology literature, notably extending frameworks from *Computational Topology for Data Analysis* (Dey & Wang) to accommodate surgery-theoretic invariants.
 
 ---
 
 ## License
 
-MIT License. See `LICENSE`.
+Released under the MIT License. See `LICENSE` for details.

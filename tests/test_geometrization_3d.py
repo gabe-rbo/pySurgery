@@ -117,6 +117,17 @@ def test_prime_and_jsj_decompositions_are_stable_on_the_s3_example():
     assert any("selection_score=" in note for note in jsj.notes)
 
 
+def test_triangulated3manifold_homology_accepts_optional_degree():
+    tri = _s3_boundary_of_4_simplex()
+    h_all = tri.homology()
+
+    assert isinstance(h_all, dict)
+    assert h_all[0] == tri.homology(0)
+    assert h_all[1] == tri.homology(1)
+    assert h_all[2] == tri.homology(2)
+    assert h_all[3] == tri.homology(3)
+
+
 def test_geometrization_preserves_optional_embedding_certificate():
     tri = _s3_boundary_of_4_simplex()
     surface = SimplicialComplex.from_maximal_simplices(

@@ -100,29 +100,32 @@ def _boundary_mod2_matrix(
 
 
 def _rref_mod2(A: np.ndarray) -> tuple[np.ndarray, list[int]]:
-    """Compute row-reduced echelon form over GF(2)."""
-    M = (A.astype(np.int64) & 1).copy()
+    """Compute row-reduced echelon form over GF(2) with vectorized NumPy operations."""
+    M = (np.asarray(A, dtype=np.int8) & 1).copy()
     m, n = M.shape
     row = 0
     pivots: list[int] = []
     for col in range(n):
-        pivot = None
-        for r in range(row, m):
-            if M[r, col] == 1:
-                pivot = r
-                break
-        if pivot is None:
+        if row >= m:
+            break
+        # Fast vectorized pivot search
+        pivot = int(np.argmax(M[row:, col])) + row
+        if M[pivot, col] == 0:
             continue
+            
         if pivot != row:
             M[[row, pivot], :] = M[[pivot, row], :]
-        for r in range(m):
-            if r != row and M[r, col] == 1:
-                M[r, :] ^= M[row, :]
+            
+        # Fast vectorized row elimination
+        mask = M[:, col] == 1
+        mask[row] = False
+        if np.any(mask):
+            M[mask, :] ^= M[row, :]
+            
         pivots.append(col)
         row += 1
-        if row == m:
-            break
-    return M, pivots
+        
+    return M.astype(np.int64), pivots
 
 
 def _nullspace_basis_mod2(A: np.ndarray) -> list[np.ndarray]:

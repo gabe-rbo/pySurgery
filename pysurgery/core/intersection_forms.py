@@ -65,6 +65,19 @@ class IntersectionForm(BaseModel):
         neg = np.sum(eigenvalues < -tol)
         return int(pos - neg)
 
+    def approx_signature(self, temp: float = 10.0) -> float:
+        """
+        Compute a differentiable soft-approximation of the signature using JAX.
+        Useful for optimization tasks and very large matrices.
+        """
+        from ..integrations.jax_bridge import HAS_JAX
+        if not HAS_JAX:
+            # Fallback to a non-JAX approximation if needed, but here we enforce JAX for differentiability
+            return float(self.signature())
+        
+        from ..integrations.jax_bridge import _approximate_signature
+        return float(_approximate_signature(self.matrix, temp=temp))
+
     def is_even(self) -> bool:
         """
         Check if the form is even (Q(x, x) is even for all x).

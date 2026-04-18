@@ -31,7 +31,7 @@ heuristics and returns ``inconclusive`` rather than overclaiming.
 """
 
 from dataclasses import dataclass, field
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -791,36 +791,31 @@ def _broad_phase_candidate_pairs(
     *,
     tol: float,
 ) -> set[tuple[int, int]]:
+    """
+    Standardized broad-phase pruning using O(N log N) KDTree.
+    Unified implementation for all point cloud scales (10 - 100k+).
+    """
     n = int(centroids.shape[0])
     if n <= 1:
         return set()
 
-    if n >= _JULIA_PAIR_BATCH_THRESHOLD:
-        try:
-            from ..bridge.julia_bridge import julia_engine
-
-            if julia_engine.available:
-                julia_pairs = julia_engine.compute_broad_phase_pairs(centroids, radii, tol=tol)
-                pairs: set[tuple[int, int]] = set()
-                for a, b in np.asarray(julia_pairs, dtype=np.int64).reshape(-1, 2):
-                    i = int(a)
-                    j = int(b)
-                    if 0 <= i < n and 0 <= j < n and i != j:
-                        pairs.add((i, j) if i < j else (j, i))
-                if pairs:
-                    return pairs
-        except Exception:
-            pass
-
+    # Singular path: KDTree is memory-efficient and mathematically exact for broad-phase.
     tree = cKDTree(centroids)
     max_radius = float(np.max(radii)) if len(radii) > 0 else 0.0
     pairs: set[tuple[int, int]] = set()
+    
+    # We query the KDTree for neighbors within a radius that accounts for 
+    # the maximum possible simplex size + the query simplex size.
     for i, center in enumerate(centroids):
-        neigh = tree.query_ball_point(center, r=float(radii[i] + max_radius + tol))
+        # Bound: dist(c1, c2) <= r1 + r2 + tol <= r1 + max_radius + tol
+        query_radius = float(radii[i] + max_radius + tol)
+        neigh = tree.query_ball_point(center, r=query_radius)
         for j in neigh:
             if j <= i:
                 continue
-            if np.linalg.norm(center - centroids[j]) <= float(radii[i] + radii[j] + tol):
+            # Narrower check to finalize candidate selection
+            d_sq = np.sum((center - centroids[j])**2)
+            if d_sq <= (float(radii[i] + radii[j] + tol))**2:
                 pairs.add((i, j))
     return pairs
 

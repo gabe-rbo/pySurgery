@@ -8,7 +8,7 @@ using Combinatorics
 using PythonCall: pyconvert, Py
 import PrecompileTools
 
-export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance
+export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_circumradius_sq_3d, compute_circumradius_sq_2d
 
 const HAS_ABSTRACT_ALGEBRA = try
     @eval import AbstractAlgebra
@@ -52,82 +52,196 @@ end
 
 function _reduce_snf(A::SparseMatrixCSC{Int64, Int64})
     m, n = size(A)
-    rows, cols, vals = findnz(A)
+    E = nnz(A)
+    
+    # Track degrees and XOR sums
+    row_deg = zeros(Int64, m)
+    row_xor = zeros(Int64, m)
+    row_vsum = zeros(Int64, m)
+
+    col_deg = zeros(Int64, n)
+    col_xor = zeros(Int64, n)
+    col_vsum = zeros(Int64, n)
+
+    # Build CSR for row-wise access
+    rowptr = zeros(Int64, m + 2)
+    @inbounds for r in A.rowval
+        rowptr[r + 1] += 1
+    end
+    rowptr[1] = 1
+    @inbounds for r in 1:m
+        rowptr[r + 1] += rowptr[r]
+    end
+    
+    col_idx = zeros(Int64, E)
+    nz_val_row = zeros(Int64, E)
+    
+    cur_rowptr = copy(rowptr)
+    
+    @inbounds for c in 1:n
+        for ptr in A.colptr[c]:(A.colptr[c+1]-1)
+            r = A.rowval[ptr]
+            v = A.nzval[ptr]
+            
+            # Initialize degrees and XOR sums
+            row_deg[r] += 1
+            row_xor[r] ⊻= c
+            row_vsum[r] += v
+            
+            col_deg[c] += 1
+            col_xor[c] ⊻= r
+            col_vsum[c] += v
+            
+            # Populate CSR
+            idx = cur_rowptr[r]
+            col_idx[idx] = c
+            nz_val_row[idx] = v
+            cur_rowptr[r] += 1
+        end
+    end
     
     row_active = trues(m)
     col_active = trues(n)
-    
-    row_nz = zeros(Int, m)
-    col_nz = zeros(Int, n)
-    
-    row_entries = [Tuple{Int, Int}[] for _ in 1:m]
-    col_entries = [Tuple{Int, Int}[] for _ in 1:n]
-    for (r, c, v) in zip(rows, cols, vals)
-        row_nz[r] += 1
-        col_nz[c] += 1
-        push!(row_entries[r], (c, v))
-        push!(col_entries[c], (r, v))
-    end
-    
     ones_count = 0
-    changed = true
-    while changed
-        changed = false
-        
-        for r in 1:m
-            if row_active[r] && row_nz[r] == 1
-                for (c, v) in row_entries[r]
-                    if col_active[c]
-                        if abs(v) == 1
-                            ones_count += 1
-                            row_active[r] = false
-                            col_active[c] = false
-                            changed = true
-                            for (rr, vv) in col_entries[c]
-                                if row_active[rr]
-                                    row_nz[rr] -= 1
-                                end
-                            end
+    
+    row_q = Int64[]
+    col_q = Int64[]
+    sizehint!(row_q, m)
+    sizehint!(col_q, n)
+    
+    @inbounds for r in 1:m
+        if row_deg[r] == 1
+            push!(row_q, r)
+        end
+    end
+    @inbounds for c in 1:n
+        if col_deg[c] == 1
+            push!(col_q, c)
+        end
+    end
+    
+    row_head = 1
+    col_head = 1
+    
+    while row_head <= length(row_q) || col_head <= length(col_q)
+        while row_head <= length(row_q)
+            r = row_q[row_head]
+            row_head += 1
+            
+            !row_active[r] && continue
+            row_deg[r] != 1 && continue
+            
+            c = row_xor[r]
+            !col_active[c] && continue
+            v = row_vsum[r]
+            
+            if abs(v) == 1
+                row_active[r] = false
+                col_active[c] = false
+                ones_count += 1
+                
+                # Deactivating c affects rows intersecting c
+                @inbounds for ptr in A.colptr[c]:(A.colptr[c+1]-1)
+                    rr = A.rowval[ptr]
+                    if row_active[rr]
+                        vv = A.nzval[ptr]
+                        row_deg[rr] -= 1
+                        row_xor[rr] ⊻= c
+                        row_vsum[rr] -= vv
+                        if row_deg[rr] == 1
+                            push!(row_q, rr)
                         end
-                        break
+                    end
+                end
+                
+                # Deactivating r affects columns intersecting r
+                @inbounds for ptr in rowptr[r]:(rowptr[r+1]-1)
+                    cc = col_idx[ptr]
+                    if col_active[cc]
+                        vv = nz_val_row[ptr]
+                        col_deg[cc] -= 1
+                        col_xor[cc] ⊻= r
+                        col_vsum[cc] -= vv
+                        if col_deg[cc] == 1
+                            push!(col_q, cc)
+                        end
                     end
                 end
             end
         end
         
-        for c in 1:n
-            if col_active[c] && col_nz[c] == 1
-                for (r, v) in col_entries[c]
-                    if row_active[r]
-                        if abs(v) == 1
-                            ones_count += 1
-                            col_active[c] = false
-                            row_active[r] = false
-                            changed = true
-                            for (cc, vv) in row_entries[r]
-                                if col_active[cc]
-                                    col_nz[cc] -= 1
-                                end
-                            end
+        while col_head <= length(col_q)
+            c = col_q[col_head]
+            col_head += 1
+            
+            !col_active[c] && continue
+            col_deg[c] != 1 && continue
+            
+            r = col_xor[c]
+            !row_active[r] && continue
+            v = col_vsum[c]
+            
+            if abs(v) == 1
+                row_active[r] = false
+                col_active[c] = false
+                ones_count += 1
+                
+                # Deactivating c affects rows intersecting c
+                @inbounds for ptr in A.colptr[c]:(A.colptr[c+1]-1)
+                    rr = A.rowval[ptr]
+                    if row_active[rr]
+                        vv = A.nzval[ptr]
+                        row_deg[rr] -= 1
+                        row_xor[rr] ⊻= c
+                        row_vsum[rr] -= vv
+                        if row_deg[rr] == 1
+                            push!(row_q, rr)
                         end
-                        break
+                    end
+                end
+                
+                # Deactivating r affects columns intersecting r
+                @inbounds for ptr in rowptr[r]:(rowptr[r+1]-1)
+                    cc = col_idx[ptr]
+                    if col_active[cc]
+                        vv = nz_val_row[ptr]
+                        col_deg[cc] -= 1
+                        col_xor[cc] ⊻= r
+                        col_vsum[cc] -= vv
+                        if col_deg[cc] == 1
+                            push!(col_q, cc)
+                        end
                     end
                 end
             end
         end
     end
     
+    # Rebuild core matrix
     core_rows = findall(row_active)
     core_cols = findall(col_active)
     
-    core_mat = zeros(Int, length(core_rows), length(core_cols))
-    row_map = Dict(r => i for (i, r) in enumerate(core_rows))
-    col_map = Dict(c => i for (i, c) in enumerate(core_cols))
+    row_map = Dict{Int64, Int64}()
+    sizehint!(row_map, length(core_rows))
+    @inbounds for (i, r) in enumerate(core_rows)
+        row_map[r] = i
+    end
     
-    for r in core_rows
-        for (c, v) in row_entries[r]
-            if col_active[c]
-                core_mat[row_map[r], col_map[c]] = v
+    col_map = Dict{Int64, Int64}()
+    sizehint!(col_map, length(core_cols))
+    @inbounds for (i, c) in enumerate(core_cols)
+        col_map[c] = i
+    end
+    
+    core_mat = zeros(Int64, length(core_rows), length(core_cols))
+    @inbounds for c in 1:n
+        if col_active[c]
+            cmap_c = col_map[c]
+            for ptr in A.colptr[c]:(A.colptr[c+1]-1)
+                r = A.rowval[ptr]
+                if row_active[r]
+                    core_mat[row_map[r], cmap_c] = A.nzval[ptr]
+                end
             end
         end
     end
@@ -148,14 +262,22 @@ function exact_snf_sparse(rows::AbstractVector{Int64}, cols::AbstractVector{Int6
     # sparse() constructor is efficient with these vectors.
     A = sparse(rows .+ 1, cols .+ 1, vals, m, n)
     try
+        # The O(V+E) leaf-peeling queue removes all degree-1 and degree-0 simplices,
+        # mathematically guaranteeing that the resulting core_mat has the exact same 
+        # non-trivial invariant factors as A, but is drastically smaller.
         ones_count, core_mat = _reduce_snf(A)
         factors = ones(Int64, ones_count)
         
-        if length(core_mat) > 0
+        core_m, core_n = size(core_mat)
+        
+        if core_m > 0 && core_n > 0
+            # CRITICAL CONSTRAINT: We MUST compute the exact SNF over Z regardless of matrix size
+            # to preserve mathematical fidelity and exact topological torsion.
             ZZ = AbstractAlgebra.ZZ
             A_aa = AbstractAlgebra.matrix(ZZ, core_mat)
             S_aa = AbstractAlgebra.snf(A_aa)
-            for i in 1:min(size(core_mat)...)
+            
+            for i in 1:min(core_m, core_n)
                 val = Int64(S_aa[i, i])
                 if val != 0 && abs(val) > 1
                     push!(factors, abs(val))
@@ -303,7 +425,7 @@ end
     embedding_broad_phase_pairs(centroids, radii, tol)
 
 Compute candidate simplex index pairs `(i, j)` with `i < j` using centroid-ball
-distance bounds. This is a fast broad-phase filter for PL self-intersection checks.
+distance bounds. Parallelized via multi-threading for 100k+ point workloads.
 """
 function embedding_broad_phase_pairs(
     centroids::AbstractMatrix{Float64},
@@ -311,33 +433,38 @@ function embedding_broad_phase_pairs(
     tol::Float64,
 )
     n = size(centroids, 1)
-    size(centroids, 2) >= 1 || return Matrix{Int64}(undef, 0, 2)
+    d = size(centroids, 2)
+    d >= 1 || return Matrix{Int64}(undef, 0, 2)
     length(radii) == n || error("radii length must match centroid count")
     n <= 1 && return Matrix{Int64}(undef, 0, 2)
 
-    pairs = Vector{NTuple{2, Int64}}()
-    @inbounds for i in 1:(n - 1)
+    # Thread-local storage for pairs
+    thread_pairs = [Vector{NTuple{2, Int64}}() for _ in 1:Threads.nthreads()]
+    
+    Threads.@threads for i in 1:(n - 1)
+        tid = Threads.threadid()
         ci = @view centroids[i, :]
         ri = radii[i]
         for j in (i + 1):n
             cj = @view centroids[j, :]
             bound = ri + radii[j] + tol
             sq = 0.0
-            for k in 1:size(centroids, 2)
-                d = ci[k] - cj[k]
-                sq += d * d
+            for k in 1:d
+                @inbounds delta = ci[k] - cj[k]
+                sq += delta * delta
             end
             if sq <= bound * bound
-                push!(pairs, (Int64(i - 1), Int64(j - 1)))
+                push!(thread_pairs[tid], (Int64(i - 1), Int64(j - 1)))
             end
         end
     end
 
-    if isempty(pairs)
+    all_pairs = vcat(thread_pairs...)
+    if isempty(all_pairs)
         return Matrix{Int64}(undef, 0, 2)
     end
-    out = Matrix{Int64}(undef, length(pairs), 2)
-    @inbounds for (idx, p) in enumerate(pairs)
+    out = Matrix{Int64}(undef, length(all_pairs), 2)
+    @inbounds for (idx, p) in enumerate(all_pairs)
         out[idx, 1] = p[1]
         out[idx, 2] = p[2]
     end
@@ -485,15 +612,25 @@ end
     multisignature(matrix, p)
 
 Compute total twisted signature over non-trivial `p`-th roots of unity.
+Parallelized over available CPU cores.
 """
 function multisignature(matrix::AbstractMatrix{Float64}, p::Int)
-    mat = Matrix{Float64}(matrix); n = size(mat, 1); total = 0
-    for k in 1:(p-1)
-        omega = exp(2π * im * k / p); H = [mat[i,j] * omega^(i-j) for i in 1:n, j in 1:n]
-        evals = real.(eigvals(Hermitian(H))); tol = n * eps(Float64) * maximum(abs.(evals))
-        total += sum(evals .> tol) - sum(evals .< -tol)
+    mat = Matrix{Float64}(matrix)
+    n = size(mat, 1)
+    
+    # Pre-allocate thread-local totals
+    thread_totals = zeros(Int64, Threads.nthreads())
+    
+    Threads.@threads for k in 1:(p-1)
+        tid = Threads.threadid()
+        omega = exp(2π * im * k / p)
+        H = [mat[i,j] * omega^(i-j) for i in 1:n, j in 1:n]
+        evals = real.(eigvals(Hermitian(H)))
+        tol = n * eps(Float64) * maximum(abs.(evals))
+        thread_totals[tid] += sum(evals .> tol) - sum(evals .< -tol)
     end
-    return total
+    
+    return sum(thread_totals)
 end
 
 """
@@ -1412,7 +1549,133 @@ function triangulate_surface_delaunay(points::AbstractMatrix{Float64}, tolerance
     return faces
 end
 
-# --- Metric Spaces & Alignment ---
+# --- Native Complex Construction Kernels ---
+
+"""
+    enumerate_cliques_sparse(rowptr, colval, n_vertices, max_dim)
+
+Enumerate all cliques up to size `max_dim + 1` from a sparse adjacency matrix.
+Uses a simple backtracking DFS (Bron-Kerbosch style without pivoting since max_dim is small).
+"""
+function enumerate_cliques_sparse(rowptr::AbstractVector{Int64}, colval::AbstractVector{Int64}, n_vertices::Int, max_dim::Int)
+    cliques = Vector{Vector{Int64}}()
+    
+    # Adjacency check function for sorted neighbor lists
+    function is_adj(u::Int, v::Int)
+        start_idx = rowptr[u]
+        end_idx = rowptr[u+1] - 1
+        # Binary search
+        while start_idx <= end_idx
+            mid = (start_idx + end_idx) >> 1
+            if colval[mid] == v
+                return true
+            elseif colval[mid] < v
+                start_idx = mid + 1
+            else
+                end_idx = mid - 1
+            end
+        end
+        return false
+    end
+
+    function backtrack(current_clique::Vector{Int64}, candidates::Vector{Int64})
+        push!(cliques, copy(current_clique))
+        if length(current_clique) == max_dim + 1
+            return
+        end
+        
+        for (i, v) in enumerate(candidates)
+            new_candidates = Int64[]
+            for j in (i+1):length(candidates)
+                w = candidates[j]
+                if is_adj(v, w)
+                    push!(new_candidates, w)
+                end
+            end
+            push!(current_clique, v)
+            backtrack(current_clique, new_candidates)
+            pop!(current_clique)
+        end
+    end
+
+    # To avoid duplicates, we only consider candidates > u
+    for u in 1:n_vertices
+        candidates = Int64[]
+        for ptr in rowptr[u]:(rowptr[u+1]-1)
+            v = colval[ptr]
+            if v > u
+                push!(candidates, v)
+            end
+        end
+        backtrack([u], candidates)
+    end
+    
+    return cliques
+end
+
+"""
+    compute_circumradius_sq_3d(points, simplices)
+
+Compute squared circumradii for 3D tetrahedra natively.
+"""
+function compute_circumradius_sq_3d(points::AbstractMatrix{Float64}, simplices::AbstractMatrix{Int64})
+    n_simplices = size(simplices, 1)
+    radii_sq = zeros(Float64, n_simplices)
+    
+    Threads.@threads for i in 1:n_simplices
+        p0 = @view points[simplices[i, 1], :]
+        p1 = @view points[simplices[i, 2], :]
+        p2 = @view points[simplices[i, 3], :]
+        p3 = @view points[simplices[i, 4], :]
+        
+        A = [p1[1]-p0[1] p1[2]-p0[2] p1[3]-p0[3];
+             p2[1]-p0[1] p2[2]-p0[2] p2[3]-p0[3];
+             p3[1]-p0[1] p3[2]-p0[2] p3[3]-p0[3]]
+             
+        b = [0.5 * sum(abs2, p1 .- p0);
+             0.5 * sum(abs2, p2 .- p0);
+             0.5 * sum(abs2, p3 .- p0)]
+             
+        if abs(det(A)) > 1e-12
+            center_offset = A \ b
+            radii_sq[i] = sum(abs2, center_offset)
+        else
+            radii_sq[i] = Inf # Degenerate
+        end
+    end
+    return radii_sq
+end
+
+"""
+    compute_circumradius_sq_2d(points, simplices)
+
+Compute squared circumradii for 2D triangles natively.
+"""
+function compute_circumradius_sq_2d(points::AbstractMatrix{Float64}, simplices::AbstractMatrix{Int64})
+    n_simplices = size(simplices, 1)
+    radii_sq = zeros(Float64, n_simplices)
+    
+    Threads.@threads for i in 1:n_simplices
+        p0 = @view points[simplices[i, 1], 1:2]
+        p1 = @view points[simplices[i, 2], 1:2]
+        p2 = @view points[simplices[i, 3], 1:2]
+        
+        A = [p1[1]-p0[1] p1[2]-p0[2];
+             p2[1]-p0[1] p2[2]-p0[2]]
+             
+        b = [0.5 * sum(abs2, p1 .- p0);
+             0.5 * sum(abs2, p2 .- p0)]
+             
+        if abs(det(A)) > 1e-12
+            center_offset = A \ b
+            radii_sq[i] = sum(abs2, center_offset)
+        else
+            radii_sq[i] = Inf
+        end
+    end
+    return radii_sq
+end
+
 
 """
     orthogonal_procrustes(A::AbstractMatrix, B::AbstractMatrix)
@@ -1650,6 +1913,12 @@ end
         catch
         end
     end
+    
+    # Explicitly clear out trash variables generated during precompilation
+    r_idx = c_idx = v_val = alpha_vec = beta_vec = nothing
+    fv = fo = mf = mi = gens = rels = nothing
+    pts_3d = simplices_h1 = pts_A = pts_B = p_gw = q_gw = D_A = nothing
+    GC.gc()
 end
 
 end # module SurgeryBackend

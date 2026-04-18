@@ -1,0 +1,39 @@
+import numpy as np
+import pytest
+from pysurgery.integrations.jax_bridge import HAS_JAX, jax_warmup, _approximate_signature, jax_gromov_wasserstein
+
+@pytest.mark.skipif(not HAS_JAX, reason="JAX not installed")
+def test_jax_warmup():
+    report = jax_warmup()
+    assert report["available"] is True
+    assert "Warmup complete" in report["status"]
+
+@pytest.mark.skipif(not HAS_JAX, reason="JAX not installed")
+def test_soft_signature():
+    # Symmetric matrix with 2 positive, 1 negative eigenvalue
+    # e.g. diag(1, 1, -1)
+    matrix = np.diag([1.0, 1.0, -1.0])
+    # Exact signature is 2 - 1 = 1
+    soft_sig = _approximate_signature(matrix, temp=20.0)
+    assert np.isclose(soft_sig, 1.0, atol=0.1)
+
+@pytest.mark.skipif(not HAS_JAX, reason="JAX not installed")
+def test_jax_gw():
+    # Valid distance matrix (must have zero diagonal)
+    # 2 points at distance 1
+    D = np.array([[0.0, 1.0], [1.0, 0.0]])
+    p = np.array([0.5, 0.5])
+    q = np.array([0.5, 0.5])
+    
+    # JAX version
+    # Using smaller epsilon to reduce entropic regularization effect
+    dist_jax = jax_gromov_wasserstein(D, D, p, q, epsilon=0.001, max_iter=200)
+    
+    # Python version
+    from pysurgery.core.metrics import gromov_wasserstein_distance
+    dist_py = gromov_wasserstein_distance(D, D, p, q, epsilon=0.001, max_iter=200)
+    
+    # For identical spaces, entropic GW should approach 0 as epsilon -> 0
+    # With epsilon=0.001 it should be very small
+    assert dist_jax < 0.05
+    assert np.isclose(float(dist_jax), dist_py, atol=1e-2)

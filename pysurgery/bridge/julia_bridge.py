@@ -349,6 +349,12 @@ class JuliaBridge:
                 except Exception as exc:
                     report["failed"][name] = repr(exc)
 
+            # Explicitly delete trash variables generated during warmup to free memory
+            workloads.clear()
+            del workloads
+            import gc
+            gc.collect()
+
             self._warmup_level = max(self._warmup_level, target_level)
             self._warmup_report = report
             if report["failed"]:
@@ -924,5 +930,44 @@ class JuliaBridge:
         )
         return float(res)
 
+
+    def enumerate_cliques_sparse(self, rowptr: np.ndarray, colval: np.ndarray, n_vertices: int, max_dim: int) -> list:
+        if not self.available:
+            raise RuntimeError("Julia backend unavailable.")
+        try:
+            res = self.backend.enumerate_cliques_sparse(
+                np.asarray(rowptr, dtype=np.int64),
+                np.asarray(colval, dtype=np.int64),
+                int(n_vertices),
+                int(max_dim)
+            )
+            from juliacall import convert
+            return [list(convert(list, c)) for c in res]
+        except Exception as e:
+            raise RuntimeError(f"enumerate_cliques_sparse failed: {e!r}")
+
+    def compute_circumradius_sq_3d(self, points: np.ndarray, simplices: np.ndarray) -> np.ndarray:
+        if not self.available:
+            raise RuntimeError("Julia backend unavailable.")
+        try:
+            res = self.backend.compute_circumradius_sq_3d(
+                np.asarray(points, dtype=np.float64),
+                np.asarray(simplices, dtype=np.int64) + 1 # 1-based for Julia
+            )
+            return np.array(res, dtype=np.float64)
+        except Exception as e:
+            raise RuntimeError(f"compute_circumradius_sq_3d failed: {e!r}")
+
+    def compute_circumradius_sq_2d(self, points: np.ndarray, simplices: np.ndarray) -> np.ndarray:
+        if not self.available:
+            raise RuntimeError("Julia backend unavailable.")
+        try:
+            res = self.backend.compute_circumradius_sq_2d(
+                np.asarray(points, dtype=np.float64),
+                np.asarray(simplices, dtype=np.int64) + 1 # 1-based for Julia
+            )
+            return np.array(res, dtype=np.float64)
+        except Exception as e:
+            raise RuntimeError(f"compute_circumradius_sq_2d failed: {e!r}")
 
 julia_engine = JuliaBridge()

@@ -29,7 +29,15 @@ def orthogonal_procrustes(A: np.ndarray, B: np.ndarray) -> Tuple[np.ndarray, np.
         return R, B_aligned, float(disparity)
 
 def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean") -> np.ndarray:
-    """Computes pairwise distance matrix using Julia (if available) or SciPy."""
+    """
+    Computes pairwise distance matrix using the optimal singular implementation.
+    Standardizes on JAX if available to ensure hardware acceleration for all scales.
+    """
+    from ..integrations.jax_bridge import HAS_JAX
+    if HAS_JAX and metric == "euclidean":
+        from ..integrations.jax_bridge import jax_pairwise_distance
+        return np.asarray(jax_pairwise_distance(data))
+
     if julia_engine.available:
         try:
             return julia_engine.pairwise_distance_matrix(data, metric)
@@ -81,7 +89,10 @@ def gromov_wasserstein_distance(
     epsilon: float = 0.01,
     max_iter: int = 100
 ) -> float:
-    """Computes (Entropic) Gromov-Wasserstein distance between two metric spaces."""
+    """
+    Computes (Entropic) Gromov-Wasserstein distance.
+    Standardizes on JAX if available for all scales.
+    """
     n = dist_matrix_A.shape[0]
     m = dist_matrix_B.shape[0]
     
@@ -89,6 +100,11 @@ def gromov_wasserstein_distance(
         p = np.ones(n) / n
     if q is None:
         q = np.ones(m) / m
+
+    from ..integrations.jax_bridge import HAS_JAX
+    if HAS_JAX:
+        from ..integrations.jax_bridge import jax_gromov_wasserstein
+        return float(jax_gromov_wasserstein(dist_matrix_A, dist_matrix_B, p, q, epsilon, max_iter))
 
     if julia_engine.available:
         try:
@@ -126,3 +142,35 @@ def gromov_wasserstein_distance(
                     gw_dist += ((dist_matrix_A[i, k] - dist_matrix_B[j, l])**2) * T[i, j] * T[k, l]
                     
     return float(np.sqrt(gw_dist))
+
+def farthest_point_sampling(points: np.ndarray, n_samples: int, initial_idx: int = 0) -> np.ndarray:
+    """
+    Subsample a point cloud by greedily picking points that maximize distance to the current set.
+    This provides a 'maximal' covering of the underlying manifold.
+
+    Returns
+    -------
+    indices : np.ndarray
+        The indices of the selected landmark points.
+    """
+    pts = np.asarray(points, dtype=np.float64)
+    n = pts.shape[0]
+    if n_samples >= n:
+        return np.arange(n)
+        
+    landmarks = np.zeros(n_samples, dtype=np.int64)
+    landmarks[0] = initial_idx
+    
+    # Track min distance from each point to the current set of landmarks
+    min_distances = np.linalg.norm(pts - pts[initial_idx], axis=1)
+    
+    for i in range(1, n_samples):
+        # Pick the point that is farthest from all existing landmarks
+        new_idx = np.argmax(min_distances)
+        landmarks[i] = new_idx
+        
+        # Update min distances with the new landmark
+        dist_to_new = np.linalg.norm(pts - pts[new_idx], axis=1)
+        min_distances = np.minimum(min_distances, dist_to_new)
+        
+    return landmarks

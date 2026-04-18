@@ -145,7 +145,10 @@ class Triangulated3Manifold:
     def chain_complex(self) -> ChainComplex:
         return self.simplicial_complex.chain_complex()
 
-    def homology(self, n: int) -> tuple[int, list[int]]:
+    def homology(
+        self, n: int | None = None
+    ) -> tuple[int, list[int]] | dict[int, tuple[int, list[int]]]:
+        """Return homology in degree ``n`` or all degrees when ``n`` is omitted."""
         return self.chain_complex().homology(n)
 
     def dual_graph(self) -> dict[int, set[int]]:

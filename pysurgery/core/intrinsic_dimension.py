@@ -342,31 +342,40 @@ def local_pca_tangent_space_dimension(
     diagnostics: list[str] = []
     max_dim = max_dimension if max_dimension is not None else pts.shape[1]
     max_dim = max(1, int(max_dim))
-    for i in range(pts.shape[0]):
-        if cache.indices is not None:
-            nbr_idx = cache.indices[i]
-            neighborhood = pts[nbr_idx]
-        else:
-            # Reconstruct from distances is impossible; skip.
-            diagnostics.append("Missing neighbor indices for local PCA; skipped point {}.".format(i))
-            continue
-        cloud = np.vstack([pts[i], neighborhood])
-        cloud = cloud - np.mean(cloud, axis=0, keepdims=True)
-        if cloud.shape[0] <= 2:
-            continue
-        cov = np.cov(cloud, rowvar=False)
-        if np.ndim(cov) == 0:
-            eigvals = np.array([float(cov)], dtype=np.float64)
-        else:
-            eigvals = np.linalg.eigvalsh(np.asarray(cov, dtype=np.float64))[::-1]
-        eigvals = np.maximum(eigvals, 0.0)
-        total = float(np.sum(eigvals))
-        if total <= _EPS:
-            continue
-        explained = np.cumsum(eigvals) / total
-        dim = int(np.searchsorted(explained, float(variance_threshold), side="left") + 1)
-        dim = min(max(dim, 1), max_dim)
-        local_dims.append(float(dim))
+
+    from ..integrations.jax_bridge import HAS_JAX
+    if HAS_JAX and cache.indices is not None:
+        from ..integrations.jax_bridge import jax_local_pca_dimensions
+        # neighborhood including point itself
+        nbr_idx = np.hstack([np.arange(pts.shape[0])[:, None], cache.indices])
+        jax_dims = jax_local_pca_dimensions(pts, nbr_idx, variance_threshold)
+        local_dims = np.minimum(jax_dims.astype(float), float(max_dim)).tolist()
+    else:
+        for i in range(pts.shape[0]):
+            if cache.indices is not None:
+                nbr_idx = cache.indices[i]
+                neighborhood = pts[nbr_idx]
+            else:
+                # Reconstruct from distances is impossible; skip.
+                diagnostics.append("Missing neighbor indices for local PCA; skipped point {}.".format(i))
+                continue
+            cloud = np.vstack([pts[i], neighborhood])
+            cloud = cloud - np.mean(cloud, axis=0, keepdims=True)
+            if cloud.shape[0] <= 2:
+                continue
+            cov = np.cov(cloud, rowvar=False)
+            if np.ndim(cov) == 0:
+                eigvals = np.array([float(cov)], dtype=np.float64)
+            else:
+                eigvals = np.linalg.eigvalsh(np.asarray(cov, dtype=np.float64))[::-1]
+            eigvals = np.maximum(eigvals, 0.0)
+            total = float(np.sum(eigvals))
+            if total <= _EPS:
+                continue
+            explained = np.cumsum(eigvals) / total
+            dim = int(np.searchsorted(explained, float(variance_threshold), side="left") + 1)
+            dim = min(max(dim, 1), max_dim)
+            local_dims.append(float(dim))
 
     if not local_dims:
         return IntrinsicDimensionMethodResult(
