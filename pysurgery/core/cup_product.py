@@ -1,6 +1,5 @@
 import numpy as np
 import warnings
-from itertools import combinations
 from typing import Dict, List, Tuple
 from ..bridge.julia_bridge import julia_engine
 

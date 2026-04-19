@@ -3,8 +3,6 @@ import hashlib
 import numpy as np
 import warnings
 import sympy as sp
-from functools import reduce
-from math import lcm
 from scipy.sparse import csr_matrix
 from typing import Any, Dict, Iterable, List, Tuple, cast
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
@@ -892,7 +890,7 @@ class SimplicialComplex(BaseModel):
                         int(max_loops), 
                         float(min_modularity_gain)
                     )
-                    L = {v - 1: l - 1 for v, l in L_jl.items()}
+                    L = {v - 1: lbl - 1 for v, lbl in L_jl.items()}
                     
                     new_simplices = set()
                     for dim, simps in self.simplices_dict.items():
