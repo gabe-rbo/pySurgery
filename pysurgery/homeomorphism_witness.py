@@ -16,6 +16,7 @@ from .homeomorphism import (
     HomotopyEquivalenceWitnessHook,
     ProductAssemblyCertificate,
     ThreeManifoldRecognitionCertificate,
+    analyze_homeomorphism_1d_result,
     analyze_homeomorphism_2d_result,
     analyze_homeomorphism_3d_result,
     analyze_homeomorphism_4d_result,
@@ -27,6 +28,7 @@ from .wall_groups import ObstructionResult
 
 
 WitnessKind = Literal[
+    "discrete_classification_1d",
     "surface_classification",
     "poincare_conjecture",
     "freedman_indefinite",
@@ -162,6 +164,24 @@ def _obstruction_state_payload(
         "pi": obstruction.pi,
         "dimension": obstruction.dimension,
     }
+
+
+def build_1d_homeomorphism_witness(
+    c1: ChainComplex,
+    c2: ChainComplex,
+    allow_approx: bool = False,
+) -> HomeomorphismWitnessResult:
+    result = analyze_homeomorphism_1d_result(
+        c1,
+        c2,
+        allow_approx=allow_approx,
+    )
+    return _build_from_result(
+        result,
+        dimension=1,
+        kind="discrete_classification_1d",
+        theorem="Classification of 1-Manifolds",
+    )
 
 
 def build_surface_homeomorphism_witness(
@@ -560,6 +580,13 @@ def build_homeomorphism_witness(
             witness=None,
             theorem=None,
             missing_data=["Both chain complexes"],
+        )
+
+    if dim == 1:
+        return build_1d_homeomorphism_witness(
+            c1,
+            c2,
+            allow_approx=allow_approx,
         )
 
     if dim == 2:

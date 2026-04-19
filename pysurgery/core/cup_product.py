@@ -15,28 +15,29 @@ def _numpy_alexander_whitney_cup(
     modulus: int | None = None,
 ) -> np.ndarray:
     """
-    Optimized NumPy vectorization for Cup Product evaluation.
-    Bypasses pure Python loops to handle millions of simplices.
+    Optimized map-based evaluation for Cup Product.
+    Avoids native Python for-loops via list comprehensions and direct mapping.
     """
-    n_simplices = len(simplices)
-    result = np.zeros(n_simplices, dtype=np.int64)
+    if len(simplices) == 0:
+        return np.zeros(0, dtype=np.int64)
 
-    # We must iterate to query the dictionary, but we can do it efficiently
-    # A true Numba JIT implementation would use typed dicts, but this is a
-    # highly optimized Python fallback.
-    for i in range(n_simplices):
-        simplex = simplices[i]
+    # Use map/list comprehensions which are executed at C-speed in the CPython VM
+    front_faces = (tuple(s) for s in simplices[:, : p + 1])
+    back_faces = (tuple(s) for s in simplices[:, p:])
 
-        front_face = tuple(simplex[: p + 1])
-        back_face = tuple(simplex[p:])
+    # Extract indices, defaulting to -1
+    idx_p_arr = np.fromiter((p_simplex_to_idx.get(f, -1) for f in front_faces), dtype=np.int64, count=len(simplices))
+    idx_q_arr = np.fromiter((q_simplex_to_idx.get(f, -1) for f in back_faces), dtype=np.int64, count=len(simplices))
 
-        idx_p = p_simplex_to_idx.get(front_face, -1)
-        idx_q = q_simplex_to_idx.get(back_face, -1)
+    # Identify valid overlapping faces
+    valid_mask = (idx_p_arr != -1) & (idx_q_arr != -1)
+    
+    result = np.zeros(len(simplices), dtype=np.int64)
+    # Perform actual NumPy vectorization on the arithmetic
+    result[valid_mask] = alpha[idx_p_arr[valid_mask]] * beta[idx_q_arr[valid_mask]]
 
-        if idx_p != -1 and idx_q != -1:
-            result[i] = alpha[idx_p] * beta[idx_q]
-            if modulus is not None:
-                result[i] %= modulus
+    if modulus is not None:
+        result %= modulus
 
     return result
 

@@ -162,6 +162,9 @@ class SimplicialComplex(BaseModel):
     _cache_misses: int = PrivateAttr(default=0)
     _cache_signature: tuple[object, ...] | None = PrivateAttr(default=None)
 
+    _boundaries_cache: Dict[int, csr_matrix] = PrivateAttr(default_factory=dict)
+    _cells_cache: Dict[int, int] = PrivateAttr(default_factory=dict)
+
     def __init__(self, **data):
         if "simplices" in data and not isinstance(data["simplices"], dict):
              # Handle possible list-of-lists input if any legacy code did that
@@ -295,14 +298,51 @@ class SimplicialComplex(BaseModel):
         close_under_faces: bool = True,
     ) -> "SimplicialComplex":
         """Create a simplicial complex from generators, optionally taking the full closure."""
+        from ..bridge.julia_bridge import julia_engine
+        
+        # Ensure we can iterate multiple times if it's a generator
+        simplex_list = [tuple(int(v) for v in s) for s in simplices]
+        
         if close_under_faces:
-            simplex_table = _simplicial_closure_from_generators(simplices)
+            if julia_engine.available:
+                # Accelerate full skeletal closure and boundary assembly in Julia
+                max_dim = max((len(s) - 1 for s in simplex_list), default=-1)
+                
+                if max_dim >= 0:
+                    try:
+                        b_data, cells, dim_simplices, _ = julia_engine.compute_boundary_data_from_simplices(
+                            simplex_list, max_dim
+                        )
+                        
+                        # Verify that Julia returned all dimensions (basic sanity check)
+                        if all(d in dim_simplices for d in range(max_dim + 1)):
+                            obj = cls(simplices=dim_simplices, coefficient_ring=coefficient_ring)
+                            
+                            # Populate private caches to accelerate subsequent .chain_complex() calls
+                            from scipy.sparse import csr_matrix
+                            boundaries = {}
+                            for dim, payload in b_data.items():
+                                boundaries[dim] = csr_matrix(
+                                    (payload["data"], (payload["rows"], payload["cols"])),
+                                    shape=(payload["n_rows"], payload["n_cols"]),
+                                    dtype=np.int64
+                                )
+                            
+                            object.__setattr__(obj, "_boundaries_cache", boundaries)
+                            object.__setattr__(obj, "_cells_cache", cells)
+                            return obj
+                    except Exception:
+                        # Fallback to Python if Julia compute fails
+                        pass
+
+            simplex_table = _simplicial_closure_from_generators(simplex_list)
         else:
             grouped: dict[int, list[tuple[int, ...]]] = {}
-            for simplex in simplices:
+            for simplex in simplex_list:
                 t = _normalize_simplex(simplex)
                 grouped.setdefault(len(t) - 1, []).append(t)
             simplex_table = _canonicalize_simplices_by_dim(grouped)
+            
         return cls(simplices=simplex_table, coefficient_ring=coefficient_ring)
 
     @classmethod
@@ -312,6 +352,7 @@ class SimplicialComplex(BaseModel):
         coefficient_ring: str = "Z",
     ) -> "SimplicialComplex":
         """Build the full simplicial closure from a list of maximal simplices."""
+        # This now benefits directly from the Julia acceleration in from_simplices
         return cls.from_simplices(
             maximal_simplices,
             coefficient_ring=coefficient_ring,
@@ -490,6 +531,13 @@ class SimplicialComplex(BaseModel):
         # We need circumradii. 
         from ..bridge.julia_bridge import julia_engine
         
+        from pysurgery.bridge.julia_bridge import julia_engine
+        if julia_engine.available:
+            valid_simplices_list = julia_engine.compute_alpha_complex_simplices(
+                pts, simplices_d, alpha2, dim
+            )
+            return cls.from_simplices(valid_simplices_list, coefficient_ring=coefficient_ring, close_under_faces=True)
+
         if dim == 2:
             if julia_engine.available:
                 try:
@@ -527,31 +575,38 @@ class SimplicialComplex(BaseModel):
                     except Exception:
                         r2[i] = float('inf')
         else:
-            raise NotImplementedError("Native Alpha Complex supports only 2D and 3D point clouds.")
+            # Generalized N-dimensional circumradius fallback
+            r2 = np.zeros(len(simplices_d))
+            for i, s in enumerate(simplices_d):
+                p0 = pts[s[0]]
+                # Construct A matrix (relative vectors from p0)
+                A = pts[s[1:]] - p0
+                # Construct b vector: 0.5 * squared distances from p0
+                b = 0.5 * np.sum((pts[s[1:]] - p0)**2, axis=1)
+                try:
+                    # Solve the linear system for the circumcenter relative to p0
+                    c = np.linalg.solve(A, b)
+                    r2[i] = np.sum(c**2)
+                except Exception:
+                    # Singular simplex (degenerate), treat as infinite circumradius
+                    r2[i] = float('inf')
 
         # Gabriel filtration:
         # We add the maximal simplices with r2 <= alpha2.
-        # But wait, what about faces that are Gabriel themselves?
-        # A proper Alpha filtration requires calculating the minimal bounding sphere for EVERY face.
-        # As an exact mathematical approximation of the homotopy type (which is what we care about for topology),
-        # we can just use the Delaunay edges and filter by length, or simply filter the maximal simplices.
         # For rigorous topological Alpha complexes, we filter the Delaunay complex.
-        # We will add all simplices that belong to a maximal simplex with r2 <= alpha2.
-        # For sub-faces whose own circumradius is smaller, we'd theoretically need more logic. 
-        # But as a functional replacement that maintains the general sparse structure and homotopy bounds:
-        
         for i, s in enumerate(simplices_d):
             if r2[i] <= alpha2:
                 valid_simplices.add(tuple(sorted(s)))
                 
         # To strictly mirror GUDHI's behavior for faces:
-        # If a triangle is not added because its r2 > alpha2, its edges might still be valid
-        # if their own r2 (which is just length^2 / 4) is <= alpha2.
-        # We must add all edges with length^2 <= 4*alpha2, and vertices.
+        # If a simplex is not added because its r2 > alpha2, its faces might still be valid
+        # if their own circumradius is <= alpha2.
+        # We must add all vertices and check lower-dimensional faces.
         for i in range(n_pts):
             valid_simplices.add((i,))
             
-        # Edges
+        # Check all faces up to dimension dim-1
+        # For performance, we check edges explicitly as they are most common.
         edges = set()
         for s in simplices_d:
             for u, v in itertools.combinations(s, 2):
@@ -561,40 +616,28 @@ class SimplicialComplex(BaseModel):
             if np.sum((pts[u] - pts[v])**2) / 4.0 <= alpha2:
                 valid_simplices.add((u, v))
                 
-        # 2D faces in 3D
-        if dim == 3:
-            faces = set()
-            for s in simplices_d:
-                for face in itertools.combinations(s, 3):
-                    faces.add(tuple(sorted(face)))
-            
-            if len(faces) > 0:
-                face_arr = np.array(list(faces))
-                p0 = pts[face_arr[:, 0]]
-                p1 = pts[face_arr[:, 1]]
-                p2 = pts[face_arr[:, 2]]
+        # Higher-dimensional faces (2D to dim-1)
+        if dim >= 3:
+            for k in range(2, dim):
+                faces_k = set()
+                for s in simplices_d:
+                    for f in itertools.combinations(s, k+1):
+                        faces_k.add(tuple(sorted(f)))
                 
-                area2 = np.sum(np.cross(p1 - p0, p2 - p0)**2, axis=1)
-                a2 = np.sum((p1 - p2)**2, axis=1)
-                b2 = np.sum((p0 - p2)**2, axis=1)
-                c2 = np.sum((p0 - p1)**2, axis=1)
-                
-                # Sort squared edges to locate the longest edge
-                edges_sq = np.sort(np.stack([a2, b2, c2], axis=1), axis=1)
-                short1_sq = edges_sq[:, 0]
-                short2_sq = edges_sq[:, 1]
-                longest_sq = edges_sq[:, 2]
-                
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    r2_circum = (a2 * b2 * c2) / (4.0 * area2)
-                
-                # Mathematical Fix: If obtuse (a^2 + b^2 < c^2), use the diametral sphere radius (c^2 / 4)
-                is_obtuse = (short1_sq + short2_sq < longest_sq)
-                r2_face = np.where(is_obtuse, longest_sq / 4.0, r2_circum)
-                
-                valid_mask = (area2 > 1e-12) & (r2_face <= alpha2)
-                for f in face_arr[valid_mask]:
-                    valid_simplices.add(tuple(int(x) for x in f))
+                if len(faces_k) > 0:
+                    for f in faces_k:
+                        f_pts = pts[list(f)]
+                        p0 = f_pts[0]
+                        A = f_pts[1:] - p0
+                        b = 0.5 * np.sum((f_pts[1:] - p0)**2, axis=1)
+                        try:
+                            # Use lstsq for faces since A might not be square (k < dim)
+                            c, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+                            r2_f = np.sum(c**2)
+                            if r2_f <= alpha2:
+                                valid_simplices.add(f)
+                        except Exception:
+                            pass
 
         return cls.from_simplices(valid_simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
 
@@ -756,6 +799,52 @@ class SimplicialComplex(BaseModel):
         self._cache_set(key, True)
         return True
 
+    def verify_structure(self) -> Dict[str, Any]:
+        """
+        Comprehensive mathematical validity check for the simplicial complex.
+        
+        Verifies:
+        1. Downward Closure: Every face of every simplex is in the complex.
+        2. Orientation Consistency: All simplices are stored in canonical (sorted) order.
+        3. Boundary of Boundary: Composition of consecutive boundary operators is zero (d^2 = 0).
+        """
+        issues = []
+        
+        # 1. & 2. Closure and Orientation
+        is_closed = self.is_closed_under_faces()
+        if not is_closed:
+            issues.append("Downward closure failure: some faces are missing from the complex.")
+            
+        for dim, simplices in self.simplices_field.items():
+            for s in simplices:
+                if list(s) != sorted(s):
+                    issues.append(f"Orientation inconsistency: simplex {s} is not in canonical sorted order.")
+                    break
+        
+        # 3. d^2 = 0
+        dims = sorted(self.dimensions)
+        for d in dims:
+            if d <= 1:
+                continue
+            # d_d : C_d -> C_{d-1}
+            # d_{d-1} : C_{d-1} -> C_{d-2}
+            mat_d = self.boundary_matrix(d)
+            mat_dm1 = self.boundary_matrix(d - 1)
+            
+            if mat_d.nnz > 0 and mat_dm1.nnz > 0:
+                prod = mat_dm1 @ mat_d
+                if prod.nnz > 0:
+                    # Check if actually non-zero (avoid float noise, though these are ints)
+                    if np.any(prod.data != 0):
+                        issues.append(f"Boundary consistency failure: d_{d-1} * d_{d} != 0 at dimension {d}.")
+
+        return {
+            "valid": len(issues) == 0,
+            "issues": issues,
+            "is_closed": is_closed,
+            "is_canonical": all(list(s) == sorted(s) for simps in self.simplices_field.values() for s in simps),
+        }
+
     def hasse_edges(self) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
         """Return the codimension-one relations of the Hasse diagram."""
         key = ("simplicial", "hasse_edges")
@@ -817,8 +906,15 @@ class SimplicialComplex(BaseModel):
         cached = self._cache_get(key)
         if cached is not None:
             return cast(ChainComplex, cached)
-        boundaries = self.boundary_matrices()
-        cells = {dim: len(simplices) for dim, simplices in self.simplices_field.items()}
+
+        # Check if Julia pre-calculated the boundary operators
+        if self._boundaries_cache and self._cells_cache:
+            boundaries = self._boundaries_cache
+            cells = self._cells_cache
+        else:
+            boundaries = self.boundary_matrices()
+            cells = {dim: len(simplices) for dim, simplices in self.simplices_field.items()}
+            
         out = ChainComplex(
             boundaries=boundaries,
             dimensions=self.dimensions,
@@ -833,6 +929,100 @@ class SimplicialComplex(BaseModel):
         return self.chain_complex(coefficient_ring=coefficient_ring)
 
 
+
+    def expand(self, max_dim: int | None = None) -> "SimplicialComplex":
+        """
+        Expands the simplicial complex into a Flag Complex (Clique Complex)
+        up to the given maximum dimension.
+        
+        This adds all cliques of size up to max_dim + 1 as simplices.
+        Commonly used after skeleton-only algorithms like quick_mapper.
+        
+        Args:
+            max_dim: The maximum dimension of simplices to include.
+                     If None, defaults to the maximum dimension of the space 
+                     (number of vertices - 1).
+        """
+        from ..bridge.julia_bridge import julia_engine
+        import scipy.sparse as sp
+        
+        # 1. Get 1-skeleton (vertices and edges)
+        edges = self.n_simplices(1)
+        vertices = [v[0] for v in self.n_simplices(0)]
+        if not vertices:
+             return self.model_copy()
+             
+        n_v = max(vertices) + 1 if vertices else 0
+        
+        # Default max_dim to the "maximum dimension of the space"
+        if max_dim is None:
+            max_dim = max(0, n_v - 1)
+            if max_dim > 10:
+                warnings.warn(
+                    f"Auto-expanding up to max_dim={max_dim} may be extremely slow. "
+                    "Consider citing an explicit max_dim for performance."
+                )
+
+        # 2. Try Julia acceleration (much faster for large clique finding)
+        if julia_engine.available:
+            try:
+                # Build adjacency in CSR format for Julia
+                row_indices = []
+                col_indices = []
+                for u, v in edges:
+                    row_indices.extend([u, v])
+                    col_indices.extend([v, u])
+                
+                adj = sp.csr_matrix(
+                    (np.ones(len(row_indices), dtype=np.int64), (row_indices, col_indices)),
+                    shape=(n_v, n_v)
+                )
+                
+                # indptr is rowptr, indices is colval
+                cliques = julia_engine.enumerate_cliques_sparse(
+                    np.asarray(adj.indptr + 1, dtype=np.int64), # 1-based for Julia
+                    np.asarray(adj.indices + 1, dtype=np.int64),
+                    int(n_v),
+                    int(max_dim)
+                )
+                
+                # Convert 1-based Julia results back to 0-based
+                new_simplices = [tuple(sorted(int(x) - 1 for x in c)) for c in cliques]
+                return self.__class__.from_simplices(
+                    new_simplices, 
+                    coefficient_ring=self.coefficient_ring,
+                    close_under_faces=True
+                )
+            except Exception as e:
+                warnings.warn(f"Julia clique expansion failed: {e}. Falling back to Python.")
+
+        # 3. Python Fallback (Recursive clique expansion)
+        adj_dict = {v: set() for v in vertices}
+        for u, v in edges:
+            adj_dict[u].add(v)
+            adj_dict[v].add(u)
+            
+        all_cliques = []
+        
+        def find_cliques(current_clique, candidates):
+            all_cliques.append(tuple(sorted(current_clique)))
+            if len(current_clique) > max_dim:
+                return
+            
+            for i, v in enumerate(candidates):
+                new_candidates = [w for w in candidates[i+1:] if w in adj_dict[v]]
+                find_cliques(current_clique + [v], new_candidates)
+                
+        find_cliques([], sorted(vertices))
+        # Remove empty clique
+        if all_cliques and not all_cliques[0]:
+            all_cliques.pop(0)
+            
+        return self.__class__.from_simplices(
+            all_cliques,
+            coefficient_ring=self.coefficient_ring,
+            close_under_faces=True
+        )
 
     def quick_mapper(
         self,
@@ -1715,17 +1905,33 @@ class ChainComplex(BaseModel):
             if dn_plus_1 is None or dn_plus_1.nnz == 0:
                 int_basis = [np.eye(cn_size, dtype=np.int64)[j] for j in range(cn_size)]
             else:
-                mat = sp.Matrix(dn_plus_1.T.toarray().astype(int))
+                # Memory Warning: Sparse to Dense conversion fallback
+                if dn_plus_1.shape[0] * dn_plus_1.shape[1] > 1_000_000:
+                    warnings.warn(
+                        f"Matrix {dn_plus_1.shape} is large for Python/SymPy reduction. "
+                        "Expect significant RAM consumption and slow execution without Julia."
+                    )
+                
+                # Bridging to SymPy SparseMatrix to reduce RAM pressure
+                mat = sp.SparseMatrix(dn_plus_1.shape[1], dn_plus_1.shape[0], dict(dn_plus_1.T.todok().items()))
                 # syzygy_module gives an exact Z-basis for the kernel over PID
                 int_basis = [np.array(v, dtype=np.int64).flatten() for v in mat.syzygy_module()]
             self._cache_set(key, int_basis)
             return int_basis
 
         # Compute the Smith Normal Form of d_n^T
-        dn_T = sp.Matrix(dn.T.toarray().astype(int))
+        if dn.shape[0] * dn.shape[1] > 1_000_000:
+            warnings.warn(
+                f"Matrix {dn.shape} is large for Smith Normal Form in Python. "
+                "Expect significant RAM consumption without Julia backend."
+            )
+        
+        dn_T = sp.SparseMatrix(dn.shape[1], dn.shape[0], dict(dn.T.todok().items()))
         
         # S = U * dn_T * V. 
         # The inverse of U transforms the standard codomain basis into a decomposed Z-basis.
+        # SymPy's smith_normal_form internally converts to dense, but SparseMatrix input 
+        # helps slightly with initial allocation.
         from sympy.matrices.normalforms import smith_normal_form
         S, U, V = smith_normal_form(dn_T)
         U_inv = U.inv()
@@ -1745,6 +1951,54 @@ class ChainComplex(BaseModel):
                     
         self._cache_set(key, int_basis)
         return int_basis
+
+    def euler_characteristic(self) -> int:
+        """
+        Compute the Euler characteristic of the chain complex.
+        chi(C) = sum_{n} (-1)^n * rank(C_n).
+        """
+        key = ("chain", "euler_characteristic")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return int(cast(int, cached))
+        
+        chi = 0
+        for dim in self._homological_dimensions():
+            rank = self._chain_group_rank_for_degree(dim)
+            if dim % 2 == 0:
+                chi += rank
+            else:
+                chi -= rank
+        
+        self._cache_set(key, int(chi))
+        return int(chi)
+
+    def topological_invariants(self) -> Dict[str, Any]:
+        """
+        Compute all key topological invariants at once.
+        Returns a dictionary containing homology, cohomology, Betti numbers, 
+        and the Euler characteristic.
+        """
+        key = ("chain", "topological_invariants", str(self.coefficient_ring))
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cast(Dict[str, Any], cached)
+
+        homology = self.homology()
+        cohomology = self.cohomology()
+        betti = self.betti_numbers()
+        chi = self.euler_characteristic()
+
+        out = {
+            "homology": homology,
+            "cohomology": cohomology,
+            "betti_numbers": betti,
+            "euler_characteristic": chi,
+            "coefficient_ring": self.coefficient_ring,
+        }
+        
+        self._cache_set(key, out)
+        return out
 
 class CWComplex(BaseModel):
     """

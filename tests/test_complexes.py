@@ -445,3 +445,205 @@ def test_cw_chain_complex_cache_separates_coefficient_rings():
     assert cc_q.coefficient_ring == "Q"
 
 
+def test_chain_complex_topological_invariants():
+    # S^1 as a Simplicial Complex
+    sc = SimplicialComplex.from_maximal_simplices([(0, 1), (1, 2), (2, 0)])
+    cc = sc.chain_complex()
+    
+    inv = cc.topological_invariants()
+    
+    assert inv["euler_characteristic"] == 0
+    assert inv["betti_numbers"][0] == 1
+    assert inv["betti_numbers"][1] == 1
+    assert inv["homology"][0] == (1, [])
+    assert inv["homology"][1] == (1, [])
+    assert inv["cohomology"][0] == (1, [])
+    assert inv["cohomology"][1] == (1, [])
+    assert inv["coefficient_ring"] == "Z"
+
+
+def test_euler_characteristic_formula_consistency():
+    """
+    Verify the Euler-Poincaré formula: 
+    sum (-1)^n * c_n = sum (-1)^n * beta_n
+    where c_n is the number of n-cells and beta_n is the n-th Betti number.
+    """
+    # 1. A single point (0-simplex)
+    sc_point = SimplicialComplex.from_simplices([[0]])
+    cc_point = sc_point.chain_complex()
+    chi_cells = cc_point.euler_characteristic()
+    betti = cc_point.betti_numbers()
+    chi_betti = sum((-1)**n * b for n, b in betti.items())
+    assert chi_cells == 1
+    assert chi_cells == chi_betti
+
+    # 2. A triangle (2-simplex with closure)
+    sc_tri = SimplicialComplex.from_maximal_simplices([(0, 1, 2)])
+    cc_tri = sc_tri.chain_complex()
+    chi_cells = cc_tri.euler_characteristic()
+    betti = cc_tri.betti_numbers()
+    chi_betti = sum((-1)**n * b for n, b in betti.items())
+    assert chi_cells == 1 # Contractible
+    assert chi_cells == chi_betti
+
+    # 3. A circle (S^1)
+    sc_s1 = SimplicialComplex.from_maximal_simplices([(0, 1), (1, 2), (2, 0)])
+    cc_s1 = sc_s1.chain_complex()
+    chi_cells = cc_s1.euler_characteristic()
+    betti = cc_s1.betti_numbers()
+    chi_betti = sum((-1)**n * b for n, b in betti.items())
+    assert chi_cells == 0
+    assert chi_cells == chi_betti
+
+    # 4. A sphere (boundary of a tetrahedron, S^2)
+    sc_s2 = SimplicialComplex.from_maximal_simplices([(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)])
+    cc_s2 = sc_s2.chain_complex()
+    chi_cells = cc_s2.euler_characteristic()
+    betti = cc_s2.betti_numbers()
+    chi_betti = sum((-1)**n * b for n, b in betti.items())
+    assert chi_cells == 2
+    assert chi_cells == chi_betti
+
+    # 5. A Torus (T^2) via CW complex model
+    # T^2 = 1 vertex, 2 edges (a, b), 1 face (aba^-1b^-1)
+    # d1: Z^2 -> Z^1 is zero (all edges start/end at same vertex)
+    # d2: Z^1 -> Z^2 is zero (a+b-a-b = 0)
+    d1 = sp.csr_matrix((1, 2), dtype=np.int64)
+    d2 = sp.csr_matrix((2, 1), dtype=np.int64)
+    cw_torus = CWComplex(
+        cells={0: 1, 1: 2, 2: 1},
+        attaching_maps={1: d1, 2: d2},
+        dimensions=[0, 1, 2]
+    )
+    cc_torus = cw_torus.cellular_chain_complex()
+    chi_cells = cc_torus.euler_characteristic()
+    betti = cc_torus.betti_numbers()
+    chi_betti = sum((-1)**n * b for n, b in betti.items())
+    assert chi_cells == 0 # 1 - 2 + 1
+    assert chi_cells == chi_betti
+
+
+def test_simplicial_complex_mathematical_validity():
+    # 1. Valid Sphere (Boundary of tetrahedron)
+    sc = SimplicialComplex.from_maximal_simplices([(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)])
+    v = sc.verify_structure()
+    assert v["valid"] is True
+    assert v["is_closed"] is True
+    assert v["is_canonical"] is True
+
+    # 2. Manual invalid construction: missing faces
+    # Constructing a 2-simplex manually without its edges in the field
+    sc_invalid = SimplicialComplex(simplices={0: [(0,), (1,), (2,)], 1: [], 2: [(0, 1, 2)]})
+    v_inv = sc_invalid.verify_structure()
+    assert v_inv["is_closed"] is False
+    assert v_inv["valid"] is False
+    assert any("Downward closure" in issue for issue in v_inv["issues"])
+
+    # 3. Boundary consistency d^2 = 0 check on a 3-manifold
+    # A single tetrahedron
+    sc_tetra = SimplicialComplex.from_maximal_simplices([(0, 1, 2, 3)])
+    v_tetra = sc_tetra.verify_structure()
+    assert v_tetra["valid"] is True
+    
+    # Check d1 * d2 = 0
+    d1 = sc_tetra.boundary_matrix(1).toarray()
+    d2 = sc_tetra.boundary_matrix(2).toarray()
+    np.testing.assert_array_equal(d1 @ d2, 0)
+
+    # Check d2 * d3 = 0
+    d3 = sc_tetra.boundary_matrix(3).toarray()
+    np.testing.assert_array_equal(d2 @ d3, 0)
+
+
+def test_quick_mapper_validity_and_euler():
+    """
+    Test quick_mapper on a mid-size complex (100 vertices), 
+    verify its structural validity and Euler-Poincaré consistency.
+    """
+    import random
+    np.random.seed(42)
+    random.seed(42)
+
+    # 1. Generate a random geometric graph complex
+    n_vertices = 100
+    points = np.random.rand(n_vertices, 2)
+    
+    # Simple proximity-based edges
+    edges = []
+    threshold = 0.15
+    for i in range(n_vertices):
+        for j in range(i + 1, n_vertices):
+            if np.linalg.norm(points[i] - points[j]) < threshold:
+                edges.append((i, j))
+    
+    sc_orig = SimplicialComplex.from_simplices(edges, close_under_faces=True)
+    
+    # 2. Run quick_mapper to simplify the topology
+    # We use preserve_topology=True to ensure Betti numbers (and thus Chi) remain the same
+    # though the complex will have fewer vertices/edges.
+    sc_simple = sc_orig.quick_mapper(max_loops=2, preserve_topology=True)
+    
+    # 3. Verify mathematical validity
+    validity = sc_simple.verify_structure()
+    assert validity["valid"], f"QuickMapper produced invalid complex: {validity['issues']}"
+    assert validity["is_closed"] is True
+    assert validity["is_canonical"] is True
+
+    # 4. Verify Euler-Poincaré Formula: Chi(cells) == Chi(Betti)
+    cc = sc_simple.chain_complex()
+    chi_cells = cc.euler_characteristic()
+    
+    betti = cc.betti_numbers()
+    chi_betti = sum((-1)**n * b for n, b in betti.items())
+    
+    assert chi_cells == chi_betti, f"Euler formula failed: {chi_cells} != {chi_betti}"
+
+    # 5. If preserve_topology was True, it should match original Chi
+    chi_orig = sc_orig.chain_complex().euler_characteristic()
+    assert chi_cells == chi_orig, f"Topology not preserved: simplified Chi {chi_cells} != original Chi {chi_orig}"
+
+
+def test_simplicial_complex_expand():
+    # 1. Test on a cycle (S^1 skeleton)
+    # A 4-cycle should NOT gain any 2-simplices when expanded, 
+    # because it has no 3-cliques.
+    edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
+    sc = SimplicialComplex.from_simplices(edges)
+    sc_expanded = sc.expand(max_dim=2)
+    
+    assert sc_expanded.count_simplices(2) == 0
+    assert sc_expanded.chain_complex().homology(1)[0] == 1 # Still a cycle
+
+    # 2. Test on a complete graph K_4
+    # A K_4 should expand into a full tetrahedron (one 3-simplex, four 2-simplices, etc.)
+    k4_edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    sc_k4 = SimplicialComplex.from_simplices(k4_edges)
+    sc_tetra = sc_k4.expand(max_dim=3)
+    
+    assert sc_tetra.count_simplices(3) == 1
+    assert sc_tetra.count_simplices(2) == 4
+    assert sc_tetra.count_simplices(1) == 6
+    assert sc_tetra.count_simplices(0) == 4
+    
+    inv = sc_tetra.chain_complex().topological_invariants()
+    assert inv["betti_numbers"][0] == 1
+    assert inv["betti_numbers"][1] == 0
+    assert inv["betti_numbers"][2] == 0
+    assert inv["betti_numbers"][3] == 0
+    assert inv["euler_characteristic"] == 1 # Contractible
+
+
+def test_simplicial_complex_expand_default_max_dim():
+    # K_3 triangle graph
+    edges = [(0, 1), (1, 2), (2, 0)]
+    sc = SimplicialComplex.from_simplices(edges)
+    
+    # Expand without citing max_dim
+    # Default should be max_v = 2
+    sc_expanded = sc.expand()
+    
+    assert sc_expanded.count_simplices(2) == 1
+    assert sc_expanded.dimension == 2
+    assert sc_expanded.verify_structure()["valid"] is True
+
+

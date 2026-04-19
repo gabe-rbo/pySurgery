@@ -565,6 +565,10 @@ function compute_boundary_payload_from_flat_simplices(flat_vertices::AbstractVec
     return _compute_boundary_data_internal_flat(flat_vertices, simplex_offsets, max_dim)
 end
 
+function compute_boundary_data_from_simplices_jl(simplex_entries, max_dim::Int)
+    return _compute_boundary_data_internal(simplex_entries, max_dim)
+end
+
 function _normalize_group_ring_coeffs(coeffs_any)
     raw = coeffs_any isa AbstractDict ? coeffs_any : pyconvert(Dict{Any, Any}, coeffs_any)
     out = Dict{Any, Int}()
@@ -695,9 +699,14 @@ function _to_vertices_simplex(s)
     elseif s isa AbstractVector
         return [Int64(x) for x in s]
     elseif s isa Py
-        # Convert Py list to Julia Vector
-        return pyconvert(Vector{Int64}, s)
+        try
+            return pyconvert(Vector{Int64}, s)
+        catch
+            # Handle possible Py list of different numeric types
+            return Int64[pyconvert(Int64, x) for x in s]
+        end
     else
+        # println("DEBUG: unknown type $(typeof(s)) for simplex entry $s")
         return Int64[]
     end
 end
@@ -754,7 +763,9 @@ function _compute_boundary_data_internal(simplex_entries, max_dim::Int)
     for d in 0:max_dim; dim_simplices[d] = Set{Tuple{Vararg{Int64}}}(); end
     
     for s in simplex_entries
+        println("DEBUG: processing entry $s of type $(typeof(s))")
         vs = _to_vertices_simplex(s)
+        println("DEBUG: got vs $vs")
         isempty(vs) && continue
         t = Tuple(sort(vec(collect(Int64.(vs)))))
         # Add all faces to ensure complete skeleton
@@ -1557,7 +1568,12 @@ end
 Enumerate all cliques up to size `max_dim + 1` from a sparse adjacency matrix.
 Uses a simple backtracking DFS (Bron-Kerbosch style without pivoting since max_dim is small).
 """
-function enumerate_cliques_sparse(rowptr::AbstractVector{Int64}, colval::AbstractVector{Int64}, n_vertices::Int, max_dim::Int)
+function enumerate_cliques_sparse(rowptr_raw, colval_raw, n_vertices_raw, max_dim_raw)
+    rowptr = pyconvert(Vector{Int64}, rowptr_raw)
+    colval = pyconvert(Vector{Int64}, colval_raw)
+    n_vertices = pyconvert(Int, n_vertices_raw)
+    max_dim = pyconvert(Int, max_dim_raw)
+    
     cliques = Vector{Vector{Int64}}()
     
     # Adjacency check function for sorted neighbor lists
@@ -1921,6 +1937,105 @@ end
     GC.gc()
 end
 
+
+
+"""
+    compute_alpha_complex_simplices_jl(points, max_simplices, alpha2, max_dim)
+
+Filter Delaunay simplices by circumradius and perform skeletal closure natively.
+Handles N-dimensional point clouds with robust linear circumradius solvers.
+"""
+function compute_alpha_complex_simplices_jl(
+    points::AbstractMatrix{Float64},
+    max_simplices::AbstractMatrix{Int64},
+    alpha2::Float64,
+    max_dim::Int
+)
+    n_pts, dim_pts = size(points)
+    n_max = size(max_simplices, 1)
+    # The Delaunay simplices have dim_pts + 1 vertices
+    # max_simplices is (M, D+1) where D = dim_pts
+    
+    valid_simplices = Set{Vector{Int64}}()
+    
+    # Pre-solve circumradii for maximal simplices
+    # We use a helper for circumradius to avoid code duplication
+    function get_r2(simplex_indices)
+        # simplex_indices are 0-based from Python
+        k = length(simplex_indices)
+        if k == 1
+            return 0.0
+        end
+        if k == 2
+            u, v = simplex_indices[1]+1, simplex_indices[2]+1
+            d2 = 0.0
+            for i in 1:dim_pts
+                d2 += (points[u, i] - points[v, i])^2
+            end
+            return d2 / 4.0
+        end
+        
+        # General N-dim case
+        p0 = @view points[simplex_indices[1]+1, :]
+        # A is (k-1) x dim_pts
+        A = zeros(Float64, k-1, dim_pts)
+        b = zeros(Float64, k-1)
+        for i in 2:k
+            pi = @view points[simplex_indices[i]+1, :]
+            for j in 1:dim_pts
+                A[i-1, j] = pi[j] - p0[j]
+            end
+            b[i-1] = 0.5 * sum(abs2, pi .- p0)
+        end
+        
+        try
+            # For non-maximal faces, A might not be square (k-1 < dim_pts)
+            # A \ b in Julia handles the over/underdetermined cases via QR/SVD
+            c = A \ b
+            return sum(abs2, c)
+        catch
+            return Inf
+        end
+    end
+
+    # Track maximal simplices that already passed
+    for i in 1:n_max
+        s = vec(max_simplices[i, :])
+        if get_r2(s) <= alpha2
+            # Add all sub-faces recursively (combinatorial closure)
+            sorted_s = sort(s)
+            for r in 1:length(sorted_s)
+                for face in combinations(sorted_s, r)
+                    push!(valid_simplices, collect(Int64.(face)))
+                end
+            end
+        else
+            # Maximal simplex failed, but its sub-faces might still pass
+            # We must check lower-dimensional faces
+            sorted_s = sort(s)
+            # Optimization: vertices always pass (r2=0)
+            for v in sorted_s
+                push!(valid_simplices, [v])
+            end
+            # Check edges, triangles, etc. up to max_dim
+            for r in 2:min(length(sorted_s)-1, max_dim+1)
+                for face in combinations(sorted_s, r)
+                    if get_r2(face) <= alpha2
+                        # If face passes, add it and all its sub-faces
+                        for r_sub in 1:length(face)
+                            for sub_f in combinations(face, r_sub)
+                                push!(valid_simplices, collect(Int64.(sub_f)))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    # Return as a list of vectors for easy Python consumption
+    return collect(valid_simplices)
+end
 
 
 function quick_mapper_jl(G_raw_py::Py, max_loops::Int=1, min_modularity_gain::Float64=1e-6)

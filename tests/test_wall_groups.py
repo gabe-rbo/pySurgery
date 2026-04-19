@@ -86,10 +86,10 @@ def test_wall_group_typed_result_uncomputable_product_case():
     wg = WallGroupL(dimension=8, pi=gp)
     res = wg.compute_obstruction_result()
     assert not res.computable
-    assert "surrogate decomposition" in res.message
+    assert "Künneth-type assembly map approximation" in res.message
     assert res.factor_analysis
     assert len(res.summands) >= 1
-    assert res.decomposition_kind == "factor_surrogate"
+    assert res.decomposition_kind == "assembly_kunneth_sum"
     assert not res.assembly_certified
 
 
@@ -115,7 +115,7 @@ def test_wall_group_generalized_shaneson_returns_computable_direct_sum_summands(
     res = wg.compute_obstruction_result(q_form)
     assert res.computable
     assert res.value is None
-    assert "direct-sum" in res.message
+    assert "Shaneson decomposition" in res.message
     assert len(res.summands) == 3
     assert any(s["modulus"] == 2 for s in res.summands)
     assert any(s["modulus"] is None for s in res.summands)

@@ -772,10 +772,10 @@ class JuliaBridge:
         self, simplex_entries: list, max_dim: int
     ) -> tuple[dict, dict, dict, dict]:
         """Build boundary COO payloads and simplex tables through Julia for large simplicial workloads."""
-        result = self.compute_boundary_payload_from_simplices(
+        self.require_julia()
+        result = self.backend.compute_boundary_data_from_simplices_jl(
             simplex_entries,
-            max_dim,
-            include_metadata=True,
+            int(max_dim),
         )
 
         boundaries_jl, cells_jl, dim_simplices_jl, simplex_to_idx_jl = result
@@ -793,14 +793,20 @@ class JuliaBridge:
 
         cells_py = {int(k): int(v) for k, v in dict(cells_jl).items()}
 
-        # dim_simplices_jl is now returning matrices for each dimension
+        # dim_simplices_jl can return matrices (d+1, N) or lists of tuples
         dim_simplices_py = {}
-        for k, matrix in dict(dim_simplices_jl).items():
+        for k, val in dict(dim_simplices_jl).items():
             kk = int(k)
-            # matrix is (d+1, N)
-            dim_simplices_py[kk] = [
-                tuple(int(x) for x in matrix[:, j]) for j in range(matrix.shape[1])
-            ]
+            if hasattr(val, "shape") and len(val.shape) == 2:
+                # val is (d+1, N)
+                dim_simplices_py[kk] = [
+                    tuple(int(x) for x in val[:, j]) for j in range(val.shape[1])
+                ]
+            else:
+                # val is a sequence of tuples/vectors
+                dim_simplices_py[kk] = [
+                    tuple(int(x) for x in s) for s in val
+                ]
 
         simplex_to_idx_py = {
             int(k): {
@@ -932,17 +938,15 @@ class JuliaBridge:
 
 
     def enumerate_cliques_sparse(self, rowptr: np.ndarray, colval: np.ndarray, n_vertices: int, max_dim: int) -> list:
-        if not self.available:
-            raise RuntimeError("Julia backend unavailable.")
+        self.require_julia()
         try:
             res = self.backend.enumerate_cliques_sparse(
-                np.asarray(rowptr, dtype=np.int64),
-                np.asarray(colval, dtype=np.int64),
+                rowptr,
+                colval,
                 int(n_vertices),
                 int(max_dim)
             )
-            from juliacall import convert
-            return [list(convert(list, c)) for c in res]
+            return [[int(x) for x in c] for c in res]
         except Exception as e:
             raise RuntimeError(f"enumerate_cliques_sparse failed: {e!r}")
 
@@ -969,6 +973,24 @@ class JuliaBridge:
             return np.array(res, dtype=np.float64)
         except Exception as e:
             raise RuntimeError(f"compute_circumradius_sq_2d failed: {e!r}")
+
+    def compute_alpha_complex_simplices(
+        self,
+        points: np.ndarray,
+        max_simplices: np.ndarray,
+        alpha2: float,
+        max_dim: int,
+    ) -> list[tuple[int, ...]]:
+        """Compute filtered Alpha Complex simplices via Julia backend."""
+        self.require_julia()
+        res = self.backend.compute_alpha_complex_simplices_jl(
+            np.asarray(points, dtype=np.float64),
+            np.asarray(max_simplices, dtype=np.int64),
+            float(alpha2),
+            int(max_dim),
+        )
+        # res is Vector{Vector{Int64}} from Julia
+        return [tuple(int(x) for x in s) for s in res]
 
     def quick_mapper_jl(self, G_raw: dict, max_loops: int = 1, min_modularity_gain: float = 1e-6) -> tuple[dict, dict]:
         """

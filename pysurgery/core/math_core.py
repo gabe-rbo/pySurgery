@@ -86,51 +86,18 @@ def get_sparse_snf_diagonal(A_sparse, allow_approx: bool = False) -> np.ndarray:
                 A_coo.row, A_coo.col, A_coo.data, A_sparse.shape
             )
         except Exception as e:
-            if allow_approx:
-                msg = (
-                    f"Topological Hint: Julia backend failed ({e!r}). Falling back to floating-point SVD for sparse SNF. "
-                    "This estimates free ranks but misses exact Z-torsion."
-                )
-                warnings.warn(msg)
-            else:
-                msg = f"Topological Hint: Julia backend failed ({e!r}). Falling back to exact Python/SymPy SNF (slower)."
-                warnings.warn(msg)
+            msg = f"Topological Hint: Julia backend failed ({e!r}). Falling back to exact Python/SymPy SNF (slower)."
+            warnings.warn(msg)
 
-    if not allow_approx:
-        return (
-            get_snf_diagonal(A_sparse.toarray())
-            if hasattr(A_sparse, "toarray")
-            else get_snf_diagonal(np.asarray(A_sparse))
+    if allow_approx:
+        raise ValueError(
+            "Mathematical Violation: `allow_approx=True` using floating-point SVD "
+            "destroys exact integer torsion required for surgery obstructions. "
+            "Use exact solvers or switch the complex to coefficient_ring='Q' if torsion data is not required."
         )
 
-    A_float = A_sparse.astype(float)
-    min_dim = min(m, n)
-    try:
-        if min_dim <= 500:
-            import scipy.linalg as la
-
-            s = la.svdvals(A_float.toarray())
-            tol = max(m, n) * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
-            rank = int(np.sum(s > tol))
-            return np.ones(rank, dtype=np.int64)
-
-        k_svd = min(min_dim - 1, 500)
-        if k_svd <= 0:
-            return np.array([], dtype=np.int64)
-
-        u, s, vt = spla.svds(A_float, k=k_svd, which="LM")
-        tol = max(m, n) * np.finfo(float).eps * max(s) if len(s) > 0 else 1e-10
-        rank = int(np.sum(s > tol))
-        if min_dim > k_svd:
-            warnings.warn(
-                "Topological Hint: Sparse SVD fallback sampled only part of the spectrum. "
-                "Computed rank is a lower bound and torsion is unavailable without exact Julia SNF."
-            )
-        return np.ones(rank, dtype=np.int64)
-    except Exception as e:
-        msg = (
-            f"Topological Hint: Sparse SVD failed to converge ({e!r}). "
-            "The boundary matrix may be too degenerate. Assuming 0 free rank."
-        )
-        warnings.warn(msg)
-        return np.array([], dtype=np.int64)
+    return (
+        get_snf_diagonal(A_sparse.toarray())
+        if hasattr(A_sparse, "toarray")
+        else get_snf_diagonal(np.asarray(A_sparse))
+    )

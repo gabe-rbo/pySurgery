@@ -1071,6 +1071,69 @@ def _search_integer_isometry(
     return None
 
 
+def analyze_homeomorphism_1d_result(
+    c1: ChainComplex,
+    c2: ChainComplex,
+    allow_approx: bool = False,
+) -> HomeomorphismResult:
+    """
+    Analyzes the potential for homeomorphism between two 1-dimensional manifolds.
+    
+    All closed 1-manifolds are disjoint unions of circles (S^1).
+    Two closed 1-manifolds are homeomorphic if and only if they have the same
+    number of components (rank of H_0).
+    """
+    try:
+        h0_1 = c1.homology(0)
+        h0_2 = c2.homology(0)
+        h1_1 = c1.homology(1)
+        h1_2 = c2.homology(1)
+    except Exception as e:
+        if allow_approx:
+             warnings.warn(f"1D homology extraction failed: {e}. Inconclusive result.")
+        return HomeomorphismResult(
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning=f"INCONCLUSIVE: Homology extraction failed for 1D analysis: {e}",
+            missing_data=["H_0", "H_1"],
+        )
+
+    # For a connected closed 1-manifold (S^1), H_0 = Z and H_1 = Z.
+    # For k components, H_0 = Z^k and H_1 = Z^k.
+    if h0_1 != h0_2:
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning=f"IMPEDIMENT: Number of components (H_0 rank) differs: {h0_1[0]} vs {h0_2[0]}.",
+            evidence=[f"H_0_1={h0_1}", f"H_0_2={h0_2}"],
+        )
+    
+    if h1_1 != h1_2:
+        return HomeomorphismResult(
+            status="impediment",
+            is_homeomorphic=False,
+            reasoning=f"IMPEDIMENT: First homology (H_1) differs: {h1_1} vs {h1_2}.",
+            evidence=[f"H_1_1={h1_1}", f"H_1_2={h1_2}"],
+        )
+
+    return HomeomorphismResult(
+        status="success",
+        is_homeomorphic=True,
+        reasoning="SUCCESS: 1-manifolds are homeomorphic (same number of S^1 components).",
+        theorem="Classification of 1-Manifolds",
+        evidence=[f"H_0 match (rank={h0_1[0]})", f"H_1 match (rank={h1_1[0]})"],
+    )
+
+def analyze_homeomorphism_1d(
+    c1: ChainComplex,
+    c2: ChainComplex,
+    allow_approx: bool = False,
+) -> Tuple[bool | None, str]:
+    return analyze_homeomorphism_1d_result(
+        c1, c2, allow_approx=allow_approx
+    ).to_legacy_tuple()
+
+
 def analyze_homeomorphism_2d_result(
     c1: ChainComplex,
     c2: ChainComplex,

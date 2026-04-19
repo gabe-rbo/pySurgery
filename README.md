@@ -106,7 +106,7 @@ The bridge will automatically detect the Julia environment and distribute SNF an
 
 ## Documentation and Examples
 
-For comprehensive theoretical backgrounds and executable pipelines, refer to the tutorial notebooks located in `examples/pipeline_v2/`. 
+For comprehensive theoretical backgrounds and executable pipelines, refer to the tutorial notebooks located in `examples/`. 
 
 The curriculum covers:
 1. Exact algebra and chain complexes from scratch.
