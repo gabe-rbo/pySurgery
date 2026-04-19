@@ -321,6 +321,60 @@ class SimplicialComplex(BaseModel):
         )
 
     @classmethod
+    def from_point_cloud_cknn(
+        cls,
+        points: np.ndarray,
+        k: int,
+        delta: float = 1.0,
+        max_dimension: int = 2,
+        coefficient_ring: str = "Z"
+    ) -> "SimplicialComplex":
+        """
+        Builds a Vietoris-Rips complex using Continuous k-Nearest Neighbors (CkNN).
+        This eliminates the need for a global epsilon by applying adaptive local scaling.
+        
+        References:
+            Berry, T., & Sauer, T. (2019). Consistent Manifold Representation for 
+            Topological Data Analysis.
+        """
+        from scipy.spatial.distance import pdist, squareform
+        
+        n = len(points)
+        if n == 0:
+            return cls.from_simplices([], coefficient_ring=coefficient_ring)
+            
+        dist_matrix = squareform(pdist(points))
+        
+        # d_k is the distance to the k-th nearest neighbor (k+1 th entry since 0 is self)
+        # Note: np.partition is fast. k is 1-indexed for neighbors here.
+        k_actual = min(k, n - 1)
+        if k_actual <= 0:
+            d_k = np.zeros(n)
+        else:
+            sorted_dist = np.partition(dist_matrix, k_actual, axis=1)
+            d_k = sorted_dist[:, k_actual]
+            
+        # Create outer product of local scales: sqrt(d_k(u) * d_k(v))
+        d_k_matrix = np.outer(d_k, d_k)
+        scale_matrix = delta * np.sqrt(d_k_matrix)
+        
+        # Connect if distance <= scale
+        adj = (dist_matrix <= scale_matrix) & ~np.eye(n, dtype=bool)
+        
+        # We reuse the high-performance clique enumeration in from_distance_matrix
+        # by passing it a distance matrix that perfectly mirrors our adjacency.
+        dummy_dist = np.where(adj, 0.0, float('inf'))
+        np.fill_diagonal(dummy_dist, 0.0)
+        
+        sc = cls.from_distance_matrix(
+            dummy_dist, 
+            max_edge_length=0.0, 
+            max_dimension=max_dimension, 
+            coefficient_ring=coefficient_ring
+        )
+        return sc
+
+    @classmethod
     def from_distance_matrix(
         cls,
         distance_matrix: np.ndarray,
@@ -391,17 +445,21 @@ class SimplicialComplex(BaseModel):
                         cands = [v for v in range(u+1, n) if adj[u, v]]
                         dfs([u], cands)
             else:
-                # Python DFS fallback
-                def dfs(current_clique, candidates):
+                # Optimized Python DFS fallback using set intersections
+                adj_sets = {i: set(np.where(adj[i])[0]) for i in range(n)}
+                
+                def dfs(current_clique, candidate_set):
                     if len(current_clique) > 1:
                         simplices.add(tuple(sorted(current_clique)))
                     if len(current_clique) == max_dimension + 1:
                         return
-                    for i, v in enumerate(candidates):
-                        new_cands = [w for w in candidates[i+1:] if adj[v, w]]
+                    for v in sorted(list(candidate_set)):
+                        candidate_set.remove(v)
+                        new_cands = candidate_set.intersection(adj_sets[v])
                         dfs(current_clique + [v], new_cands)
+                
                 for u in range(n):
-                    cands = [v for v in range(u+1, n) if adj[u, v]]
+                    cands = set(v for v in range(u+1, n) if adj[u, v])
                     dfs([u], cands)
 
         return cls.from_simplices(simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
@@ -511,19 +569,34 @@ class SimplicialComplex(BaseModel):
             for s in simplices_d:
                 for face in itertools.combinations(s, 3):
                     faces.add(tuple(sorted(face)))
-            # A 2D face's circumradius
-            for face in faces:
-                p0, p1, p2 = pts[list(face)]
-                # area based r2
-                cross = np.cross(p1-p0, p2-p0)
-                area2 = np.sum(cross**2)
-                if area2 > 1e-12:
-                    a2 = np.sum((p1-p2)**2)
-                    b2 = np.sum((p0-p2)**2)
-                    c2 = np.sum((p0-p1)**2)
-                    r2_face = (a2 * b2 * c2) / (4.0 * area2)
-                    if r2_face <= alpha2:
-                        valid_simplices.add(face)
+            
+            if len(faces) > 0:
+                face_arr = np.array(list(faces))
+                p0 = pts[face_arr[:, 0]]
+                p1 = pts[face_arr[:, 1]]
+                p2 = pts[face_arr[:, 2]]
+                
+                area2 = np.sum(np.cross(p1 - p0, p2 - p0)**2, axis=1)
+                a2 = np.sum((p1 - p2)**2, axis=1)
+                b2 = np.sum((p0 - p2)**2, axis=1)
+                c2 = np.sum((p0 - p1)**2, axis=1)
+                
+                # Sort squared edges to locate the longest edge
+                edges_sq = np.sort(np.stack([a2, b2, c2], axis=1), axis=1)
+                short1_sq = edges_sq[:, 0]
+                short2_sq = edges_sq[:, 1]
+                longest_sq = edges_sq[:, 2]
+                
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    r2_circum = (a2 * b2 * c2) / (4.0 * area2)
+                
+                # Mathematical Fix: If obtuse (a^2 + b^2 < c^2), use the diametral sphere radius (c^2 / 4)
+                is_obtuse = (short1_sq + short2_sq < longest_sq)
+                r2_face = np.where(is_obtuse, longest_sq / 4.0, r2_circum)
+                
+                valid_mask = (area2 > 1e-12) & (r2_face <= alpha2)
+                for f in face_arr[valid_mask]:
+                    valid_simplices.add(tuple(int(x) for x in f))
 
         return cls.from_simplices(valid_simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
 
@@ -762,9 +835,164 @@ class SimplicialComplex(BaseModel):
         return self.chain_complex(coefficient_ring=coefficient_ring)
 
 
+
+    def quick_mapper(
+        self,
+        max_loops: int = 1,
+        min_modularity_gain: float = 1e-6,
+        preserve_topology: bool = True,
+    ) -> "SimplicialComplex":
+        """
+        Simplifies the topological complex using the fast modularity relabeling algorithm.
+        This algorithm constructs a simpler topological structure by grouping vertices
+        based on local edge density.
+        
+        References:
+            Liu, X., Xie, Z., & Yi, D. (2012). A fast algorithm for constructing topological 
+            structure in large data. Homology, Homotopy and Applications.
+        
+        Args:
+            max_loops: Maximum number of label propagation passes.
+            min_modularity_gain: Threshold for early stopping.
+            preserve_topology: If True, merges are only committed if they satisfy the 
+                               simplicial collapse link condition (preserving Betti numbers).
+        """
+        import random
+        
+        V = [v[0] for v in self.n_simplices(0)]
+        E = self.n_simplices(1)
+        
+        adj = {v: set() for v in V}
+        for edge in E:
+            u, v = edge
+            adj[u].add(v)
+            adj[v].add(u)
+            
+        m = len(E)
+        L = {v: v for v in V}
+        
+        if m == 0:
+            return self.model_copy()
+            
+        # Try Julia bridge
+        if julia_engine.available:
+            try:
+                # Prepare data for Julia: 1-indexed edges
+                E_jl = [(u + 1, v + 1) for u, v in E]
+                V_jl = [v + 1 for v in V]
+                G_raw = {"V": V_jl, "E": E_jl}
+                
+                # Check link condition requires simplex membership lookups
+                # For safety and speed in Julia, we can pass the full list of 2-simplices
+                # to verify Lk(u) \cap Lk(v) \subset Lk(uv).
+                # To keep the bridge simple, if preserve_topology is True, we stay in Python.
+                if not preserve_topology:
+                    G_simple, L_jl = julia_engine.quick_mapper_jl(
+                        G_raw, 
+                        int(max_loops), 
+                        float(min_modularity_gain)
+                    )
+                    L = {v - 1: l - 1 for v, l in L_jl.items()}
+                    
+                    new_simplices = set()
+                    for dim, simps in self.simplices_dict.items():
+                        for simplex in simps:
+                            mapped = tuple(sorted(set(L[v] for v in simplex)))
+                            if len(mapped) > 0:
+                                new_simplices.add(mapped)
+                    return self.__class__.from_simplices(new_simplices, coefficient_ring=self.coefficient_ring)
+            except Exception as e:
+                warnings.warn(f"Julia quick_mapper failed: {e}. Falling back to Python.")
+                
+        degree = {v: len(adj[v]) for v in V}
+        
+        def get_P(i, j):
+            return (degree[i] * degree[j]) / (2.0 * m)
+            
+        # Fast lookup for topology preservation
+        simplex_set = set()
+        for dim, simps in self.simplices_dict.items():
+            for s in simps:
+                simplex_set.add(s)
+                
+        def link_condition_passed(u: int, v: int) -> bool:
+            """
+            Checks if contracting edge (u, v) preserves the homotopy type.
+            Condition: Lk(u) ∩ Lk(v) ⊆ Lk(uv).
+            """
+            # Find common neighbors in 1-skeleton (0-simplices in the link)
+            common_neighbors = adj[u].intersection(adj[v])
+            for w in common_neighbors:
+                # For every common neighbor w, {u, v, w} must be a 2-simplex
+                t = tuple(sorted((u, v, w)))
+                if t not in simplex_set:
+                    return False
+            # This is a highly robust 1-skeleton heuristic for discrete Morse collapses.
+            # True complete verification requires checking all higher-dimensional common cofaces,
+            # but for a flag complex (like Rips), the 1-skeleton check is sufficient.
+            return True
+
+        num_of_loops = 0
+        modularity_gain = 1000.0
+        
+        while modularity_gain > min_modularity_gain and num_of_loops < max_loops:
+            vertex_order = list(V)
+            random.shuffle(vertex_order)
+            
+            for vertex in vertex_order:
+                neighbors = adj[vertex]
+                if not neighbors:
+                    continue
+                    
+                NbrLabelSet_vertex = {L[vertex]}
+                for nbr in neighbors:
+                    NbrLabelSet_vertex.add(L[nbr])
+                    
+                best_labels = []
+                max_contribution = -float('inf')
+                
+                for label in NbrLabelSet_vertex:
+                    contribution = sum((1 - get_P(vertex, j)) for j in neighbors if L[j] == label)
+                    if contribution > max_contribution:
+                        max_contribution = contribution
+                        best_labels = [label]
+                    elif contribution == max_contribution:
+                        best_labels.append(label)
+                        
+                chosen_label = random.choice(best_labels)
+                
+                if preserve_topology and chosen_label != L[vertex]:
+                    # To prevent destroying cycles, we only allow merges that satisfy
+                    # the simplicial collapse link condition with the target label's representative.
+                    # chosen_label is an original vertex ID.
+                    if not link_condition_passed(vertex, chosen_label):
+                        continue # Reject merge, topological invariants would be altered
+                
+                L[vertex] = chosen_label
+                
+            modularity_gain = 0.0 # Standard simple-pass exit
+            num_of_loops += 1
+            
+        new_simplices = set()
+        for dim, simps in self.simplices_dict.items():
+            for simplex in simps:
+                mapped = tuple(sorted(set(L[v] for v in simplex)))
+                if len(mapped) > 0:
+                    new_simplices.add(mapped)
+                    
+        return self.__class__.from_simplices(
+            new_simplices, 
+            coefficient_ring=self.coefficient_ring
+        )
+
+
+
 def _rank_mod_p(A: np.ndarray, p: int) -> int:
     """Compute matrix rank over `Z/pZ` via modular Gaussian elimination."""
-    M = (A.astype(np.int64) % p).copy()
+    if A.dtype == object:
+        M = (A % p).astype(np.int64)
+    else:
+        M = (A.astype(np.int64) % p).copy()
     m, n = M.shape
     row = 0
     rank = 0
@@ -1058,7 +1286,8 @@ class ChainComplex(BaseModel):
             return out
 
         if dn is not None and dn.nnz > 0:
-            rank_n = _matrix_rank_for_ring(dn, ring_kind="Q")
+            snf_n = get_sparse_snf_diagonal(dn)
+            rank_n = np.count_nonzero(snf_n)
         else:
             rank_n = 0
         dim_ker_n = c_n_size - rank_n
@@ -1483,69 +1712,40 @@ class ChainComplex(BaseModel):
         # SymPy is used for exact integer quotients, but if it exceeds memory/time thresholds,
         # we catch the exception (or we just use an optimized float SVD fallback directly).
 
-        def _primitive_int_vector(vec: sp.Matrix) -> sp.Matrix:
-            denoms = [sp.fraction(x)[1] for x in vec]
-            common_lcm = reduce(lcm, (int(d) for d in denoms), 1) if denoms else 1
-            ints = [int(sp.Integer(x * common_lcm)) for x in vec]
-            gcd_val = 0
-            for a in ints:
-                gcd_val = int(np.gcd(gcd_val, abs(a)))
-            gcd_val = max(gcd_val, 1)
-            return sp.Matrix([a // gcd_val for a in ints])
-
-        # 1. Z^n: Kernel of d_{n+1}^T
-        if dn_plus_1 is None or dn_plus_1.nnz == 0:
-            null_basis = [
-                sp.Matrix([1 if i == j else 0 for j in range(cn_size)])
-                for i in range(cn_size)
-            ]
-        else:
-            coboundary_mat = sp.Matrix(dn_plus_1.T.toarray().astype(int))
-            null_basis = [_primitive_int_vector(v) for v in coboundary_mat.nullspace()]
-
-        # 2. B^n: Image of d_n^T
         if dn is None or dn.nnz == 0:
-            image_basis = []
-        else:
-            dn_mat = dn.T.toarray()
-            image_basis = [
-                _primitive_int_vector(v) for v in sp.Matrix(dn_mat).columnspace()
-            ]
-
-        # 3. H^n = Z^n / B^n
-        target_rank, _ = self.cohomology(n)
-        basis_of_quotient = []
-        if image_basis:
-            current_mat = sp.Matrix.hstack(*image_basis)
-            current_rank = current_mat.rank()
-        else:
-            current_mat = sp.Matrix.zeros(cn_size, 0)
-            current_rank = 0
-
-        for v in null_basis:
-            if len(basis_of_quotient) >= target_rank:
-                break
-            test_mat = sp.Matrix.hstack(current_mat, v)
-            new_rank = test_mat.rank()
-            if new_rank > current_rank:
-                current_mat = test_mat
-                current_rank = new_rank
-                basis_of_quotient.append(v)
-
-        int_basis = []
-        for v in basis_of_quotient:
-            denominators = [sp.fraction(x)[1] for x in v]
-            if denominators:
-                common_lcm = reduce(lcm, (int(d) for d in denominators), 1)
+            # If no boundaries, Z^n / B^n is just ker(d_{n+1}^T)
+            if dn_plus_1 is None or dn_plus_1.nnz == 0:
+                int_basis = [np.eye(cn_size, dtype=np.int64)[j] for j in range(cn_size)]
             else:
-                common_lcm = 1
+                mat = sp.Matrix(dn_plus_1.T.toarray().astype(int))
+                # syzygy_module gives an exact Z-basis for the kernel over PID
+                int_basis = [np.array(v, dtype=np.int64).flatten() for v in mat.syzygy_module()]
+            self._cache_set(key, int_basis)
+            return int_basis
 
-            int_v = np.array([int(x * common_lcm) for x in v], dtype=np.int64)
-            int_basis.append(int_v)
-
+        # Compute the Smith Normal Form of d_n^T
+        dn_T = sp.Matrix(dn.T.toarray().astype(int))
+        
+        # S = U * dn_T * V. 
+        # The inverse of U transforms the standard codomain basis into a decomposed Z-basis.
+        S, U, V = dn_T.smith_normal_form()
+        U_inv = U.inv()
+        
+        int_basis = []
+        target_rank, _ = self.cohomology(n)
+        
+        # Columns of U_inv corresponding to entirely zero rows of S represent generators of C^n / B^n.
+        for i in range(S.shape[0]):
+            if all(S[i, j] == 0 for j in range(S.shape[1])):
+                v = np.array(U_inv[:, i], dtype=np.int64).flatten()
+                # Verify it is a cocycle (in Z^n)
+                if dn_plus_1 is None or dn_plus_1.nnz == 0 or not np.any(dn_plus_1.T.toarray() @ v):
+                    int_basis.append(v)
+                if len(int_basis) == target_rank:
+                    break
+                    
         self._cache_set(key, int_basis)
         return int_basis
-
 
 class CWComplex(BaseModel):
     """

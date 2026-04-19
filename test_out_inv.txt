@@ -1,0 +1,84 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0
+rootdir: /home/gabriel/Desktop/SurgeryTheory
+configfile: pyproject.toml
+plugins: hypothesis-6.151.10
+collected 1 item
+
+tests/test_quick_mapper.py F                                             [100%]
+
+=================================== FAILURES ===================================
+_________________________ test_quick_mapper_invariants _________________________
+
+    def test_quick_mapper_invariants():
+        # Construct a noisy topological circle (1D hole)
+        angles = np.linspace(0, 2*np.pi, 20, endpoint=False)
+        points = np.column_stack([np.cos(angles), np.sin(angles)])
+    
+        # Add some noise points around the circle to create "thickness"
+        np.random.seed(42)
+        noise = np.random.normal(0, 0.1, points.shape)
+        points = np.vstack([points, points + noise])
+    
+        # Build complex using CkNN
+        original_sc = SimplicialComplex.from_point_cloud_cknn(points, k=3, delta=1.5, max_dimension=2)
+    
+        # Verify the original complex has 1 connected component and 1 hole
+        assert original_sc.chain_complex().betti_number(0) == 1
+        assert original_sc.chain_complex().betti_number(1) == 1
+    
+        # Run QuickMapper with topology preservation
+        # Max loops 10 to ensure it converges
+>       simplified_sc = original_sc.quick_mapper(max_loops=10, min_modularity_gain=1e-6, preserve_topology=True)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_quick_mapper.py:38: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = SimplicialComplex(coefficient_ring='Z', filtration={}, simplices_field={0: [(0,), (1,), (2,), (3,), (4,), (5,), (6,), ... 36), (16, 36, 37), (17, 18, 37), (17, 18, 38), (17, 36, 37), (17, 37, 38), (18, 19, 39), (18, 37, 38), (19, 20, 39)]})
+item = 'quick_mapper'
+
+    def __getattr__(self, item: str) -> Any:
+        private_attributes = object.__getattribute__(self, '__private_attributes__')
+        if item in private_attributes:
+            attribute = private_attributes[item]
+            if hasattr(attribute, '__get__'):
+                return attribute.__get__(self, type(self))  # type: ignore
+    
+            try:
+                # Note: self.__pydantic_private__ cannot be None if self.__private_attributes__ has items
+                return self.__pydantic_private__[item]  # type: ignore
+            except KeyError as exc:
+                raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}') from exc
+        else:
+            # `__pydantic_extra__` can fail to be set if the model is not yet fully initialized.
+            # See `BaseModel.__repr_args__` for more details
+            try:
+                pydantic_extra = object.__getattribute__(self, '__pydantic_extra__')
+            except AttributeError:
+                pydantic_extra = None
+    
+            if pydantic_extra and item in pydantic_extra:
+                return pydantic_extra[item]
+            else:
+                if hasattr(self.__class__, item):
+                    return super().__getattribute__(item)  # Raises AttributeError if appropriate
+                else:
+                    # this is the current error
+>                   raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E                   AttributeError: 'SimplicialComplex' object has no attribute 'quick_mapper'
+
+.venv/lib/python3.12/site-packages/pydantic/main.py:1026: AttributeError
+=============================== warnings summary ===============================
+tests/test_quick_mapper.py::test_quick_mapper_invariants
+  /home/gabriel/Desktop/SurgeryTheory/pysurgery/core/complexes.py:434: UserWarning: Julia clique enumeration failed (RuntimeError('enumerate_cliques_sparse failed: JuliaError(<jl ErrorException("Expecting a \'juliacall.ValueBase\', got a \'type\'")>, <jl Union{Ptr{Nothing}, Base.InterpreterIP}[Ptr{Nothing} @0x0000725500d3a29e, Ptr{Nothing} @0x000072555b7da868, Ptr{Nothing} @0x000072555b7db9dc, Ptr{Nothing} @0x000072555b7dbd23, Ptr{Nothing} @0x00007254ba66d047, Ptr{Nothing} @0x00007254ba61e378, Ptr{Nothing} @0x00007254ba67bd17, Ptr{Nothing} @0x00007254ba676a43, Ptr{Nothing} @0x000000000055092b, Ptr{Nothing} @0x0000000000549974, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x000000000054a7c1, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x0000000000548f74, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x000000000054a889, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x000000000054903d, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x000000000054a889, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x000000000054b11b, Ptr{Nothing} @0x00000000005db0b9, Ptr{Nothing} @0x000000000054a889, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x000000000054903d, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x000000000054a889, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x000000000054903d, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x000000000054a889, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x000000000054903d, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x00000000005d543a, Ptr{Nothing} @0x00000000005d322b, Ptr{Nothing} @0x0000000000581d1c, Ptr{Nothing} @0x0000000000549974, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x00000000006bcb51, Ptr{Nothing} @0x00000000006bc781, Ptr{Nothing} @0x00000000006bc3ec, Ptr{Nothing} @0x0000725580a2a1c9, Ptr{Nothing} @0x0000725580a2a28a, Ptr{Nothing} @0x00000000006576c4]>)')). Falling back to DFS.
+    warnings.warn(f"Julia clique enumeration failed ({e!r}). Falling back to DFS.")
+
+tests/test_quick_mapper.py::test_quick_mapper_invariants
+  /home/gabriel/Desktop/SurgeryTheory/pysurgery/core/complexes.py:1261: UserWarning: Torsion certification may be incomplete for this complex; the sparse integer reduction returned only unit factors, so torsion could not be fully resolved.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_quick_mapper.py::test_quick_mapper_invariants - AttributeEr...
+======================== 1 failed, 2 warnings in 30.40s ========================

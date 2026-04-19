@@ -45,9 +45,16 @@ def smith_normal_form(A_in: np.ndarray) -> np.ndarray:
     This is the default exact backend used for homology/torsion computations.
     Returns only the diagonal matrix S such that S = U*A*V for unimodular U,V.
     """
-    A = sp.Matrix(np.asarray(A_in, dtype=np.int64))
+    if A_in.dtype != object and not np.issubdtype(A_in.dtype, np.integer):
+        A_in = np.asarray(A_in, dtype=object)
+
+    A = sp.Matrix(A_in)
     S = sympy_smith_normal_form(A, domain=sp.ZZ)
-    return np.array(S.tolist(), dtype=np.int64)
+    
+    try:
+        return np.array(S.tolist(), dtype=np.int64)
+    except OverflowError:
+        return np.array(S.tolist(), dtype=object)
 
 
 def get_snf_diagonal(A: np.ndarray) -> np.ndarray:

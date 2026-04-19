@@ -54,11 +54,7 @@ def cup_i_product(
     modulus: int | None = None,
 ) -> np.ndarray:
     """
-    Simplicial cup-i product on ordered simplices using oriented overlap faces.
-
-    For i=0, use Alexander-Whitney directly. For i>0, this evaluates an overlap
-    sum over (p,q)-faces whose union is the target simplex and whose intersection
-    has dimension i. Orientation signs are induced from each face inclusion.
+    Simplicial cup-i product on ordered simplices using exact Steenrod interleaved intervals.
     """
     if i < 0 or i > min(p, q):
         raise ValueError("cup-i requires 0 <= i <= min(p, q).")
@@ -67,42 +63,51 @@ def cup_i_product(
 
     n = p + q - i
     simplices_arr = np.array(simplices_target, dtype=np.int64)
-
-    def face_sign(indices: Tuple[int, ...]) -> int:
-        # Inclusion sign from inversion parity of the induced permutation.
-        inversions = 0
-        for a in range(len(indices)):
-            for b in range(a + 1, len(indices)):
-                if indices[a] > indices[b]:
-                    inversions += 1
-        return -1 if (inversions % 2) else 1
-
     result = np.zeros(len(simplices_arr), dtype=np.int64)
-    all_idx = tuple(range(n + 1))
+
+    import itertools
+    valid_seqs = []
+    for k in itertools.combinations_with_replacement(range(n + 1), i + 1):
+        A_set = set()
+        B_set = set()
+        for m in range(i + 1):
+            if m % 2 == 0:
+                start = 0 if m == 0 else k[m-1]
+                end = k[m]
+                A_set.update(range(start, end + 1))
+                B_set.add(end)
+            else:
+                start = k[m-1]
+                end = k[m]
+                B_set.update(range(start, end + 1))
+                A_set.add(end)
+                
+        start = k[-1]
+        end = n
+        if i % 2 == 0:
+            B_set.update(range(start, end + 1))
+        else:
+            A_set.update(range(start, end + 1))
+            
+        A_idx = sorted(list(A_set))
+        B_idx = sorted(list(B_set))
+        
+        if len(A_idx) == p + 1 and len(B_idx) == q + 1:
+            eps = sum(k[j] - j for j in range(1, i + 1))
+            sgn = -1 if eps % 2 != 0 else 1
+            valid_seqs.append((A_idx, B_idx, sgn))
 
     for idx, simplex in enumerate(simplices_arr):
         if len(simplex) != n + 1:
             continue
-
         total = 0
-        for A in combinations(all_idx, p + 1):
-            A_set = set(A)
-            comp = [j for j in all_idx if j not in A_set]
-            for overlap in combinations(A, i + 1):
-                B = tuple(sorted(comp + list(overlap)))
-                if len(B) != q + 1:
-                    continue
-
-                a_face = tuple(simplex[j] for j in A)
-                b_face = tuple(simplex[j] for j in B)
-                a_idx = simplex_to_idx_p.get(a_face, -1)
-                b_idx = simplex_to_idx_q.get(b_face, -1)
-                if a_idx == -1 or b_idx == -1:
-                    continue
-
-                sgn = face_sign(A) * face_sign(B)
-                total += sgn * int(alpha[a_idx]) * int(beta[b_idx])
-
+        for A_idx, B_idx, sgn in valid_seqs:
+            a_face = tuple(simplex[j] for j in A_idx)
+            b_face = tuple(simplex[j] for j in B_idx)
+            a_idx_val = simplex_to_idx_p.get(a_face, -1)
+            b_idx_val = simplex_to_idx_q.get(b_face, -1)
+            if a_idx_val != -1 and b_idx_val != -1:
+                total += sgn * int(alpha[a_idx_val]) * int(beta[b_idx_val])
         if modulus is not None:
             total %= modulus
         result[idx] = total

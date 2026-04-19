@@ -35,6 +35,6 @@ def test_compute_whitehead_group_Z5():
 def test_cyclic_whitehead_rank_formula():
     assert cyclic_whitehead_rank(1) == 0
     assert cyclic_whitehead_rank(5) == 1
-    assert cyclic_whitehead_rank(8) == 0
+    assert cyclic_whitehead_rank(8) == 1
     assert cyclic_whitehead_rank(11) == 4
-    assert cyclic_whitehead_rank(20) == 4
+    assert cyclic_whitehead_rank(20) == 5

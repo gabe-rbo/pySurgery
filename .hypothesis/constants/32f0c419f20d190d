@@ -1,0 +1,4 @@
+# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/core/complexes.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-12, 0.5, 4.0, 100, '0', 'CWComplex', 'ChainComplex', 'Q', 'SimplicialComplex', 'Z', 'Z/', 'Z/pZ requires p > 1.', 'ZMOD', 'after', 'all', 'all_simplices_flat', 'attaching_maps', 'before', 'betti_number', 'boundaries', 'boundary_matrices', 'boundary_matrix', 'cells', 'chain', 'chain_complex', 'coefficient_ring', 'cohomology', 'cohomology_basis', 'cw', 'dimensions', 'enabled', 'euler_characteristic', 'f_vector', 'filtration', 'get_filtration', 'hasse_edges', 'hits', 'homology', 'homology_over_z', 'ignore', 'inf', 'interop', 'keys', 'misses', 'rank', 'simplex_index', 'simplices', 'simplices_field', 'simplicial', 'size', 'to_gudhi']

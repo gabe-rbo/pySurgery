@@ -187,8 +187,9 @@ def _components_h0_generators(
             rank[ra] += 1
 
     for u, v in edges:
-        if 0 <= u < num_vertices and 0 <= v < num_vertices:
-            unite(u, v)
+        if u < 0 or u >= num_vertices or v < 0 or v >= num_vertices:
+            raise ValueError(f"Topological invalidity: Edge ({u}, {v}) contains a vertex outside the bounds [0, {num_vertices - 1}].")
+        unite(u, v)
 
     comps: dict[int, list[int]] = {}
     for v in range(num_vertices):

@@ -8,7 +8,7 @@ using Combinatorics
 using PythonCall: pyconvert, Py
 import PrecompileTools
 
-export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_circumradius_sq_3d, compute_circumradius_sq_2d
+export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_circumradius_sq_3d, compute_circumradius_sq_2d, quick_mapper_jl
 
 const HAS_ABSTRACT_ALGEBRA = try
     @eval import AbstractAlgebra
@@ -1921,4 +1921,91 @@ end
     GC.gc()
 end
 
-end # module SurgeryBackend
+
+
+function quick_mapper_jl(G_raw_py::Py, max_loops::Int=1, min_modularity_gain::Float64=1e-6)
+    G_raw = pyconvert(Dict{Any, Any}, G_raw_py)
+    V_py = G_raw["V"]
+    E_py = G_raw["E"]
+    V = [Int(v) for v in V_py]
+    E = [(Int(e[1]), Int(e[2])) for e in E_py]
+
+    adj = Dict{Int, Vector{Int}}(v => Int[] for v in V)
+    for (u, v) in E
+        push!(adj[u], v)
+        push!(adj[v], u)
+    end
+
+    m = length(E)
+    L = Dict{Int, Int}(v => v for v in V)
+    
+    if m == 0
+        return Dict("V" => collect(Set(values(L))), "E" => []), L
+    end
+
+    degree = Dict{Int, Int}(v => length(adj[v]) for v in V)
+    num_of_loops = 0
+    modularity_gain = 1000.0
+    best_labels = Int[]
+    two_m = 2.0 * m
+
+    while modularity_gain > min_modularity_gain && num_of_loops < max_loops
+        vertex_order = collect(V)
+        shuffle!(vertex_order)
+
+        for vertex in vertex_order
+            neighbors = adj[vertex]
+            if isempty(neighbors)
+                continue
+            end
+
+            NbrLabelSet_vertex = Set{Int}()
+            push!(NbrLabelSet_vertex, L[vertex])
+            for nbr in neighbors
+                push!(NbrLabelSet_vertex, L[nbr])
+            end
+
+            empty!(best_labels)
+            max_contribution = -Inf
+            deg_v = degree[vertex]
+
+            for label in NbrLabelSet_vertex
+                contribution = 0.0
+                for j in neighbors
+                    if L[j] == label
+                        contribution += (1.0 - (deg_v * degree[j]) / two_m)
+                    end
+                end
+
+                if contribution > max_contribution
+                    max_contribution = contribution
+                    empty!(best_labels)
+                    push!(best_labels, label)
+                elseif contribution == max_contribution
+                    push!(best_labels, label)
+                end
+            end
+
+            L[vertex] = rand(best_labels)
+        end
+
+        modularity_gain = 0.0 
+        num_of_loops += 1
+    end
+
+    E_simple = Set{Tuple{Int, Int}}()
+    for vertex in V
+        for nbr in adj[vertex]
+            lv = L[vertex]
+            lnbr = L[nbr]
+            if lv != lnbr
+                push!(E_simple, minmax(lv, lnbr))
+            end
+        end
+    end
+
+    G_simple = Dict("V" => collect(Set(values(L))), "E" => collect(E_simple))
+    return G_simple, L
+end
+
+end # module

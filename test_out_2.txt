@@ -1,0 +1,189 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0 -- /home/gabriel/Desktop/SurgeryTheory/.venv/bin/python
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /home/gabriel/Desktop/SurgeryTheory
+configfile: pyproject.toml
+plugins: hypothesis-6.151.10
+collecting ... collected 3 items
+
+tests/test_quick_mapper.py::test_from_point_cloud_cknn FAILED            [ 33%]
+tests/test_quick_mapper.py::test_quick_mapper_invariants FAILED          [ 66%]
+tests/test_quick_mapper.py::test_quick_mapper_dimension_agnostic FAILED  [100%]
+
+=================================== FAILURES ===================================
+__________________________ test_from_point_cloud_cknn __________________________
+
+    def test_from_point_cloud_cknn():
+        # Simple dataset: 3 points far apart, 3 points close together
+        points = np.array([
+            [0.0, 0.0], [0.1, 0.0], [0.0, 0.1], # Dense cluster
+            [10.0, 10.0], [10.0, 11.0], [11.0, 10.0] # Sparse cluster
+        ])
+    
+        # Using global epsilon=0.2 would disconnect the sparse cluster
+        # Using CkNN with k=2 and delta=1.0 should connect BOTH clusters internally
+        sc = SimplicialComplex.from_point_cloud_cknn(points, k=2, delta=1.5, max_dimension=2)
+    
+        # We expect 2 connected components (H0 = 2)
+>       assert sc.homology(0) == 2
+               ^^^^^^^^^^^
+
+tests/test_quick_mapper.py:17: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = SimplicialComplex(coefficient_ring='Z', filtration={}, simplices_field={0: [(0,), (1,), (2,), (3,), (4,), (5,)], 1: [(0, 1), (0, 2), (1, 2), (3, 4), (3, 5), (4, 5)], 2: [(0, 1, 2), (3, 4, 5)]})
+item = 'homology'
+
+    def __getattr__(self, item: str) -> Any:
+        private_attributes = object.__getattribute__(self, '__private_attributes__')
+        if item in private_attributes:
+            attribute = private_attributes[item]
+            if hasattr(attribute, '__get__'):
+                return attribute.__get__(self, type(self))  # type: ignore
+    
+            try:
+                # Note: self.__pydantic_private__ cannot be None if self.__private_attributes__ has items
+                return self.__pydantic_private__[item]  # type: ignore
+            except KeyError as exc:
+                raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}') from exc
+        else:
+            # `__pydantic_extra__` can fail to be set if the model is not yet fully initialized.
+            # See `BaseModel.__repr_args__` for more details
+            try:
+                pydantic_extra = object.__getattribute__(self, '__pydantic_extra__')
+            except AttributeError:
+                pydantic_extra = None
+    
+            if pydantic_extra and item in pydantic_extra:
+                return pydantic_extra[item]
+            else:
+                if hasattr(self.__class__, item):
+                    return super().__getattribute__(item)  # Raises AttributeError if appropriate
+                else:
+                    # this is the current error
+>                   raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E                   AttributeError: 'SimplicialComplex' object has no attribute 'homology'
+
+.venv/lib/python3.12/site-packages/pydantic/main.py:1026: AttributeError
+_________________________ test_quick_mapper_invariants _________________________
+
+    def test_quick_mapper_invariants():
+        # Construct a noisy topological circle (1D hole)
+        angles = np.linspace(0, 2*np.pi, 20, endpoint=False)
+        points = np.column_stack([np.cos(angles), np.sin(angles)])
+    
+        # Add some noise points around the circle to create "thickness"
+        np.random.seed(42)
+        noise = np.random.normal(0, 0.1, points.shape)
+        points = np.vstack([points, points + noise])
+    
+        # Build complex using CkNN
+        original_sc = SimplicialComplex.from_point_cloud_cknn(points, k=3, delta=1.5, max_dimension=2)
+    
+        # Verify the original complex has 1 connected component and 1 hole
+>       assert original_sc.homology(0) == 1
+               ^^^^^^^^^^^^^^^^^^^^
+
+tests/test_quick_mapper.py:33: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = SimplicialComplex(coefficient_ring='Z', filtration={}, simplices_field={0: [(0,), (1,), (2,), (3,), (4,), (5,), (6,), ... 36), (16, 36, 37), (17, 18, 37), (17, 18, 38), (17, 36, 37), (17, 37, 38), (18, 19, 39), (18, 37, 38), (19, 20, 39)]})
+item = 'homology'
+
+    def __getattr__(self, item: str) -> Any:
+        private_attributes = object.__getattribute__(self, '__private_attributes__')
+        if item in private_attributes:
+            attribute = private_attributes[item]
+            if hasattr(attribute, '__get__'):
+                return attribute.__get__(self, type(self))  # type: ignore
+    
+            try:
+                # Note: self.__pydantic_private__ cannot be None if self.__private_attributes__ has items
+                return self.__pydantic_private__[item]  # type: ignore
+            except KeyError as exc:
+                raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}') from exc
+        else:
+            # `__pydantic_extra__` can fail to be set if the model is not yet fully initialized.
+            # See `BaseModel.__repr_args__` for more details
+            try:
+                pydantic_extra = object.__getattribute__(self, '__pydantic_extra__')
+            except AttributeError:
+                pydantic_extra = None
+    
+            if pydantic_extra and item in pydantic_extra:
+                return pydantic_extra[item]
+            else:
+                if hasattr(self.__class__, item):
+                    return super().__getattribute__(item)  # Raises AttributeError if appropriate
+                else:
+                    # this is the current error
+>                   raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E                   AttributeError: 'SimplicialComplex' object has no attribute 'homology'
+
+.venv/lib/python3.12/site-packages/pydantic/main.py:1026: AttributeError
+_____________________ test_quick_mapper_dimension_agnostic _____________________
+
+    def test_quick_mapper_dimension_agnostic():
+        # Create a simple 2-simplex (triangle)
+        sc = SimplicialComplex.from_simplices([(0, 1, 2)])
+    
+        # If we force a merge of 0 and 1, the simplex (0, 1, 2) should collapse to (0, 2)
+        # The QuickMapper algorithm should handle this gracefully if we allow it.
+        # To test the dimension-agnostic remapping directly without random modularity:
+    
+        # Manually build a complex and test the remapping logic
+        L = {0: 0, 1: 0, 2: 2} # Merge 0 and 1
+        new_simplices = set()
+>       for dim in sc._canonical_simplices:
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_quick_mapper.py:58: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = SimplicialComplex(coefficient_ring='Z', filtration={}, simplices_field={0: [(0,), (1,), (2,)], 1: [(0, 1), (0, 2), (1, 2)], 2: [(0, 1, 2)]})
+item = '_canonical_simplices'
+
+    def __getattr__(self, item: str) -> Any:
+        private_attributes = object.__getattribute__(self, '__private_attributes__')
+        if item in private_attributes:
+            attribute = private_attributes[item]
+            if hasattr(attribute, '__get__'):
+                return attribute.__get__(self, type(self))  # type: ignore
+    
+            try:
+                # Note: self.__pydantic_private__ cannot be None if self.__private_attributes__ has items
+                return self.__pydantic_private__[item]  # type: ignore
+            except KeyError as exc:
+                raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}') from exc
+        else:
+            # `__pydantic_extra__` can fail to be set if the model is not yet fully initialized.
+            # See `BaseModel.__repr_args__` for more details
+            try:
+                pydantic_extra = object.__getattribute__(self, '__pydantic_extra__')
+            except AttributeError:
+                pydantic_extra = None
+    
+            if pydantic_extra and item in pydantic_extra:
+                return pydantic_extra[item]
+            else:
+                if hasattr(self.__class__, item):
+                    return super().__getattribute__(item)  # Raises AttributeError if appropriate
+                else:
+                    # this is the current error
+>                   raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E                   AttributeError: 'SimplicialComplex' object has no attribute '_canonical_simplices'
+
+.venv/lib/python3.12/site-packages/pydantic/main.py:1026: AttributeError
+=============================== warnings summary ===============================
+tests/test_quick_mapper.py::test_from_point_cloud_cknn
+tests/test_quick_mapper.py::test_quick_mapper_invariants
+  /home/gabriel/Desktop/SurgeryTheory/pysurgery/core/complexes.py:434: UserWarning: Julia clique enumeration failed (RuntimeError('enumerate_cliques_sparse failed: JuliaError(<jl ErrorException("Expecting a \'juliacall.ValueBase\', got a \'type\'")>, <jl Union{Ptr{Nothing}, Base.InterpreterIP}[Ptr{Nothing} @0x000077819453a29e, Ptr{Nothing} @0x00007781ee3db088, Ptr{Nothing} @0x00007781ee3db13c, Ptr{Nothing} @0x00007781ee3dbcd3, Ptr{Nothing} @0x000077814de6d047, Ptr{Nothing} @0x000077814de1e378, Ptr{Nothing} @0x000077814de7bd17, Ptr{Nothing} @0x000077814de76a43, Ptr{Nothing} @0x000000000055092b, Ptr{Nothing} @0x0000000000549974, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x000000000054a7c1, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x0000000000548f74, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x000000000054a889, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x000000000054903d, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x000000000054a889, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x000000000054b11b, Ptr{Nothing} @0x00000000005db0b9, Ptr{Nothing} @0x000000000054a889, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x000000000054903d, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x000000000054a889, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x000000000054903d, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x000000000054a889, Ptr{Nothing} @0x00000000005a3457, Ptr{Nothing} @0x000000000054903d, Ptr{Nothing} @0x00000000005d6f08, Ptr{Nothing} @0x00000000005d543a, Ptr{Nothing} @0x00000000006084b2, Ptr{Nothing} @0x00000000006b3d0d, Ptr{Nothing} @0x00000000006bc9d0, Ptr{Nothing} @0x00000000006bc3ec, Ptr{Nothing} @0x000077821442a1c9, Ptr{Nothing} @0x000077821442a28a, Ptr{Nothing} @0x00000000006576c4]>)')). Falling back to DFS.
+    warnings.warn(f"Julia clique enumeration failed ({e!r}). Falling back to DFS.")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_quick_mapper.py::test_from_point_cloud_cknn - AttributeErro...
+FAILED tests/test_quick_mapper.py::test_quick_mapper_invariants - AttributeEr...
+FAILED tests/test_quick_mapper.py::test_quick_mapper_dimension_agnostic - Att...
+======================== 3 failed, 2 warnings in 29.71s ========================

@@ -29,10 +29,10 @@ def _num_divisors(n: int) -> int:
 
 
 def cyclic_whitehead_rank(n: int) -> int:
-    """Rank formula for Wh(C_n) (n > 1): floor((n+1)/2) - d(n)."""
+    """Rank formula for Wh(C_n) (n > 1): floor(n/2) + 1 - d(n)."""
     if n <= 1:
         return 0
-    return max(0, ((n + 1) // 2) - _num_divisors(n))
+    return max(0, (n // 2) + 1 - _num_divisors(n))
 
 
 def _relation_exponent_matrix(pi1: FundamentalGroup) -> sp.Matrix:
