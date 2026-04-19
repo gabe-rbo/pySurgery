@@ -134,13 +134,16 @@ def gromov_wasserstein_distance(
             break
         T = T_new
         
-    gw_dist = 0.0
-    for i in range(n):
-        for j in range(m):
-            for k in range(n):
-                for l_idx in range(m):
-                    gw_dist += ((dist_matrix_A[i, k] - dist_matrix_B[j, l_idx])**2) * T[i, j] * T[k, l_idx]
-                    
+    # Vectorized final GW distance computation:
+    # GW = sum_{i,j,k,l} (C1_ik - C2_jl)^2 * T_ij * T_kl
+    #    = sum_{i,j} (C1^2 @ p)_i * T_ij + sum_{k,l} (C2^2 @ q)_l * T_kl - 2 * Tr(C1 @ T @ C2.T @ T.T)
+    C1 = dist_matrix_A
+    C2 = dist_matrix_B
+    term1 = np.sum((C1**2 @ p[:, None]) * np.sum(T, axis=1, keepdims=True))
+    term2 = np.sum((C2**2 @ q[:, None]) * np.sum(T, axis=0, keepdims=True).T)
+    term3 = 2 * np.sum((C1 @ T @ C2) * T)
+    
+    gw_dist = max(0.0, term1 + term2 - term3)
     return float(np.sqrt(gw_dist))
 
 def farthest_point_sampling(points: np.ndarray, n_samples: int, initial_idx: int = 0) -> np.ndarray:

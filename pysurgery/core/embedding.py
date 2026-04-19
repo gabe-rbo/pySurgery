@@ -559,6 +559,7 @@ def detect_self_intersections(pl_map: PLMap, *, tol: float = _EPS) -> SelfInters
         if simplex_vertex_sets[i].intersection(simplex_vertex_sets[j]):
             pruned += 1
             continue
+        
         if not _bbox_overlap((bbox_lows[i], bbox_highs[i]), (bbox_lows[j], bbox_highs[j]), tol=tol):
             pruned += 1
             continue

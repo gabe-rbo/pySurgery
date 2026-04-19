@@ -81,17 +81,22 @@ class AlgebraicPoincareComplex(BaseModel):
     def dual_complex(self) -> ChainComplex:
         """
         Compute the dual chain complex C^* = Hom(C, Z).
+        The mapping is constructed such that dual.homology(k) returns H^k(C; Z).
         """
-        # Transpose the boundary operators to get coboundary operators.
-        # Store δ^n at key n+1 so that boundaries[k] means "map going into degree k-1"
-        coboundaries = {
-            n + 1: self.chain_complex.boundaries[n + 1].T.tocsr()
-            for n in self.chain_complex.dimensions
-            if (n + 1) in self.chain_complex.boundaries
-        }
+        # H^k(C) = ker(d_{k+1}^T) / im(d_k^T)
+        # ChainComplex.homology(k) computes ker(B_k) / im(B_{k+1})
+        # Thus we set B_k = d_{k+1}^T and B_{k+1} = d_k^T.
+        n_max = self.dimension
+        coboundaries = {}
+        for k in range(n_max + 1):
+            # B_k = d_{k+1}^T maps C^k -> C^{k+1}
+            d_kp1 = self.chain_complex.boundaries.get(k + 1)
+            if d_kp1 is not None:
+                coboundaries[k] = d_kp1.T.tocsr()
+        
         return ChainComplex(
             boundaries=coboundaries,
-            dimensions=self.chain_complex.dimensions,
+            dimensions=list(range(n_max + 1)),
             coefficient_ring=self.chain_complex.coefficient_ring,
         )
 

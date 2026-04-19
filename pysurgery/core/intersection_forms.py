@@ -174,11 +174,28 @@ class IntersectionForm(BaseModel):
             return a, x0, y0
 
         def ext_gcd_array(arr):
-            if len(arr) == 1:
+            if not arr:
+                return 0, []
+            n = len(arr)
+            if n == 1:
                 return arr[0], [1]
-            g, coeffs = ext_gcd_array(arr[:-1])
-            g_final, s, t = ext_gcd(g, arr[-1])
-            return g_final, [c * s for c in coeffs] + [t]
+            
+            curr_g = arr[0]
+            s_vals = []
+            t_vals = []
+            
+            for i in range(1, n):
+                curr_g, s, t = ext_gcd(curr_g, arr[i])
+                s_vals.append(s)
+                t_vals.append(t)
+            
+            coeffs = [0] * n
+            multiplier = 1
+            for i in range(n - 1, 0, -1):
+                coeffs[i] = t_vals[i-1] * multiplier
+                multiplier *= s_vals[i-1]
+            coeffs[0] = multiplier
+            return curr_g, coeffs
 
         g, y_list = ext_gcd_array(x_TQ.tolist())
         if g not in (1, -1):

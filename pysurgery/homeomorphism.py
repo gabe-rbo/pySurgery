@@ -1057,18 +1057,68 @@ def _search_integer_isometry(
 
         return backtrack(0)
 
-    n = Q1.shape[0]
-    if n > 4:
+    # High-performance lattice isomorphism check for definite forms.
+    # We prune the search by only considering vectors v such that v^T Q1 v = Q2_jj.
+    # This is equivalent to finding all vectors in the lattice of Q1 with a specific norm.
+    diag_targets = np.diag(Q2).tolist()
+    
+    # 1. Pre-calculate all vectors of required norms in Q1
+    # For speed in Python, we only do this for small search radii.
+    lam_min = np.min(np.linalg.eigvalsh(Q1))
+    if lam_min <= 1e-10:
         return None
-    values = range(-max_entry, max_entry + 1)
-    for entries in itertools.product(values, repeat=n * n):
-        U = np.array(entries, dtype=np.int64).reshape((n, n))
-        det = _det_int_small(U)
-        if abs(det) != 1:
-            continue
-        if np.array_equal(U.T @ Q1 @ U, Q2):
-            return U
-    return None
+        
+    vectors_by_norm: dict[int, list[np.ndarray]] = {t: [] for t in set(diag_targets)}
+    
+    # Estimate search box
+    max_t = max(diag_targets)
+    r = int(np.floor(np.sqrt(max_t / lam_min))) + 1
+    if r > 3 and n > 3: # Safety cap for Python-side brute force
+         return None
+         
+    values = range(-r, r + 1)
+    max_total_vectors = 10000
+    count = 0
+    for entries in itertools.product(values, repeat=n):
+        v = np.array(entries, dtype=np.int64)
+        norm = int(v.T @ Q1 @ v)
+        if norm in vectors_by_norm:
+            vectors_by_norm[norm].append(v)
+            count += 1
+            if count > max_total_vectors:
+                return None
+
+    if any(not v for v in vectors_by_norm.values()):
+        return None
+
+    # 2. Backtracking search for the isometry matrix
+    # We choose columns one by one such that U[:, i].T Q1 U[:, j] = Q2[i, j]
+    cols: list[np.ndarray] = [np.zeros(n, dtype=np.int64) for _ in range(n)]
+    
+    def backtrack(idx: int) -> np.ndarray | None:
+        if idx == n:
+            U = np.column_stack(cols)
+            if abs(int(round(np.linalg.det(U)))) == 1:
+                if np.array_equal(U.T @ Q1 @ U, Q2):
+                    return U
+            return None
+            
+        target_norm = diag_targets[idx]
+        for v in vectors_by_norm[target_norm]:
+            # Check consistency with already chosen columns
+            ok = True
+            for prev in range(idx):
+                if int(v.T @ Q1 @ cols[prev]) != int(Q2[idx, prev]):
+                    ok = False
+                    break
+            if ok:
+                cols[idx] = v
+                res = backtrack(idx + 1)
+                if res is not None:
+                    return res
+        return None
+
+    return backtrack(0)
 
 
 def analyze_homeomorphism_1d_result(
@@ -1349,12 +1399,30 @@ def analyze_homeomorphism_3d_result(
         and pi1_2 is not None
         and _presentation_key(pi1_1) != _presentation_key(pi1_2)
     ):
+        # We cannot conclude False just because presentations differ (group isomorphism is undecidable).
+        # However, we can check the abelianization as a necessary invariant.
+        try:
+            h1_1 = _normalize_torsion(c1.homology(1)[1])
+            h1_2 = _normalize_torsion(c2.homology(1)[1])
+            r1_1 = c1.homology(1)[0]
+            r1_2 = c2.homology(1)[0]
+            if r1_1 != r1_2 or h1_1 != h1_2:
+                return HomeomorphismResult(
+                    status="impediment",
+                    is_homeomorphic=False,
+                    reasoning=f"IMPEDIMENT: First homology (abelianization of pi_1) differs: H_1_1=(rank {r1_1}, torsion {h1_1}), H_1_2=(rank {r1_2}, torsion {h1_2}).",
+                    theorem="Geometrization / 3-manifold recognition",
+                    evidence=["pi_1 abelianization mismatch"],
+                )
+        except Exception:
+            pass
+
         return HomeomorphismResult(
-            status="impediment",
-            is_homeomorphic=False,
-            reasoning="IMPEDIMENT: Fundamental groups differ; manifolds are not homeomorphic.",
+            status="inconclusive",
+            is_homeomorphic=None,
+            reasoning="INCONCLUSIVE: Fundamental group presentations differ, but their isomorphism is undecidable. Further geometric or representation-theoretic analysis is required.",
             theorem="Geometrization / 3-manifold recognition",
-            evidence=["pi_1 presentation mismatch"],
+            missing_data=["Certified pi_1 isomorphism witness"],
         )
 
     coho_check = _check_cohomology_equivalence(

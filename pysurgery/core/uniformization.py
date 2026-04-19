@@ -232,31 +232,53 @@ class SurfaceMesh:
         u: Optional[np.ndarray] = None,
         method: str = "ricci",
     ) -> csr_matrix:
+        """
+        Computes the cotangent Laplacian matrix for the current metric state.
+        Uses vectorized COO triplet assembly for high performance.
+        """
         angles = self.triangle_angles(u=u, method=method)
-        weights: dict[tuple[int, int], float] = {}
-        for f_idx, face in enumerate(self.faces):
-            i, j, k = [int(x) for x in face]
-            cot_i, cot_j, cot_k = _cotangents_from_angles(angles[f_idx])
-            _accumulate_edge_weight(weights, i, j, 0.5 * cot_k)
-            _accumulate_edge_weight(weights, j, k, 0.5 * cot_i)
-            _accumulate_edge_weight(weights, k, i, 0.5 * cot_j)
-
-        rows = []
-        cols = []
-        data = []
-        diag = np.zeros(self.n_vertices, dtype=np.float64)
-        for (i, j), w in weights.items():
-            if not np.isfinite(w):
-                continue
-            diag[i] += w
-            diag[j] += w
-            rows.extend([i, j])
-            cols.extend([j, i])
-            data.extend([-w, -w])
-        rows.extend(range(self.n_vertices))
-        cols.extend(range(self.n_vertices))
-        data.extend(diag.tolist())
-        return csr_matrix((data, (rows, cols)), shape=(self.n_vertices, self.n_vertices), dtype=np.float64)
+        n_faces = len(self.faces)
+        
+        # Precompute all cotangents for all faces (vectorized)
+        # _cotangents_from_angles is already called in a loop, but we can do it better.
+        cots = np.zeros((n_faces, 3), dtype=np.float64)
+        for f_idx in range(n_faces):
+            cots[f_idx] = _cotangents_from_angles(angles[f_idx])
+        
+        # Assemble COO triplets for edges
+        # Each face (i, j, k) contributes to edges (i,j), (j,k), (k,i)
+        # with weights 0.5 * cot_k, 0.5 * cot_i, 0.5 * cot_j
+        i_idx = self.faces[:, 0]
+        j_idx = self.faces[:, 1]
+        k_idx = self.faces[:, 2]
+        
+        # Flattened row/col/data for sparse matrix construction
+        rows = np.concatenate([i_idx, j_idx, j_idx, k_idx, k_idx, i_idx])
+        cols = np.concatenate([j_idx, i_idx, k_idx, j_idx, i_idx, k_idx])
+        
+        # 0.5 * cotangent weights
+        w_k = 0.5 * cots[:, 2]
+        w_i = 0.5 * cots[:, 0]
+        w_j = 0.5 * cots[:, 1]
+        
+        data = -np.concatenate([w_k, w_k, w_i, w_i, w_j, w_j])
+        
+        # Filter non-finite values
+        mask = np.isfinite(data)
+        rows = rows[mask]
+        cols = cols[mask]
+        data = data[mask]
+        
+        # The off-diagonal part of the Laplacian
+        L_off = csr_matrix((data, (rows, cols)), shape=(self.n_vertices, self.n_vertices))
+        
+        # Diagonal part (sum of row off-diagonals)
+        # Since L is symmetric and zero-row-sum, L_ii = -sum_{j!=i} L_ij
+        diag_data = -np.array(L_off.sum(axis=1)).flatten()
+        L_diag = csr_matrix((diag_data, (np.arange(self.n_vertices), np.arange(self.n_vertices))), 
+                           shape=(self.n_vertices, self.n_vertices))
+        
+        return L_off + L_diag
 
 
 @dataclass
@@ -337,6 +359,7 @@ def _build_incidence(
 
 
 def _validate_surface(
+    mesh: "SurfaceMesh",
     faces: np.ndarray,
     edges: np.ndarray,
     edge_faces: list[list[int]],
@@ -351,6 +374,48 @@ def _validate_surface(
     for face in faces:
         if len(set(int(v) for v in face)) != 3:
             raise ValueError("Degenerate triangle with repeated vertex indices detected.")
+
+    # Vertex link validation (Detect pinched vertices)
+    for v in range(mesh.n_vertices):
+        # Extract the link of vertex v
+        link_edges = []
+        for f_idx in mesh.vertex_faces[v]:
+            face = list(mesh.faces[f_idx])
+            v_idx = face.index(v)
+            # The edge in the link is opposite to v in the triangle
+            others = [face[(v_idx + 1) % 3], face[(v_idx + 2) % 3]]
+            link_edges.append(tuple(sorted(others)))
+        
+        if not link_edges:
+            continue
+            
+        link_graph = {}
+        for u, w in link_edges:
+            link_graph.setdefault(u, set()).add(w)
+            link_graph.setdefault(w, set()).add(u)
+        
+        degrees = [len(nbrs) for nbrs in link_graph.values()]
+        is_boundary = v in mesh.boundary_vertices
+        
+        if is_boundary:
+            if degrees.count(1) != 2 or any(d > 2 for d in degrees):
+                raise ValueError(f"Vertex {v} has non-manifold link (pinched boundary).")
+        else:
+            if any(d != 2 for d in degrees):
+                raise ValueError(f"Vertex {v} has non-manifold link (pinched internal point).")
+                
+        # Link must be connected
+        start_node = next(iter(link_graph.keys()))
+        visited = {start_node}
+        stack = [start_node]
+        while stack:
+            curr = stack.pop()
+            for nbr in link_graph[curr]:
+                if nbr not in visited:
+                    visited.add(nbr)
+                    stack.append(nbr)
+        if len(visited) != len(link_graph):
+            raise ValueError(f"Vertex {v} is a topological singularity (disconnected link).")
 
 
 def _compute_base_edge_lengths(vertices: np.ndarray, edges: np.ndarray) -> np.ndarray:
@@ -403,18 +468,30 @@ def _accumulate_edge_weight(
     weights[edge] = weights.get(edge, 0.0) + float(value)
 
 
-def _surface_target_curvature(mesh: SurfaceMesh, target_curvature: Optional[np.ndarray]) -> np.ndarray:
-    if target_curvature is not None:
-        target = np.asarray(target_curvature, dtype=np.float64)
+def _surface_target_curvature(mesh: SurfaceMesh, target: Optional[np.ndarray]) -> np.ndarray:
+    total_goal = _TWO_PI * float(mesh.euler_characteristic)
+    if target is not None:
+        target = np.asarray(target, dtype=np.float64)
         if target.shape != (mesh.n_vertices,):
             raise ValueError("target_curvature must have shape (n_vertices,)")
+        # Sum must strictly match 2*pi*chi
+        if not np.isclose(np.sum(target), total_goal, atol=1e-8):
+            raise ValueError(f"Prescribed curvature sum {np.sum(target)} must be {total_goal}.")
         return target
 
-    total = _TWO_PI * float(mesh.euler_characteristic)
-    target = np.full(mesh.n_vertices, total / float(mesh.n_vertices), dtype=np.float64)
-    if len(mesh.boundary_vertices) > 0:
-        target[mesh.boundary_vertices] = math.pi
-    return target
+    target_curv = np.zeros(mesh.n_vertices, dtype=np.float64)
+    boundary = mesh.boundary_vertices
+    internal = np.setdiff1d(np.arange(mesh.n_vertices), boundary)
+
+    # Default: Geodesic boundary (k=0) and constant internal Gaussian curvature.
+    if len(boundary) > 0:
+        target_curv[boundary] = 0.0
+        if len(internal) > 0:
+            target_curv[internal] = total_goal / len(internal)
+    else:
+        target_curv[:] = total_goal / mesh.n_vertices
+    return target_curv
+
 
 
 def _solve_pinned_linear_system(

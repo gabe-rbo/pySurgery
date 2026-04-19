@@ -997,11 +997,14 @@ def jsj_decomposition(manifold: Triangulated3Manifold) -> PieceDecomposition:
 
 
 def _homology_sphere_like(manifold: Triangulated3Manifold) -> bool:
-    h0 = manifold.homology(0)
-    h1 = manifold.homology(1)
-    h2 = manifold.homology(2)
-    h3 = manifold.homology(3)
-    return h0[0] == 1 and h1[0] == 0 and h2[0] == 0 and h3[0] == 1
+    h = manifold.homology()
+    # A 3-manifold is homology-sphere-like if H_*(M; Z) ≅ H_*(S^3; Z)
+    # This requires rank(H0)=1, rank(H3)=1, and H1=H2=0 (including NO torsion)
+    is_h0 = (h[0][0] == 1 and not h[0][1])
+    is_h1 = (h[1][0] == 0 and not h[1][1])
+    is_h2 = (h[2][0] == 0 and not h[2][1])
+    is_h3 = (h[3][0] == 1 and not h[3][1])
+    return is_h0 and is_h1 and is_h2 and is_h3
 
 
 def analyze_geometrization(

@@ -35,7 +35,7 @@ def _all_simplices_by_dim(
     simplices: Iterable[Tuple[int, ...]],
 ) -> dict[int, list[tuple[int, ...]]]:
     """Build simplicial closure grouped by dimension from input simplices."""
-    by_dim: dict[int, list[tuple[int, ...]]] = {}
+    by_dim_set: dict[int, set[tuple[int, ...]]] = {}
     for s in simplices:
         t = tuple(sorted(int(x) for x in s))
         if len(t) == 0:
@@ -43,11 +43,12 @@ def _all_simplices_by_dim(
         # Work with the simplicial closure so boundaries are represented on all faces.
         for r in range(1, len(t) + 1):
             d = r - 1
+            if d not in by_dim_set:
+                by_dim_set[d] = set()
             for face in itertools.combinations(t, r):
-                by_dim.setdefault(d, []).append(tuple(face))
-    for d in list(by_dim.keys()):
-        by_dim[d] = list(dict.fromkeys(by_dim[d]))
-    return by_dim
+                by_dim_set[d].add(tuple(face))
+    
+    return {d: sorted(list(faces)) for d, faces in by_dim_set.items()}
 
 
 def _infer_num_vertices(simplices: Iterable[Tuple[int, ...]], num_vertices: int) -> int:
@@ -311,11 +312,17 @@ def _hk_generators_mod2(
         )
 
     quotient_basis: list[np.ndarray] = []
-    span_cols = b_cols[:]
+    pivots: Dict[int, np.ndarray] = {}
+    
+    # 1. Pre-fill the incremental pivot dictionary with the image (boundaries of kp1)
+    # This correctly represents the subspace we are quotienting by.
+    for b in b_cols:
+        _is_independent_wrt(b, pivots)
+        
+    # 2. Extract quotient basis in O(N^2) time per candidate
     for z in z_candidates:
-        if _independent_mod_image(z, span_cols):
+        if _is_independent_wrt(z, pivots):
             quotient_basis.append(z)
-            span_cols.append(z)
 
     gens: list[HomologyGenerator] = []
     for z in quotient_basis:

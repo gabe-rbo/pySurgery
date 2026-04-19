@@ -24,8 +24,17 @@ def euler_totient(n):
 
 
 def _num_divisors(n: int) -> int:
-    """Return the divisor-count function d(n)."""
-    return sum(1 for i in range(1, n + 1) if n % i == 0)
+    """Return the divisor-count function d(n) in O(sqrt(n))."""
+    if n <= 0:
+        return 0
+    count = 0
+    limit = int(n**0.5)
+    for i in range(1, limit + 1):
+        if n % i == 0:
+            count += 1
+            if i != n // i:
+                count += 1
+    return count
 
 
 def cyclic_whitehead_rank(n: int) -> int:

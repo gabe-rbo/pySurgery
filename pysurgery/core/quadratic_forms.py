@@ -31,11 +31,12 @@ def arf_invariant_gf2(M: np.ndarray, q: np.ndarray) -> int:
     arf = 0
 
     def eval_q(vec: np.ndarray) -> int:
-        lin = np.sum(vec * q_vals)
-        cross = 0
-        for i in range(n):
-            for j in range(i + 1, n):
-                cross += vec[i] * vec[j] * M[i, j]
+        # Use vectorized NumPy operations for GF(2) evaluation.
+        # q(v) = sum(v_i * q(e_i)) + sum_{i<j}(v_i * v_j * B(e_i, e_j)) mod 2.
+        lin = int((vec @ q_vals) % 2)
+        # The cross term sum_{i<j} is equivalent to v^T * UpperTriangular(M) * v
+        upper_M = np.triu(M, k=1)
+        cross = int((vec.T @ upper_M @ vec) % 2)
         return int((lin + cross) % 2)
 
     while len(active_indices) >= 2:
