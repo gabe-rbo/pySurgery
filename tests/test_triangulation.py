@@ -48,8 +48,6 @@ def test_triangulate_sphere():
     assert dim_counts.get(1, 0) > 0, "Should have 1-simplices (edges)"
 
     print("  ✓ Sphere triangulation passed!")
-    return True
-
 
 def test_triangulate_torus():
     """Test triangulation of a torus (more complex 2D surface)."""
@@ -87,8 +85,6 @@ def test_triangulate_torus():
     assert dim_counts.get(2, 0) > 0, "Should have 2-simplices"
 
     print("  ✓ Torus triangulation passed!")
-    return True
-
 
 def test_triangulate_plane():
     """Test triangulation of points on a plane (degenerate 2D surface in 3D)."""
@@ -121,8 +117,6 @@ def test_triangulate_plane():
     assert dim_counts.get(2, 0) > 0, "Should have 2-simplices"
 
     print("  ✓ Planar triangulation passed!")
-    return True
-
 
 def test_triangulate_public_api():
     """Test the public triangulate_surface API (Python fallback)."""
@@ -147,7 +141,6 @@ def test_triangulate_public_api():
     assert st.num_simplices() > 0, "Should have simplices"
 
     print("  ✓ Public API test passed!")
-    return True
 
 
 if __name__ == "__main__":

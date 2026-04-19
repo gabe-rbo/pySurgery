@@ -1726,7 +1726,8 @@ class ChainComplex(BaseModel):
         
         # S = U * dn_T * V. 
         # The inverse of U transforms the standard codomain basis into a decomposed Z-basis.
-        S, U, V = dn_T.smith_normal_form()
+        from sympy.matrices.normalforms import smith_normal_form
+        S, U, V = smith_normal_form(dn_T)
         U_inv = U.inv()
         
         int_basis = []
