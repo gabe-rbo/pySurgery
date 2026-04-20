@@ -892,13 +892,14 @@ class ChainComplex(BaseModel):
                         "Expect significant RAM consumption and slow execution without Julia."
                     )
 
-                mat = sp.Matrix(
+                mat = sp.SparseMatrix(
                     dn_plus_1.shape[1],
                     dn_plus_1.shape[0],
                     dict(dn_plus_1.T.todok().items()),
                 )
+                # Use nullspace() to get a basis for the kernel
                 int_basis = [
-                    np.array(v, dtype=np.int64).flatten() for v in mat.syzygy_module()
+                    np.array(v, dtype=np.int64).flatten() for v in mat.nullspace()
                 ]
             self._cache_set(key, int_basis)
             return int_basis
