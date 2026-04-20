@@ -1,7 +1,19 @@
+<table border="0">
+  <tr>
+    <td width="50%">
+
 # pySurgery
+---
 
 [![Tests](https://github.com/gabe-rbo/pysurgery/actions/workflows/tests.yml/badge.svg)](https://github.com/gabe-rbo/pysurgery/actions/workflows/tests.yml)
 [![Lint](https://github.com/gabe-rbo/pysurgery/actions/workflows/lint.yml/badge.svg)](https://github.com/gabe-rbo/pysurgery/actions/workflows/lint.yml)
+
+   </td>
+   <td width="50%">
+     <img width="2048" height="2048" alt="Image" src="https://github.com/user-attachments/assets/59ea4574-708e-47e7-90f8-0c857130aa0d" />
+   </td>
+  </tr>
+</table>
 
 **pySurgery** is a high-performance Python library for exact computational algebraic topology, computational surgery theory, and geometric analysis. It is designed to compute discrete topological invariants—such as integer homology (including exact torsion), intersection forms, cup products, $L$-group obstructions, and homeomorphism certificates—at massive scale.
 
