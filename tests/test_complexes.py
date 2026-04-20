@@ -322,6 +322,10 @@ def test_discrete_3_manifold_homology(name, builder, bettis, torsion, euler):
 
 def test_simplicial_boundary_matrix_is_cached(monkeypatch):
     sc = SimplicialComplex.from_maximal_simplices([(0, 1, 2)])
+    # Clear private cache to force a new computation
+    object.__setattr__(sc, "_boundaries_cache", {})
+    sc.clear_cache()
+
     calls = {"count": 0}
     original = complexes._boundary_matrix_from_simplices
 
@@ -330,9 +334,13 @@ def test_simplicial_boundary_matrix_is_cached(monkeypatch):
         return original(source, target)
 
     monkeypatch.setattr(complexes, "_boundary_matrix_from_simplices", _wrapped)
+    # We must also ensure it doesn't use the Julia-bridge if available for this specific test
+    monkeypatch.setattr(complexes.julia_engine, "available", False)
+
     _ = sc.boundary_matrix(2)
     _ = sc.boundary_matrix(2)
     assert calls["count"] == 1
+
     info = sc.cache_info()
     assert info["hits"] >= 1
 

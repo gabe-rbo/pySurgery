@@ -97,20 +97,28 @@ def cup_i_product(
             sgn = -1 if eps % 2 != 0 else 1
             valid_seqs.append((A_idx, B_idx, sgn))
 
-    for idx, simplex in enumerate(simplices_arr):
-        if len(simplex) != n + 1:
-            continue
-        total = 0
-        for A_idx, B_idx, sgn in valid_seqs:
-            a_face = tuple(simplex[j] for j in A_idx)
-            b_face = tuple(simplex[j] for j in B_idx)
-            a_idx_val = simplex_to_idx_p.get(a_face, -1)
-            b_idx_val = simplex_to_idx_q.get(b_face, -1)
-            if a_idx_val != -1 and b_idx_val != -1:
-                total += sgn * int(alpha[a_idx_val]) * int(beta[b_idx_val])
-        if modulus is not None:
-            total %= modulus
-        result[idx] = total
+    # Optimized evaluation across all simplices
+    # Pre-calculate face keys for each valid sequence to allow vectorized lookup
+    for A_idx, B_idx, sgn in valid_seqs:
+        # simplices_arr[:, A_idx] is a N x (p+1) array
+        # We need to map each row to its index in simplex_to_idx_p
+        # We use fromiter for efficient mapping from the pre-sliced array
+        a_faces = (tuple(row) for row in simplices_arr[:, A_idx])
+        b_faces = (tuple(row) for row in simplices_arr[:, B_idx])
+        
+        idx_p = np.fromiter((simplex_to_idx_p.get(f, -1) for f in a_faces), dtype=np.int64, count=len(simplices_arr))
+        idx_q = np.fromiter((simplex_to_idx_q.get(f, -1) for f in b_faces), dtype=np.int64, count=len(simplices_arr))
+        
+        mask = (idx_p != -1) & (idx_q != -1)
+        if np.any(mask):
+            term = (alpha[idx_p[mask]] * beta[idx_q[mask]]).astype(np.int64)
+            if sgn == -1:
+                result[mask] -= term
+            else:
+                result[mask] += term
+                
+    if modulus is not None:
+        result %= modulus
     return result
 
 

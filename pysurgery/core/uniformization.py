@@ -73,14 +73,12 @@ class SurfaceMesh:
         edge_faces, vertex_faces, vertex_neighbors, boundary_vertices = _build_incidence(
             n_vertices, faces_arr, edges, edge_to_index, face_edges
         )
-        if validate:
-            _validate_surface(faces_arr, edges, edge_faces)
-        base_edge_lengths = _compute_base_edge_lengths(vertices_arr, edges)
+        # Fix: build mesh instance first to pass it to validation (needed for link checks)
         sc = SimplicialComplex.from_maximal_simplices(map(tuple, faces_arr.tolist()))
-        return cls(
+        mesh = cls(
             faces=faces_arr,
             n_vertices=n_vertices,
-            base_edge_lengths=base_edge_lengths,
+            base_edge_lengths=_compute_base_edge_lengths(vertices_arr, edges),
             edges=edges,
             edge_to_index=edge_to_index,
             edge_faces=edge_faces,
@@ -90,6 +88,9 @@ class SurfaceMesh:
             coordinates=vertices_arr,
             simplicial_complex=sc,
         )
+        if validate:
+            _validate_surface(mesh, faces_arr, edges, edge_faces)
+        return mesh
 
     @classmethod
     def from_simplicial_complex(
@@ -135,13 +136,10 @@ class SurfaceMesh:
         edge_faces, vertex_faces, vertex_neighbors, boundary_vertices = _build_incidence(
             n_vertices, faces_arr, edges, edge_to_index, face_edges
         )
-        if validate:
-            _validate_surface(faces_arr, edges, edge_faces)
-        base_edge_lengths = np.ones(len(edges), dtype=np.float64)
-        return cls(
+        mesh = cls(
             faces=faces_arr,
             n_vertices=int(n_vertices),
-            base_edge_lengths=base_edge_lengths,
+            base_edge_lengths=np.ones(len(edges), dtype=np.float64),
             edges=edges,
             edge_to_index=edge_to_index,
             edge_faces=edge_faces,
@@ -151,6 +149,9 @@ class SurfaceMesh:
             coordinates=None,
             simplicial_complex=complex_,
         )
+        if validate:
+            _validate_surface(mesh, faces_arr, edges, edge_faces)
+        return mesh
 
     @property
     def num_faces(self) -> int:
@@ -499,25 +500,19 @@ def _solve_pinned_linear_system(
     rhs: np.ndarray,
     pin_vertex: int,
 ) -> np.ndarray:
-    rhs = np.asarray(rhs, dtype=np.float64)
-    n = matrix.shape[0]
-    pin_vertex = int(pin_vertex)
-    if not (0 <= pin_vertex < n):
-        raise ValueError("pin_vertex is out of range")
-    mask = np.ones(n, dtype=bool)
-    mask[pin_vertex] = False
-    reduced = matrix[mask][:, mask].tocsr()
-    reduced_rhs = rhs[mask]
-    # Small Tikhonov regularization helps when the triangulation is nearly singular.
-    if reduced.shape[0] > 0:
-        reduced = reduced + 1e-12 * csr_matrix(np.eye(reduced.shape[0], dtype=np.float64))
-    try:
-        delta = spsolve(reduced, reduced_rhs)
-    except Exception:
-        delta = np.linalg.lstsq(reduced.toarray(), reduced_rhs, rcond=None)[0]
-    full = np.zeros(n, dtype=np.float64)
-    full[mask] = np.asarray(delta, dtype=np.float64).reshape(-1)
-    return full
+    """
+    Stable singular system solver using LSQR and rigid pinning.
+    """
+    from scipy.sparse.linalg import lsqr
+    
+    # LSQR handles the rank-1 deficiency of the Laplacian across all components
+    # and provides a minimal-norm solution if A is singular.
+    res = lsqr(matrix, rhs, atol=1e-10, btol=1e-10)
+    u = res[0]
+    
+    # Apply the pinning constraint as a rigid shift to the solution.
+    # Conformal factors u_i are defined up to a global constant in the closed case.
+    return u - u[int(pin_vertex)]
 
 
 def _metric_is_valid(mesh: SurfaceMesh, u: np.ndarray, method: str) -> bool:

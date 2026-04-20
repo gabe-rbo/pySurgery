@@ -6,17 +6,18 @@ from .exceptions import DimensionError
 
 
 def arf_invariant_gf2(M: np.ndarray, q: np.ndarray) -> int:
-    """Compute Arf invariant for a GF(2) bilinear form matrix M and refinement vector q."""
-    M = np.asarray(M, dtype=np.int64) % 2
-    q_vals = np.asarray(q, dtype=np.int64).flatten() % 2
+    """Optimized symplectic reduction in O(N^3) by direct Gram matrix updates."""
+    M = (np.asarray(M, dtype=np.int64) % 2).copy()
+    q_vals = (np.asarray(q, dtype=np.int64).flatten() % 2).copy()
 
     if M.ndim != 2 or M.shape[0] != M.shape[1]:
         raise DimensionError("M must be a square matrix over GF(2).")
     n = M.shape[0]
     if len(q_vals) != n:
         raise DimensionError(f"q must have length {n}, got {len(q_vals)}.")
-    if n % 2 != 0:
-        raise DimensionError("Arf invariant requires even-dimensional ambient space.")
+    
+    if n == 0:
+        return 0
 
     # Arf invariant is classically defined for nondegenerate quadratic spaces.
     # Here we enforce nondegeneracy of the associated bilinear form matrix M,
@@ -26,48 +27,47 @@ def arf_invariant_gf2(M: np.ndarray, q: np.ndarray) -> int:
             "Arf invariant is undefined for degenerate GF(2) bilinear forms."
         )
 
-    basis = np.eye(n, dtype=np.int64)
-    active_indices = list(range(n))
     arf = 0
-
-    def eval_q(vec: np.ndarray) -> int:
-        # Use vectorized NumPy operations for GF(2) evaluation.
-        # q(v) = sum(v_i * q(e_i)) + sum_{i<j}(v_i * v_j * B(e_i, e_j)) mod 2.
-        lin = int((vec @ q_vals) % 2)
-        # The cross term sum_{i<j} is equivalent to v^T * UpperTriangular(M) * v
-        upper_M = np.triu(M, k=1)
-        cross = int((vec.T @ upper_M @ vec) % 2)
-        return int((lin + cross) % 2)
-
-    while len(active_indices) >= 2:
+    active = list(range(n))
+    
+    while len(active) >= 2:
         found = False
-        for i_idx, i in enumerate(active_indices):
-            for j in active_indices[i_idx + 1 :]:
-                if int((basis[i] @ M @ basis[j]) % 2) == 1:
-                    e_idx, f_idx = i, j
-                    found = True
-                    break
+        for idx_i, i in enumerate(active):
+            for idx_j, j in enumerate(active):
+                if i == j or M[i, j] == 0:
+                    continue
+                
+                # Found a hyperbolic pair (e_i, e_j)
+                arf = (arf + q_vals[i] * q_vals[j]) % 2
+                
+                # Orthogonalize remaining basis by updating the Gram matrix directly
+                # v_k = v_k + B(v_k, e_j)e_i + B(v_k, e_i)e_j
+                for k in active:
+                    if k == i or k == j:
+                        continue
+                    
+                    w_kj = M[k, j]
+                    w_ki = M[k, i]
+                    
+                    if w_kj:
+                        M[k, :] = (M[k, :] + M[i, :]) % 2
+                        M[:, k] = (M[:, k] + M[:, i]) % 2
+                        q_vals[k] = (q_vals[k] + q_vals[i]) % 2
+                        
+                    if w_ki:
+                        M[k, :] = (M[k, :] + M[j, :]) % 2
+                        M[:, k] = (M[:, k] + M[:, j]) % 2
+                        q_vals[k] = (q_vals[k] + q_vals[j]) % 2
+                
+                active.pop(max(idx_i, idx_j))
+                active.pop(min(idx_i, idx_j))
+                found = True
+                break
             if found:
                 break
-
         if not found:
             break
-
-        e = basis[e_idx]
-        f = basis[f_idx]
-        arf = (arf + eval_q(e) * eval_q(f)) % 2
-
-        new_active = []
-        for k in active_indices:
-            if k == e_idx or k == f_idx:
-                continue
-            v = basis[k]
-            v_dot_f = int((v @ M @ f) % 2)
-            v_dot_e = int((v @ M @ e) % 2)
-            basis[k] = (v - v_dot_f * e - v_dot_e * f) % 2
-            new_active.append(k)
-        active_indices = new_active
-
+            
     return int(arf)
 
 

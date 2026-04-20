@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Dict
+from typing import Dict, Optional
 from pydantic import BaseModel, ConfigDict, Field
 from .core.complexes import ChainComplex
 from .core.exceptions import DimensionError
@@ -81,66 +81,85 @@ class AlgebraicPoincareComplex(BaseModel):
     def dual_complex(self) -> ChainComplex:
         """
         Compute the dual chain complex C^* = Hom(C, Z).
-        The mapping is constructed such that dual.homology(k) returns H^k(C; Z).
         """
-        # H^k(C) = ker(d_{k+1}^T) / im(d_k^T)
-        # ChainComplex.homology(k) computes ker(B_k) / im(B_{k+1})
-        # Thus we set B_k = d_{k+1}^T and B_{k+1} = d_k^T.
-        n_max = self.dimension
-        coboundaries = {}
-        for k in range(n_max + 1):
-            # B_k = d_{k+1}^T maps C^k -> C^{k+1}
-            d_kp1 = self.chain_complex.boundaries.get(k + 1)
-            if d_kp1 is not None:
-                coboundaries[k] = d_kp1.T.tocsr()
-        
+        # Transpose the boundary operators to get coboundary operators.
+        # Store δ^n at key n+1 so that boundaries[k] means "map going into degree k-1"
+        coboundaries = {
+            n: self.chain_complex.boundaries[n].T.tocsr()
+            for n in self.chain_complex.boundaries.keys()
+        }
         return ChainComplex(
             boundaries=coboundaries,
-            dimensions=list(range(n_max + 1)),
+            dimensions=self.chain_complex.dimensions,
             coefficient_ring=self.chain_complex.coefficient_ring,
         )
 
-    def cap_product(self, cohomology_class: np.ndarray, k: int) -> np.ndarray:
+    def cap_product(
+        self,
+        cohomology_class: np.ndarray,
+        k: int,
+        simplices: Optional[dict[int, list[tuple[int, ...]]]] = None,
+    ) -> np.ndarray:
         r"""
-        Compute the cap product [X] \cap \alpha, which defines the map H^k(X) -> H_{n-k}(X).
-
-        For a chain complex, this is implemented via the evaluation of the
-        higher-order diagonal map psi on the fundamental class and the cohomology class.
-
-        Parameters
-        ----------
-        cohomology_class : np.ndarray
-            The cohomology class alpha in H^k(X).
-        k : int
-            The dimension of the cohomology class.
-
-        Returns
-        -------
-        homology_class : np.ndarray
-            The homology class [X] \cap \alpha in H_{n-k}(X).
+        Compute the cap product [X] \cap \alpha.
+        
+        If self.psi[k] is available, applies it directly. 
+        Otherwise, if 'simplices' (the simplicial structure) is provided,
+        it evaluates the cap product using the Alexander-Whitney diagonal:
+        (sigma \cap alpha) = alpha(front k-face of sigma) * (back (n-k)-face of sigma).
         """
-        # In a concrete Algebraic Poincare Complex, psi_0: C^k -> C_{n-k}
-        # is the chain map inducing the Poincare duality isomorphism.
-        if k not in self.psi:
-            raise DimensionError(
-                f"Diagonal map psi_{k} not defined for dimension {k}. "
-                "Topological translation: The Algebraic Poincaré Complex lacks the higher-order chain map psi_{k}: C^k -> C_{n-k} needed to induce Poincaré Duality."
-            )
-
-        psi_k = np.asarray(self.psi[k])
+        n = self.dimension
         alpha = np.asarray(cohomology_class)
-        if psi_k.ndim != 2:
-            raise DimensionError(
-                f"psi_{k} must be a 2D matrix; got shape {psi_k.shape}."
-            )
-        if alpha.ndim != 1:
-            raise DimensionError(
-                f"cohomology_class must be a 1D vector; got shape {alpha.shape}."
-            )
-        if psi_k.shape[1] != alpha.shape[0]:
-            raise DimensionError(
-                f"Dimension mismatch in cap product: psi_{k} has {psi_k.shape[1]} columns but cohomology_class has length {alpha.shape[0]}."
-            )
+        
+        # 1. Preferred path: supplies psi mapping
+        if k in self.psi:
+            psi_k = np.asarray(self.psi[k])
+            if psi_k.shape[1] != alpha.shape[0]:
+                 raise DimensionError(
+                    f"Dimension mismatch in cap product: psi_{k} has {psi_k.shape[1]} columns but cohomology_class has length {alpha.shape[0]}."
+                )
+            return psi_k @ alpha
 
-        # Apply the chain map psi_k to the cohomology class.
-        return psi_k @ alpha
+        # 2. Geometric path: Alexander-Whitney diagonal on simplices
+        if simplices is not None:
+            # We assume [X] is given as a chain in C_n
+            # result is a chain in C_{n-k}
+            target_dim = n - k
+            if target_dim < 0:
+                raise DimensionError(f"Cannot compute cap product for cohomology degree {k} in dimension {n}.")
+            
+            c_nk_size = self._chain_group_size(target_dim)
+            if c_nk_size is None:
+                raise DimensionError(f"Chain group C_{target_dim} not well-defined in underlying complex.")
+            
+            result = np.zeros(c_nk_size, dtype=self.chain_complex.boundaries[1].dtype if self.chain_complex.boundaries else np.int64)
+            
+            n_simplices = simplices.get(n, [])
+            nk_simplices = simplices.get(target_dim, [])
+            k_simplices = simplices.get(k, [])
+            
+            if not n_simplices or not k_simplices or not nk_simplices:
+                return result
+                
+            k_map = {s: idx for idx, s in enumerate(k_simplices)}
+            nk_map = {s: idx for idx, s in enumerate(nk_simplices)}
+            
+            # evaluate alpha on [X]
+            for s_idx, coeff in enumerate(self.fundamental_class):
+                if coeff == 0:
+                    continue
+                sigma = n_simplices[s_idx]
+                
+                # AW: front k-face, back (n-k)-face
+                front = sigma[:k+1]
+                back = sigma[k:]
+                
+                if front in k_map and back in nk_map:
+                    val = alpha[k_map[front]]
+                    result[nk_map[back]] += int(coeff) * int(val)
+            
+            return result
+
+        raise DimensionError(
+            f"Diagonal map psi_{k} not defined and no simplicial structure provided to evaluate Alexander-Whitney diagonal."
+        )

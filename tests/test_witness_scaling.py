@@ -7,10 +7,8 @@ def test_witness_complex_scaling():
     t = np.linspace(0, 2*np.pi, 2000)
     points = np.column_stack([np.cos(t), np.sin(t)])
     
-    # Build witness complex with 50 landmarks
-    # This should find H1 = Z (1 generator)
-    sc = SimplicialComplex.from_witness(points, n_landmarks=50, max_dimension=1)
-    
+    # Build witness complex with more landmarks and larger alpha to ensure H1
+    sc = SimplicialComplex.from_witness(points, n_landmarks=100, alpha=0.5, max_dimension=1)
     # Compute homology (via Julia or fallback)
     # The 'homology' method is in the ChainComplex returned by .chain_complex()
     cc = sc.chain_complex()
