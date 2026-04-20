@@ -118,7 +118,28 @@ The curriculum covers:
 
 ## Academic Reference
 
-If you utilize pySurgery in your research, please refer to the `CITATION.cff` file for appropriate attribution. The algorithms implemented herein are grounded in standard computational topology literature, notably extending frameworks from *Computational Topology for Data Analysis* (Dey & Wang) to accommodate surgery-theoretic invariants.
+If you utilize pySurgery in your research, please refer to the `CITATION.cff` file for appropriate attribution. 
+
+## Sessions Reference
+
+The algorithms implemented in pySurgery are grounded in several foundational publications:
+
+* **Alexander-Whitney Cup Product:** Grounded in the classical simplicial diagonal approximation (Alexander & Whitney, 1949).
+* **Bass-Heller-Swan Decomposition:** Used for Whitehead group obstructions and $K$-theory computations.
+* **CkNN (Continuous k-Nearest Neighbors):** Graph construction robust to varying density (Berry & Sauer, 2016).
+* **Freedman's Classification:** Topological classification of simply-connected 4-manifolds (Freedman, 1982).
+* **Gromov-Wasserstein Distance:** Entropic approximation using JAX-accelerated Sinkhorn iterations (Peyré, Cuturi, et al., 2016).
+* **Kirby Calculus:** Implementation of handle slide and blow-up mechanics (Kirby, 1970).
+* **Levina-Bickel MLE:** Intrinsic dimension estimation via maximum likelihood (Levina & Bickel, 2004).
+* **Orthogonal Procrustes:** Matrix alignment for geometric comparison (Schönemann, 1966).
+* **QuickMapper:** High-performance topological mapping and simplification (Narang et al., 2015).
+* **Smith Normal Form (SNF):** Exact integer matrix decomposition used for homology and torsion computations.
+* **Stiefel-Whitney Classes:** Computation via Wu's formula for orientability and Spin structures (Wu, 1950).
+* **Thurston's Geometrization:** Heuristics for 3-manifold classification (Thurston, 1982).
+* **TwoNN:** Intrinsic dimension estimation using two nearest neighbors (Facco et al., 2017).
+* **Wall Groups ($L$-theory):** Based on the surgery obstruction classification (Wall, 1970).
+* **Whitney Embedding:** Piecewise-linear immersion and embedding checks (Whitney, 1944).
+* **Computational Topology:** Algorithms extending frameworks from *Computational Topology for Data Analysis* (Dey & Wang).
 
 ---
 
