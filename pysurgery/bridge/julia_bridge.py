@@ -165,9 +165,11 @@ class JuliaBridge:
                     self.pairwise_distance_matrix(np.array([[0., 0.], [1., 1.]]), "euclidean"),
                     self.frechet_distance(np.array([[0., 0.], [1., 1.]]), np.array([[0., 1.], [1., 0.]])),
                     self.gromov_wasserstein_distance(
-                        np.array([[0., 1.], [1., 0.]]), np.array([[0., 1.], [1., 0.]]), 
+                        np.array([[0., 1.], [1., 0.]]), np.array([[0., 1.], [1., 0.]]),
                         np.array([0.5, 0.5]), np.array([0.5, 0.5]), 0.01, 2
-                    )
+                    ),
+                    self.quick_mapper_jl({"V": [0, 1], "E": [(0, 1)]}, 1, -1.0),
+                    self.compute_cknn_graph(np.array([[0., 0.], [1., 1.]]), 1, 1.0)
                 ),
             ),
         ]
@@ -992,25 +994,56 @@ class JuliaBridge:
         # res is Vector{Vector{Int64}} from Julia
         return [tuple(int(x) for x in s) for s in res]
 
-    def quick_mapper_jl(self, G_raw: dict, max_loops: int = 1, min_modularity_gain: float = 1e-6) -> tuple[dict, dict]:
+    def compute_cknn_graph(self, pts: np.ndarray, k: int, delta: float) -> np.ndarray:
+        """Compute the Continuous k-Nearest Neighbors graph using Julia."""
+        self.require_julia()
+        pts_view = np.asarray(pts, dtype=np.float64, order="C")
+        try:
+            with self._lock:
+                out = self.backend.cknn_graph_jl(pts_view, int(k), float(delta))
+                pairs = np.array(out, dtype=np.int64)
+                if pairs.size == 0:
+                    return np.zeros((0, 2), dtype=np.int64)
+                return pairs.reshape(-1, 2)
+        except Exception as e:
+            raise RuntimeError(f"Julia cknn_graph failed: {e!r}")
+
+    
+    def compute_cknn_graph_accelerated(self, pts: np.ndarray, rho: np.ndarray, delta: float) -> np.ndarray:
+        """Compute the CkNN graph using pre-computed rho values for speed."""
+        self.require_julia()
+        pts_view = np.asarray(pts, dtype=np.float64, order="C")
+        rho_view = np.asarray(rho, dtype=np.float64)
+        try:
+            with self._lock:
+                out = self.backend.cknn_graph_accelerated_jl(pts_view, rho_view, float(delta))
+                pairs = np.array(out, dtype=np.int64)
+                if pairs.size == 0:
+                    return np.zeros((0, 2), dtype=np.int64)
+                return pairs.reshape(-1, 2)
+        except Exception as e:
+            raise RuntimeError(f"Julia cknn_graph_accelerated failed: {e!r}")
+
+def quick_mapper_jl(self, G_raw: dict, max_loops: int = 1, min_modularity_gain: float = 1e-6) -> tuple[dict, dict]:
         """
         Executes the high-performance QuickMapper algorithm in Julia.
         G_raw must be a dict with keys "V" (list of ints) and "E" (list of tuples of ints).
-        Returns a simplified graph dict and a mapping dictionary L.
-        """
-        self.require_julia()
-        try:
-            G_simple, L_jl = self.backend.quick_mapper_jl(
-                G_raw,
-                int(max_loops),
-                float(min_modularity_gain)
-            )
-            from juliacall import convert
-            L_py = convert(dict, L_jl)
-            G_simple_py = convert(dict, G_simple)
-            return G_simple_py, L_py
-        except Exception as e:
-            raise RuntimeError(f"quick_mapper_jl failed: {e!r}")
-
-# Singleton instance
+            Returns a simplified graph dict and a mapping dictionary L.
+            """
+            self.require_julia()
+            try:
+                G_simple, L_jl = self.backend.quick_mapper_jl(
+                    G_raw,
+                    int(max_loops),
+                    float(min_modularity_gain)
+                )
+                L_py = dict(L_jl)
+                G_simple_py = dict(G_simple)
+                if "E" in G_simple_py:
+                    G_simple_py["E"] = [tuple(e) for e in G_simple_py["E"]]
+                return G_simple_py, L_py
+            except Exception as e:
+                raise RuntimeError(f"quick_mapper_jl failed: {e!r}")
+    
+    # Singleton instance
 julia_engine = JuliaBridge()

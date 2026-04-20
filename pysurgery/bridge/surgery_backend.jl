@@ -5,10 +5,11 @@ using LinearAlgebra
 using SparseArrays
 using Statistics
 using Combinatorics
-using PythonCall: pyconvert, Py
+using Random
+using PythonCall: pyconvert, Py, PyDict
 import PrecompileTools
 
-export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_circumradius_sq_3d, compute_circumradius_sq_2d, quick_mapper_jl
+export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_circumradius_sq_3d, compute_circumradius_sq_2d, quick_mapper_jl, cknn_graph_jl, cknn_graph_accelerated_jl
 
 const HAS_ABSTRACT_ALGEBRA = try
     @eval import AbstractAlgebra
@@ -2302,7 +2303,7 @@ function compute_alpha_complex_simplices_jl(
 end
 
 
-function quick_mapper_jl(G_raw_py::Py, max_loops::Int=1, min_modularity_gain::Float64=1e-6)
+function quick_mapper_jl(G_raw_py::PyDict{Any, Any}, max_loops::Int=1, min_modularity_gain::Float64=1e-6)
     G_raw = pyconvert(Dict{Any, Any}, G_raw_py)
     V_py = G_raw["V"]
     E_py = G_raw["E"]
@@ -2323,14 +2324,16 @@ function quick_mapper_jl(G_raw_py::Py, max_loops::Int=1, min_modularity_gain::Fl
     end
 
     degree = Dict{Int, Int}(v => length(adj[v]) for v in V)
+    comm_degree = Dict{Int, Int}(v => degree[v] for v in V)
     num_of_loops = 0
-    modularity_gain = 1000.0
-    best_labels = Int[]
     two_m = 2.0 * m
+    any_change = true
 
-    while modularity_gain > min_modularity_gain && num_of_loops < max_loops
+    while any_change && num_of_loops < max_loops
         vertex_order = collect(V)
         shuffle!(vertex_order)
+        any_change = false
+        total_gain = 0.0
 
         for vertex in vertex_order
             neighbors = adj[vertex]
@@ -2338,38 +2341,46 @@ function quick_mapper_jl(G_raw_py::Py, max_loops::Int=1, min_modularity_gain::Fl
                 continue
             end
 
-            NbrLabelSet_vertex = Set{Int}()
-            push!(NbrLabelSet_vertex, L[vertex])
+            curr_comm = L[vertex]
+            k_v = degree[vertex]
+            
+            # Map neighbor communities to counts
+            nbr_comm_counts = Dict{Int, Float64}()
             for nbr in neighbors
-                push!(NbrLabelSet_vertex, L[nbr])
+                l = L[nbr]
+                nbr_comm_counts[l] = get(nbr_comm_counts, l, 0.0) + 1.0
             end
 
-            empty!(best_labels)
-            max_contribution = -Inf
-            deg_v = degree[vertex]
+            best_comm = curr_comm
+            max_gain = 0.0
 
-            for label in NbrLabelSet_vertex
-                contribution = 0.0
-                for j in neighbors
-                    if L[j] == label
-                        contribution += (1.0 - (deg_v * degree[j]) / two_m)
-                    end
+            for (comm, k_in) in nbr_comm_counts
+                if comm == curr_comm
+                    continue
                 end
-
-                if contribution > max_contribution
-                    max_contribution = contribution
-                    empty!(best_labels)
-                    push!(best_labels, label)
-                elseif contribution == max_contribution
-                    push!(best_labels, label)
+                
+                # Louvain modularity gain
+                gain = (k_in / m) - (k_v * comm_degree[comm]) / (two_m^2)
+                
+                if gain > max_gain
+                    max_gain = gain
+                    best_comm = comm
                 end
             end
 
-            L[vertex] = rand(best_labels)
+            if best_comm != curr_comm && max_gain > min_modularity_gain
+                comm_degree[curr_comm] -= k_v
+                comm_degree[best_comm] += k_v
+                L[vertex] = best_comm
+                any_change = true
+                total_gain += max_gain
+            end
         end
 
-        modularity_gain = 0.0 
         num_of_loops += 1
+        if total_gain <= min_modularity_gain
+            break
+        end
     end
 
     E_simple = Set{Tuple{Int, Int}}()
@@ -2382,9 +2393,91 @@ function quick_mapper_jl(G_raw_py::Py, max_loops::Int=1, min_modularity_gain::Fl
             end
         end
     end
-
-    G_simple = Dict("V" => collect(Set(values(L))), "E" => collect(E_simple))
-    return G_simple, L
+    
+    V_simple = collect(Set(values(L)))
+    return Dict("V" => V_simple, "E" => collect(E_simple)), L
 end
 
+function cknn_graph_jl(pts::AbstractMatrix{Float64}, k::Int, delta::Float64)
+    n = size(pts, 1)
+    if n == 0 || k < 1
+        return Matrix{Int64}(undef, 0, 2)
+    end
+    k_actual = min(k, n - 1)
+    
+    # 1. Compute rho (distance to k-th neighbor)
+    rho = zeros(Float64, n)
+    Threads.@threads for i in 1:n
+        dists_sq = zeros(Float64, n)
+        p_i = @view pts[i, :]
+        for j in 1:n
+            dists_sq[j] = sum(abs2, p_i .- @view(pts[j, :]))
+        end
+        # k-th nearest neighbor (0-th is self)
+        rho[i] = sqrt(partialsort!(dists_sq, k_actual + 1))
+    end
+    
+    # 2. Filter edges based on CkNN condition
+    thread_pairs = [Vector{NTuple{2, Int32}}() for _ in 1:Threads.nthreads()]
+    delta_sq = delta^2
+    
+    Threads.@threads for i in 1:(n-1)
+        tid = Threads.threadid()
+        p_i = @view pts[i, :]
+        rho_i = rho[i]
+        for j in (i+1):n
+            dist_sq = sum(abs2, p_i .- @view(pts[j, :]))
+            if dist_sq < delta_sq * rho_i * rho[j]
+                push!(thread_pairs[tid], (Int32(i-1), Int32(j-1)))
+            end
+        end
+    end
+    
+    total_pairs = sum(length, thread_pairs)
+    out = Matrix{Int64}(undef, total_pairs, 2)
+    idx = 1
+    for tp in thread_pairs
+        for p in tp
+            out[idx, 1] = p[1]
+            out[idx, 2] = p[2]
+            idx += 1
+        end
+    end
+    return out
+end
+
+
+function cknn_graph_accelerated_jl(pts::AbstractMatrix{Float64}, rho::AbstractVector{Float64}, delta::Float64)
+    n = size(pts, 1)
+    if n == 0
+        return Matrix{Int64}(undef, 0, 2)
+    end
+    
+    thread_pairs = [Vector{NTuple{2, Int32}}() for _ in 1:Threads.nthreads()]
+    delta_sq = delta^2
+    
+    Threads.@threads for i in 1:(n-1)
+        tid = Threads.threadid()
+        p_i = @view pts[i, :]
+        rho_i = rho[i]
+        for j in (i+1):n
+            dist_sq = sum(abs2, p_i .- @view(pts[j, :]))
+            if dist_sq < delta_sq * rho_i * rho[j]
+                push!(thread_pairs[tid], (Int32(i-1), Int32(j-1)))
+            end
+        end
+    end
+    
+    total_pairs = sum(length, thread_pairs)
+    out = Matrix{Int64}(undef, total_pairs, 2)
+    idx = 1
+    for tp in thread_pairs
+        for p in tp
+            out[idx, 1] = p[1]
+            out[idx, 2] = p[2]
+            idx += 1
+        end
+    end
+    return out
+end
 end # module

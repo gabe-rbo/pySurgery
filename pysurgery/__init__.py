@@ -64,9 +64,9 @@ from .core.homology_generators import (
     generator_cycles_from_simplices,
     greedy_h1_basis,
     compute_optimal_h1_basis_from_simplices,
-    compute_optimal_h1_basis_from_simplex_tree,
+    compute_optimal_h1_basis_from_complex,
     compute_homology_basis_from_simplices,
-    compute_homology_basis_from_simplex_tree,
+    compute_homology_basis_from_complex,
 )
 from .core.characteristic_classes import (
     extract_stiefel_whitney_w2,
@@ -198,9 +198,9 @@ __all__ = [
     "generator_cycles_from_simplices",
     "greedy_h1_basis",
     "compute_optimal_h1_basis_from_simplices",
-    "compute_optimal_h1_basis_from_simplex_tree",
+    "compute_optimal_h1_basis_from_complex",
     "compute_homology_basis_from_simplices",
-    "compute_homology_basis_from_simplex_tree",
+    "compute_homology_basis_from_complex",
     "extract_stiefel_whitney_w2",
     "check_spin_structure",
     "extract_pontryagin_p1",

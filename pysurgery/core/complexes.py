@@ -4,7 +4,7 @@ import numpy as np
 import warnings
 import sympy as sp
 from scipy.sparse import csr_matrix
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast, Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from .math_core import get_sparse_snf_diagonal
 from ..bridge.julia_bridge import julia_engine
@@ -1264,30 +1264,52 @@ class SimplicialComplex(BaseModel):
         Construct a Continuous k-Nearest Neighbors (CkNN) complex.
         CkNN is more robust to varying density than epsilon-graphs.
         """
-        from scipy.spatial import cKDTree
+        from ..bridge.julia_bridge import julia_engine
         pts = np.asarray(points, dtype=np.float64)
         n = len(pts)
-        tree = cKDTree(pts)
+
+        if n == 0:
+            return cls.from_simplices([], coefficient_ring=coefficient_ring)
+        if k >= n:
+            k = n - 1
+        if k < 1:
+            return cls.from_simplices([(i,) for i in range(n)], coefficient_ring=coefficient_ring)
+
+        simplices = [(i,) for i in range(n)]
         
-        # Get k-NN distances
-        dists, idxs = tree.query(pts, k=k+1)
-        # rho(v) is the distance to the k-th neighbor
+        # We always compute rho in Python using cKDTree as it is extremely fast and efficient
+        from scipy.spatial import cKDTree
+        tree = cKDTree(pts)
+        dists, _ = tree.query(pts, k=k+1)
         rho = dists[:, k]
         
-        edges = []
-        for i in range(n):
-            for j_idx in range(1, k + 1):
-                j = idxs[i][j_idx]
-                d_ij = dists[i][j_idx]
-                # CkNN condition: d(i,j) < delta * sqrt(rho(i) * rho(j))
-                if d_ij < delta * np.sqrt(rho[i] * rho[j]):
-                    edges.append(tuple(sorted((i, j))))
-        
-        sc = cls.from_simplices(edges, coefficient_ring=coefficient_ring, close_under_faces=True)
+        # Try Julia acceleration for the large edge list filtering
+        julia_success = False
+        if julia_engine.available:
+            try:
+                pairs = julia_engine.compute_cknn_graph_accelerated(pts, rho, delta)
+                for i, j in pairs:
+                    simplices.append((int(i), int(j)))
+                julia_success = True
+            except Exception as e:
+                import warnings
+                warnings.warn(f"Julia CkNN failed ({e!r}). Falling back to SciPy query_pairs.")
+
+        if not julia_success:
+            # The absolute maximum possible search radius for the CkNN condition
+            max_search_radius = delta * np.max(rho)
+
+            # query_pairs limits the search space mathematically perfectly, avoiding O(N^2)
+            for i, j in tree.query_pairs(max_search_radius):
+                dist_sq = np.sum((pts[i] - pts[j]) ** 2)
+                threshold_sq = (delta ** 2) * rho[i] * rho[j]
+                if dist_sq < threshold_sq:
+                    simplices.append((i, j))
+
+        sc = cls.from_simplices(simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
         if max_dimension > 1:
             return sc.expand(max_dimension)
         return sc
-
     @classmethod
     def from_alpha_complex(
         cls,
@@ -1761,10 +1783,15 @@ class SimplicialComplex(BaseModel):
         max_loops: int = 1,
         min_modularity_gain: float = 1e-6,
         preserve_topology: bool = True,
-    ) -> "SimplicialComplex":
+        ) -> tuple["SimplicialComplex", dict[int, int]]:
         """
         Simplify the simplicial complex while attempting to preserve global topology.
         This algorithm works on the 1-skeleton using modularity-based vertex merging.
+
+        Returns:
+            A tuple (simplified_complex, vertex_map) where:
+            - simplified_complex: A SimplicialComplex with contiguous vertex indices [0, N-1].
+            - vertex_map: A dictionary mapping the new vertex indices to their original IDs.
         """
         from ..bridge.julia_bridge import julia_engine
 
@@ -1779,27 +1806,106 @@ class SimplicialComplex(BaseModel):
                 G_simple, L = julia_engine.quick_mapper_jl(
                     G_raw, max_loops, min_modularity_gain
                 )
-                
+
+                # Check if simplification actually occurred
+                if len(G_simple["V"]) == len(G_raw["V"]):
+                    import warnings
+                    warnings.warn("QuickMapper: No simplification possible (vertex count unchanged).")
+
+                # Determine raw mapped simplices
+                raw_mapped_simplices = set()
                 if not preserve_topology:
-                    return self.__class__.from_simplices(G_simple["E"])
+                    for s in G_simple["E"]:
+                        raw_mapped_simplices.add(tuple(sorted(s)))
+                else:
+                    for d in self.dimensions:
+                        for simplex in self.n_simplices(d):
+                            mapped = tuple(sorted(list(set(L[v] for v in simplex))))
+                            if len(mapped) > 0:
+                                raw_mapped_simplices.add(mapped)
+
+                # Renormalize indices to be contiguous [0, N-1]
+                # unique_nodes are the representatives from the modularity merging (L values)
+                unique_representatives = sorted(list(set(node for s in raw_mapped_simplices for node in s)))
                 
-                # To preserve higher topology, we must lift the simplification
-                # back to the full simplicial complex. 
-                # This is a research-grade extension of the standard algorithm.
-                new_simplices = set()
-                for d in self.dimensions:
-                    for simplex in self.n_simplices(d):
-                        mapped = tuple(sorted(list(set(L[v] for v in simplex))))
-                        if len(mapped) > 0:
-                            new_simplices.add(mapped)
-                
-                return self.__class__.from_simplices(new_simplices, close_under_faces=True)
+                # new_id -> original representative ID (which is one of the original vertex IDs)
+                new_to_old = {new: old for new, old in enumerate(unique_representatives)}
+                # representative ID -> new_id
+                old_to_new = {old: new for new, old in enumerate(unique_representatives)}
+
+                renormalized_simplices = {
+                    tuple(sorted(old_to_new[v] for v in s)) for s in raw_mapped_simplices
+                }
+
+                new_complex = self.__class__.from_simplices(renormalized_simplices, close_under_faces=True)
+                return new_complex, new_to_old
+
             except Exception as e:
+                import warnings
                 warnings.warn(f"Julia QuickMapper failed ({e!r}). Falling back to pure Python.")
 
-        # Python implementation logic (placeholder for modularity-based merge)
-        # For small complexes, we just return the original as the fallback.
-        return self.model_copy()
+        # Python implementation fallback: Modularity-based vertex merging (Louvain-like)
+        import random
+        from collections import defaultdict
+
+        adj = defaultdict(set)
+        for u, v in E:
+            adj[u].add(v)
+            adj[v].add(u)
+
+        L = {v: v for v in V}
+
+        # Simple modularity-based merge (Louvain-like)
+        for _ in range(max_loops):
+            nodes = list(V)
+            random.shuffle(nodes)
+            for u in nodes:
+                if not adj[u]:
+                    continue
+
+                # Find best community
+                neighbor_communities = defaultdict(int)
+                for v in adj[u]:
+                    neighbor_communities[L[v]] += 1
+
+                if not neighbor_communities:
+                    continue
+                best_comm = max(neighbor_communities, key=neighbor_communities.get)
+
+                # Check topology preservation (if required)
+                if preserve_topology:
+                    # Heuristic: only merge if degree <= 2 (preserving paths/loops)
+                    if len(adj[u]) > 2:
+                        continue
+
+                L[u] = best_comm
+
+        # Build simplified simplices based on L
+        simplices = set()
+        if not preserve_topology:
+            # We only keep edges (1-skeleton) in the raw non-preserving mode
+            for u, v in E:
+                mapped = tuple(sorted(list(set([L[u], L[v]]))))
+                if len(mapped) > 1:
+                    simplices.add(mapped)
+        else:
+            for d in self.dimensions:
+                for simplex in self.n_simplices(d):
+                    mapped = tuple(sorted(list(set(L[v] for v in simplex))))
+                    if len(mapped) > 0:
+                        simplices.add(mapped)
+
+        # Renormalize indices to be contiguous [0, N-1]
+        unique_nodes = sorted(list(set(node for s in simplices for node in s)))
+        mapping = {old: new for new, old in enumerate(unique_nodes)}
+        new_to_old = {new: old for new, old in enumerate(unique_nodes)}
+
+        renormalized_simplices = {
+            tuple(sorted(mapping[v] for v in s)) for s in simplices
+        }
+
+        sc_simple = self.__class__.from_simplices(renormalized_simplices, close_under_faces=True)
+        return sc_simple, new_to_old
 
     def to_gudhi_simplex_tree(self, *, use_filtration: bool = True):
         """Convert to a GUDHI SimplexTree for advanced TDA operations."""
@@ -1807,29 +1913,30 @@ class SimplicialComplex(BaseModel):
             import gudhi
         except ImportError:
             raise ImportError("gudhi is required for to_gudhi_simplex_tree()")
-        
         st = gudhi.SimplexTree()
         for d in self.dimensions:
             for simplex in self.n_simplices(d):
-                f_val = self.filtration.get(simplex, 0.0) if use_filtration else 0.0
-                st.insert(simplex, filtration=f_val)
+                if use_filtration:
+                    st.insert(simplex, filtration=self.filtration.get(simplex, 0.0))
+                else:
+                    st.insert(simplex)
         return st
 
     @classmethod
     def from_gudhi_simplex_tree(cls, st, *, include_filtration: bool = True) -> "SimplicialComplex":
         """Convert a GUDHI SimplexTree to a SimplicialComplex."""
-        simplices = []
+        simplices = {d: [] for d in range(st.dimension() + 1)}
         filtration = {}
-        for filtered_simplex in st.get_filtration():
-            s = tuple(sorted(filtered_simplex[0]))
-            simplices.append(s)
+        for simplex, filt in st.get_filtration():
+            d = len(simplex) - 1
+            s_tuple = tuple(sorted(simplex))
+            simplices[d].append(s_tuple)
             if include_filtration:
-                filtration[s] = filtered_simplex[1]
-        
-        return cls.from_simplices(simplices, close_under_faces=False).model_copy(update={"filtration": filtration})
+                filtration[s_tuple] = filt
+        return cls(simplices=simplices, filtration=filtration)
 
     def to_trimesh(self):
-        """Convert a 2D simplicial complex to a Trimesh object."""
+        """Convert to a trimesh object."""
         try:
             import trimesh
         except ImportError:
@@ -1861,6 +1968,53 @@ class SimplicialComplex(BaseModel):
         """Convert a PyTorch Geometric Data object to a SimplicialComplex."""
         edges = data.edge_index.t().tolist()
         return cls.from_simplices(edges)
+
+    @property
+    def cells_count(self) -> Dict[int, int]:
+        """Return a dictionary mapping dimension to the count of simplices."""
+        return {d: len(list(self.n_simplices(d))) for d in self.dimensions}
+
+    def compute_homology_basis(
+        self,
+        dimension: int,
+        point_cloud: Optional[np.ndarray] = None,
+        *,
+        mode: Literal["valid", "optimal"] = "valid",
+        max_roots: Optional[int] = None,
+        root_stride: int = 1,
+        max_cycles: Optional[int] = None,
+    ):
+        """Compute H_k generators directly from this complex."""
+        from ..core.homology_generators import compute_homology_basis_from_complex
+
+        return compute_homology_basis_from_complex(
+            self,
+            dimension=dimension,
+            point_cloud=point_cloud,
+            mode=mode,
+            max_roots=max_roots,
+            root_stride=root_stride,
+            max_cycles=max_cycles,
+        )
+
+    def compute_optimal_h1_basis(
+        self,
+        point_cloud: Optional[np.ndarray] = None,
+        *,
+        max_roots: Optional[int] = None,
+        root_stride: int = 1,
+        max_cycles: Optional[int] = None,
+    ):
+        """Compute an optimal H1 basis directly from this complex."""
+        from ..core.homology_generators import compute_optimal_h1_basis_from_complex
+
+        return compute_optimal_h1_basis_from_complex(
+            self,
+            point_cloud=point_cloud,
+            max_roots=max_roots,
+            root_stride=root_stride,
+            max_cycles=max_cycles,
+        )
 
 
 __all__ = ["SimplicialComplex", "ChainComplex", "CWComplex"]

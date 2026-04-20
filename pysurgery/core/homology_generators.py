@@ -863,8 +863,8 @@ def compute_homology_basis_from_simplices(
     return py_res
 
 
-def compute_homology_basis_from_simplex_tree(
-    simplex_tree: object,
+def compute_homology_basis_from_complex(
+    complex: "SimplicialComplex",
     dimension: int,
     point_cloud: Optional[np.ndarray] = None,
     *,
@@ -873,14 +873,15 @@ def compute_homology_basis_from_simplex_tree(
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
 ) -> HomologyBasisResult:
-    """Compute H_k generators directly from a simplex-tree object."""
-    simplices = [
-        tuple(s[0])
-        for s in simplex_tree.get_skeleton(max(dimension + 1, 1))
-        if len(s[0]) in {dimension + 1, dimension + 2}
-    ]
-    vertices = [int(s[0][0]) for s in simplex_tree.get_skeleton(0)]
-    num_vertices = (max(vertices) + 1) if vertices else 0
+    """Compute H_k generators directly from a SimplicialComplex object."""
+    # Get all simplices up to dim + 1
+    simplices = []
+    for d in range(dimension + 1):
+        simplices.extend(list(complex.n_simplices(d)))
+    simplices.extend(list(complex.n_simplices(dimension + 1)))
+
+    num_vertices = len(list(complex.n_simplices(0)))
+    
     return compute_homology_basis_from_simplices(
         simplices,
         num_vertices,
@@ -893,20 +894,19 @@ def compute_homology_basis_from_simplex_tree(
     )
 
 
-def compute_optimal_h1_basis_from_simplex_tree(
-    simplex_tree: object,
+def compute_optimal_h1_basis_from_complex(
+    complex: "SimplicialComplex",
     point_cloud: Optional[np.ndarray] = None,
     *,
     max_roots: Optional[int] = None,
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
 ) -> HomologyBasisResult:
-    """Compute an optimal H1 basis directly from a simplex-tree object."""
-    simplices = [
-        tuple(s[0]) for s in simplex_tree.get_skeleton(2) if len(s[0]) in (2, 3)
-    ]
-    vertices = [int(s[0][0]) for s in simplex_tree.get_skeleton(0)]
-    num_vertices = (max(vertices) + 1) if vertices else 0
+    """Compute an optimal H1 basis directly from a SimplicialComplex object."""
+    # H1 needs 1-simplices and 2-simplices
+    simplices = list(complex.n_simplices(1)) + list(complex.n_simplices(2))
+    num_vertices = len(list(complex.n_simplices(0)))
+    
     return compute_optimal_h1_basis_from_simplices(
         simplices,
         num_vertices,

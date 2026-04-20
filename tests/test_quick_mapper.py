@@ -35,7 +35,9 @@ def test_quick_mapper_invariants():
     
     # Run QuickMapper with topology preservation
     # Force at least one merge by allowing negative gain if necessary
-    simplified_sc = original_sc.quick_mapper(max_loops=20, min_modularity_gain=-1.0, preserve_topology=True)
+    res = original_sc.quick_mapper(max_loops=20, min_modularity_gain=-1.0, preserve_topology=True)
+    simplified_sc = res[0]
+    mapping = res[1]
     
     # Verify invariants are perfectly preserved
     assert simplified_sc.chain_complex().betti_number(0) == 1
@@ -46,6 +48,7 @@ def test_quick_mapper_invariants():
     # but for a noisy circle we expect at least some merges.
     # We assert that it didn't EXPLODE and is at most the same size.
     assert len(simplified_sc.n_simplices(0)) <= len(original_sc.n_simplices(0))
+    assert isinstance(mapping, dict)
 
 def test_quick_mapper_dimension_agnostic():
     # Create a simple 2-simplex (triangle)
