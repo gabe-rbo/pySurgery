@@ -1,7 +1,7 @@
 <div align="center">
-  <table border="0" cellpadding="0" cellspacing="0" style="border: none !important; border-collapse: collapse; background: transparent;">
-    <tr style="border: none !important; background: transparent;">
-      <td width="50%" style="border: none !important; padding: 20px; vertical-align: top; background: transparent;">
+  <table border="0" cellpadding="0" cellspacing="0" style="border: none !important; border-collapse: collapse; width: 100%; background-color: transparent;">
+    <tr style="border: none !important; background-color: transparent;">
+      <td width="60%" align="left" style="border: none !important; padding: 20px; vertical-align: top; background-color: transparent;">
 
 <div align="center">
 
@@ -20,11 +20,11 @@ pySurgery is a high-performance Python library for exact computational algebraic
 
 </div>
   </td>
-  <td width="50%" style="border: none !important; padding: 20px; vertical-align: middle; background: transparent;">
-       <img width="2000" height="2000" alt="Image" src="https://github.com/user-attachments/assets/6be087fc-9c87-433d-aa2e-b9762df6fc89" style="display: block; border: none !important; max-width: 100%; height: auto;" />
-  </td>
-  </tr>
- </table>
+<td width="40%" align="center" style="border: none !important; padding: 10px; vertical-align: middle; background-color: transparent;">
+       <img width="2000" height="2000" alt="pySurgery logo" src="https://github.com/user-attachments/assets/6be087fc-9c87-433d-aa2e-b9762df6fc89" style="display: block; border: none !important; max-width: 100%; height: auto;" />
+    </td>
+    </tr>
+  </table>
 </div>
 
 
