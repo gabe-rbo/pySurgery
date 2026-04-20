@@ -7,6 +7,8 @@
 
 **A high-performance Python library for Computational Surgery Theory.**
 
+---
+
 pySurgery is a high-performance Python library for exact computational algebraic topology, computational surgery theory, and geometric analysis. It is designed to compute discrete topological invariants—such as integer homology (including exact torsion), intersection forms, cup products, L-group obstructions, and homeomorphism certificates—at massive scale.
 
 The library leverages a tri-language architecture (**Python**, **Julia**, and **JAX/XLA**) to rigorously evaluate complex topological structures, scaling to point clouds exceeding 100,000 points while operating within strict memory bounds.
@@ -16,7 +18,7 @@ The library leverages a tri-language architecture (**Python**, **Julia**, and **
 
   </td>
   <td width="50%" style="border: none !important; padding: 20px; vertical-align: middle; background: transparent;">
-        <img width="2048" alt="pySurgery Logo" src="https://github.com/user-attachments/assets/59ea4574-708e-47e7-90f8-0c857130aa0d" style="display: block; border: none !important; max-width: 100%; height: auto;" />
+       <img width="2000" height="2000" alt="Image" src="https://github.com/user-attachments/assets/6be087fc-9c87-433d-aa2e-b9762df6fc89" style="display: block; border: none !important; max-width: 100%; height: auto;" />
   </td>
   </tr>
  </table>
