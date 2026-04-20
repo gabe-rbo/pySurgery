@@ -1785,127 +1785,229 @@ class SimplicialComplex(BaseModel):
         preserve_topology: bool = True,
         ) -> tuple["SimplicialComplex", dict[int, int]]:
         """
-        Simplify the simplicial complex while attempting to preserve global topology.
-        This algorithm works on the 1-skeleton using modularity-based vertex merging.
+        Simplify the simplicial complex while reducing simplices, using modularity-based vertex merging.
+
+        If `preserve_topology=True`, the algorithm performs iterative edge contractions strictly 
+        gated by the Link Condition: `Lk(u) ∩ Lk(v) ⊆ Lk(uv)`.
+
+        Topological Guarantees (`preserve_topology=True`):
+            1. Homotopy Equivalence: The resulting simplified complex is guaranteed to be 
+               homotopy equivalent (specifically, a simple homotopy equivalence via strong 
+               deformation retraction; Whitehead, 1939) to the original complex.
+            2. Non-Homeomorphic in General: The algorithm does NOT guarantee homeomorphism or 
+               isotopy for general simplicial complexes. Because edge contractions can alter the 
+               intrinsic dimension, the underlying space might not be locally homeomorphic to the original.
+            3. PL-Homeomorphism for Manifolds: An exception exists for closed combinatorial 
+               manifolds (e.g., triangulated closed surfaces without boundaries). In this specific 
+               regime, an edge contraction satisfying the Link Condition is a valid stellar exchange, 
+               thus preserving Piecewise Linear (PL) homeomorphism.
+
+        Preserved Invariants:
+            - Homotopy type
+            - Homology and Cohomology groups (Betti numbers H_k, torsion coefficients)
+            - Cohomology ring structure (Cup products)
+            - Fundamental group (pi_1)
+            - Euler characteristic (chi)
+            - K-theory groups
+
+        Not Generally Preserved Invariants (unless a closed manifold):
+            - Homeomorphism and Diffeomorphism classes
+            - Isotopy class / Ambient embeddings
+            - Intrinsic local/global dimension
+            - Intersection forms (which rely on rigid dimensional transversality)
 
         Returns:
             A tuple (simplified_complex, vertex_map) where:
             - simplified_complex: A SimplicialComplex with contiguous vertex indices [0, N-1].
             - vertex_map: A dictionary mapping the new vertex indices to their original IDs.
         """
-        from ..bridge.julia_bridge import julia_engine
-
-        # We operate on the 1-skeleton (graph)
+        import random
+        from collections import defaultdict
+        
         V = [v[0] for v in self.n_simplices(0)]
         E = self.n_simplices(1)
+        
+        from ..bridge.julia_bridge import julia_engine
+        
+        if preserve_topology:
+            mapped_simplices = set()
+            for d in self.dimensions:
+                for simp in self.n_simplices(d):
+                    mapped_simplices.add(tuple(sorted(simp)))
+                    
+            if julia_engine.available:
+                try:
+                    simplices_list = [list(s) for s in mapped_simplices]
+                    out_simplices, L_map = julia_engine.quick_mapper_topology_jl(
+                        simplices_list, max_loops, min_modularity_gain
+                    )
+                    
+                    unique_nodes = sorted(list(set(L_map.values())))
+                    new_to_old = {new: old for new, old in enumerate(unique_nodes)}
+                    old_to_new = {old: new for new, old in enumerate(unique_nodes)}
+                    
+                    renormalized_simplices = {
+                        tuple(sorted(old_to_new[v] for v in s)) for s in out_simplices
+                    }
+                    
+                    new_complex = SimplicialComplex.from_simplices(renormalized_simplices, close_under_faces=True,
+                                                                   coefficient_ring=self.coefficient_ring)
+                    return new_complex, new_to_old
+                except Exception as e:
+                    import warnings
+                    warnings.warn(f"Julia QuickMapper (Topology) failed ({e!r}). Falling back to pure Python.")
+                    
+            # Mathematically accurate edge contraction preserving topology (Link Condition)
+            L = {v: v for v in V}
+            any_change = True
+            loops = 0
+            
+            while any_change and loops < max_loops:
+                any_change = False
+                loops += 1
+                
+                v_simps = defaultdict(list)
+                for simp in mapped_simplices:
+                    for v in simp:
+                        v_simps[v].append(simp)
+                        
+                current_edges = [simp for simp in mapped_simplices if len(simp) == 2]
+                if not current_edges:
+                    break
+                    
+                degrees = defaultdict(int)
+                for u, v in current_edges:
+                    degrees[u] += 1
+                    degrees[v] += 1
+                m = len(current_edges)
+                two_m_sq = (2.0 * m) ** 2
+                
+                edge_gains = []
+                for u, v in current_edges:
+                    gain = (1.0 / m) - (degrees[u] * degrees[v]) / two_m_sq
+                    edge_gains.append((gain, (u, v)))
+                    
+                edge_gains.sort(key=lambda x: (x[0], random.random()), reverse=True)
+                
+                for gain, (u, v) in edge_gains:
+                    if gain <= min_modularity_gain:
+                        continue
+                        
+                    # Check Link Condition for edge (u, v)
+                    lk_u = set()
+                    lk_v = set()
+                    lk_uv = set()
+                    
+                    for simp in v_simps[u]:
+                        if v in simp:
+                            lk_uv.add(tuple(x for x in simp if x != u and x != v))
+                        else:
+                            lk_u.add(tuple(x for x in simp if x != u))
+                            
+                    for simp in v_simps[v]:
+                        if u not in simp:
+                            lk_v.add(tuple(x for x in simp if x != v))
+                            
+                    if lk_u.intersection(lk_v).issubset(lk_uv):
+                        # Link Condition satisfied! We can contract v into u
+                        new_mapped = set()
+                        for simp in mapped_simplices:
+                            new_simp = tuple(sorted(set(x if x != v else u for x in simp)))
+                            if len(new_simp) > 0:
+                                new_mapped.add(new_simp)
+                        mapped_simplices = new_mapped
+                        
+                        for orig_v, curr_v in L.items():
+                            if curr_v == v:
+                                L[orig_v] = u
+                                
+                        any_change = True
+                        break # Rebuild index and try again
+                        
+            unique_nodes = sorted(list(set(L.values())))
+            new_to_old = {new: old for new, old in enumerate(unique_nodes)}
+            old_to_new = {old: new for new, old in enumerate(unique_nodes)}
+            
+            renormalized_simplices = {
+                tuple(sorted(old_to_new[v] for v in s)) for s in mapped_simplices
+            }
+            
+            new_complex = SimplicialComplex.from_simplices(renormalized_simplices, close_under_faces=True,
+                                                           coefficient_ring=self.coefficient_ring)
+            return new_complex, new_to_old
+        
+        # --- Modularity-based approach (preserve_topology=False) ---
         G_raw = {"V": V, "E": E}
-
+        
         if julia_engine.available:
             try:
-                # Accelerate vertex-merging search in Julia
-                G_simple, L = julia_engine.quick_mapper_jl(
+                G_simple, L_map = julia_engine.quick_mapper_jl(
                     G_raw, max_loops, min_modularity_gain
                 )
-
-                # Check if simplification actually occurred
-                if len(G_simple["V"]) == len(G_raw["V"]):
-                    import warnings
-                    warnings.warn("QuickMapper: No simplification possible (vertex count unchanged).")
-
-                # Determine raw mapped simplices
-                raw_mapped_simplices = set()
-                if not preserve_topology:
-                    for s in G_simple["E"]:
-                        raw_mapped_simplices.add(tuple(sorted(s)))
-                else:
-                    for d in self.dimensions:
-                        for simplex in self.n_simplices(d):
-                            mapped = tuple(sorted(list(set(L[v] for v in simplex))))
-                            if len(mapped) > 0:
-                                raw_mapped_simplices.add(mapped)
-
-                # Renormalize indices to be contiguous [0, N-1]
-                # unique_nodes are the representatives from the modularity merging (L values)
-                unique_representatives = sorted(list(set(node for s in raw_mapped_simplices for node in s)))
                 
-                # new_id -> original representative ID (which is one of the original vertex IDs)
+                raw_mapped_simplices = set()
+                for s in G_simple["E"]:
+                    raw_mapped_simplices.add(tuple(sorted(s)))
+                    
+                unique_representatives = sorted(list(set(node for s in raw_mapped_simplices for node in s)))
                 new_to_old = {new: old for new, old in enumerate(unique_representatives)}
-                # representative ID -> new_id
                 old_to_new = {old: new for new, old in enumerate(unique_representatives)}
-
+                
                 renormalized_simplices = {
                     tuple(sorted(old_to_new[v] for v in s)) for s in raw_mapped_simplices
                 }
-
-                new_complex = self.__class__.from_simplices(renormalized_simplices, close_under_faces=True)
+                
+                new_complex = SimplicialComplex.from_simplices(renormalized_simplices, close_under_faces=True,
+                                                               coefficient_ring=self.coefficient_ring)
                 return new_complex, new_to_old
-
             except Exception as e:
                 import warnings
                 warnings.warn(f"Julia QuickMapper failed ({e!r}). Falling back to pure Python.")
-
-        # Python implementation fallback: Modularity-based vertex merging (Louvain-like)
-        import random
-        from collections import defaultdict
-
+                
+        # Python implementation fallback for preserve_topology=False
         adj = defaultdict(set)
         for u, v in E:
             adj[u].add(v)
             adj[v].add(u)
-
-        L = {v: v for v in V}
-
-        # Simple modularity-based merge (Louvain-like)
+            
+        L_map = {v: v for v in V}
+        
         for _ in range(max_loops):
             nodes = list(V)
             random.shuffle(nodes)
+            any_change = False
             for u in nodes:
                 if not adj[u]:
                     continue
-
-                # Find best community
                 neighbor_communities = defaultdict(int)
                 for v in adj[u]:
-                    neighbor_communities[L[v]] += 1
-
+                    neighbor_communities[L_map[v]] += 1
                 if not neighbor_communities:
                     continue
                 best_comm = max(neighbor_communities, key=neighbor_communities.get)
-
-                # Check topology preservation (if required)
-                if preserve_topology:
-                    # Heuristic: only merge if degree <= 2 (preserving paths/loops)
-                    if len(adj[u]) > 2:
-                        continue
-
-                L[u] = best_comm
-
-        # Build simplified simplices based on L
-        simplices = set()
-        if not preserve_topology:
-            # We only keep edges (1-skeleton) in the raw non-preserving mode
-            for u, v in E:
-                mapped = tuple(sorted(list(set([L[u], L[v]]))))
-                if len(mapped) > 1:
-                    simplices.add(mapped)
-        else:
-            for d in self.dimensions:
-                for simplex in self.n_simplices(d):
-                    mapped = tuple(sorted(list(set(L[v] for v in simplex))))
-                    if len(mapped) > 0:
-                        simplices.add(mapped)
-
-        # Renormalize indices to be contiguous [0, N-1]
-        unique_nodes = sorted(list(set(node for s in simplices for node in s)))
-        mapping = {old: new for new, old in enumerate(unique_nodes)}
+                if best_comm != L_map[u]:
+                    L_map[u] = best_comm
+                    any_change = True
+            if not any_change:
+                break
+                
+        mapped_simplices = set()
+        for u, v in E:
+            cu, cv = L_map[u], L_map[v]
+            if cu != cv:
+                mapped_simplices.add(tuple(sorted((cu, cv))))
+                
+        unique_nodes = sorted(list(set(L_map.values())))
         new_to_old = {new: old for new, old in enumerate(unique_nodes)}
-
+        old_to_new = {old: new for new, old in enumerate(unique_nodes)}
+        
         renormalized_simplices = {
-            tuple(sorted(mapping[v] for v in s)) for s in simplices
+            tuple(sorted(old_to_new[v] for v in s)) for s in mapped_simplices
         }
-
-        sc_simple = self.__class__.from_simplices(renormalized_simplices, close_under_faces=True)
-        return sc_simple, new_to_old
+        
+        new_complex = SimplicialComplex.from_simplices(renormalized_simplices, close_under_faces=True,
+                                                       coefficient_ring=self.coefficient_ring)
+        return new_complex, new_to_old
 
     def to_gudhi_simplex_tree(self, *, use_filtration: bool = True):
         """Convert to a GUDHI SimplexTree for advanced TDA operations."""

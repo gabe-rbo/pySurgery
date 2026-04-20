@@ -36,6 +36,7 @@ def test_quick_mapper_invariants():
     # Run QuickMapper with topology preservation
     # Force at least one merge by allowing negative gain if necessary
     res = original_sc.quick_mapper(max_loops=20, min_modularity_gain=-1.0, preserve_topology=True)
+    print(res)
     simplified_sc = res[0]
     mapping = res[1]
     

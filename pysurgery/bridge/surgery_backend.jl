@@ -9,7 +9,7 @@ using Random
 using PythonCall: pyconvert, Py, PyDict
 import PrecompileTools
 
-export hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_circumradius_sq_3d, compute_circumradius_sq_2d, quick_mapper_jl, cknn_graph_jl, cknn_graph_accelerated_jl
+export quick_mapper_topology_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_circumradius_sq_3d, compute_circumradius_sq_2d, quick_mapper_jl, cknn_graph_jl, cknn_graph_accelerated_jl
 
 const HAS_ABSTRACT_ALGEBRA = try
     @eval import AbstractAlgebra
@@ -2398,6 +2398,144 @@ function quick_mapper_jl(G_raw_py::PyDict{Any, Any}, max_loops::Int=1, min_modul
     return Dict("V" => V_simple, "E" => collect(E_simple)), L
 end
 
+
+function quick_mapper_topology_jl(simplices_py, max_loops::Int=1, min_modularity_gain::Float64=1e-6)
+    simplices = pyconvert(Vector{Any}, simplices_py)
+    
+    # Convert input list of tuples/lists to a Set of Tuples of Ints
+    mapped_simplices = Set{Tuple{Vararg{Int}}}()
+    V_set = Set{Int}()
+    
+    for s_py in simplices
+        s = tuple(sort([Int(v) for v in pyconvert(Vector{Any}, s_py)])...)
+        push!(mapped_simplices, s)
+        for v in s
+            push!(V_set, v)
+        end
+    end
+    
+    L = Dict{Int, Int}(v => v for v in V_set)
+    any_change = true
+    loops = 0
+    
+    while any_change && loops < max_loops
+        any_change = false
+        loops += 1
+        
+        v_simps = Dict{Int, Vector{Tuple{Vararg{Int}}}}()
+        for v in V_set
+            v_simps[v] = []
+        end
+        for simp in mapped_simplices
+            for v in simp
+                push!(v_simps[v], simp)
+            end
+        end
+        
+        current_edges = Tuple{Int, Int}[]
+        for simp in mapped_simplices
+            if length(simp) == 2
+                push!(current_edges, (simp[1], simp[2]))
+            end
+        end
+        
+        if isempty(current_edges)
+            break
+        end
+        
+        degrees = Dict{Int, Int}()
+        for (u, v) in current_edges
+            degrees[u] = get(degrees, u, 0) + 1
+            degrees[v] = get(degrees, v, 0) + 1
+        end
+        
+        m = length(current_edges)
+        two_m_sq = (2.0 * m)^2
+        
+        edge_gains = Tuple{Float64, Tuple{Int, Int}}[]
+        for (u, v) in current_edges
+            deg_u = get(degrees, u, 0)
+            deg_v = get(degrees, v, 0)
+            gain = (1.0 / m) - (deg_u * deg_v) / two_m_sq
+            push!(edge_gains, (gain, (u, v)))
+        end
+        
+        # Sort edges by gain descending. Note: Float64 comparison.
+        sort!(edge_gains, by = x -> x[1], rev = true)
+        
+        for (gain, (u, v)) in edge_gains
+            if gain <= min_modularity_gain
+                continue
+            end
+            
+            lk_u = Set{Tuple{Vararg{Int}}}()
+            lk_v = Set{Tuple{Vararg{Int}}}()
+            lk_uv = Set{Tuple{Vararg{Int}}}()
+            
+            for simp in v_simps[u]
+                if v in simp
+                    face = Tuple(x for x in simp if x != u && x != v)
+                    push!(lk_uv, face)
+                else
+                    face = Tuple(x for x in simp if x != u)
+                    push!(lk_u, face)
+                end
+            end
+            
+            for simp in v_simps[v]
+                if !(u in simp)
+                    face = Tuple(x for x in simp if x != v)
+                    push!(lk_v, face)
+                end
+            end
+            
+            # Check Link Condition: Lk(u) ∩ Lk(v) ⊆ Lk(uv)
+            link_condition = true
+            for face in intersect(lk_u, lk_v)
+                if !(face in lk_uv)
+                    link_condition = false
+                    break
+                end
+            end
+            
+            if link_condition
+                new_mapped = Set{Tuple{Vararg{Int}}}()
+                for simp in mapped_simplices
+                    new_simp_arr = Int[]
+                    for x in simp
+                        val = (x == v) ? u : x
+                        if !(val in new_simp_arr)
+                            push!(new_simp_arr, val)
+                        end
+                    end
+                    sort!(new_simp_arr)
+                    if !isempty(new_simp_arr)
+                        push!(new_mapped, tuple(new_simp_arr...))
+                    end
+                end
+                mapped_simplices = new_mapped
+                
+                for (orig_v, curr_v) in L
+                    if curr_v == v
+                        L[orig_v] = u
+                    end
+                end
+                
+                delete!(V_set, v)
+                any_change = true
+                break
+            end
+        end
+    end
+    
+    # Format output for Python: list of lists
+    out_simplices = []
+    for simp in mapped_simplices
+        push!(out_simplices, collect(simp))
+    end
+    
+    return out_simplices, L
+end
 function cknn_graph_jl(pts::AbstractMatrix{Float64}, k::Int, delta::Float64)
     n = size(pts, 1)
     if n == 0 || k < 1

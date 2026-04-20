@@ -409,6 +409,11 @@ class _FakeSimplexTree:
     def get_filtration(self):
         return sorted(self._entries, key=lambda item: (len(item[0]), item[0], item[1]))
 
+    def dimension(self):
+        if not self._entries:
+            return 0
+        return max(len(s) - 1 for s, _ in self._entries)
+
 
 def test_simplicial_complex_gudhi_roundtrip(monkeypatch):
     st_in = _FakeSimplexTree()
@@ -589,8 +594,8 @@ def test_quick_mapper_validity_and_euler():
     # 2. Run quick_mapper to simplify the topology
     # We use preserve_topology=True to ensure Betti numbers (and thus Chi) remain the same
     # though the complex will have fewer vertices/edges.
-    sc_simple = sc_orig.quick_mapper(max_loops=2, preserve_topology=True)
-    
+    sc_simple, _ = sc_orig.quick_mapper(max_loops=2, preserve_topology=True)
+
     # 3. Verify mathematical validity
     validity = sc_simple.verify_structure()
     assert validity["valid"], f"QuickMapper produced invalid complex: {validity['issues']}"

@@ -166,3 +166,6 @@ cython_debug/
 test_out*.txt
 fix_bridge.py
 move_method.py
+
+# logo
+logo

@@ -18,7 +18,10 @@ import collections
 import heapq
 import itertools
 import warnings
-from typing import Dict, Iterable, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Literal, Optional, Tuple
+
+if TYPE_CHECKING:
+    from .complexes import SimplicialComplex
 
 import numpy as np
 import scipy.sparse as sp

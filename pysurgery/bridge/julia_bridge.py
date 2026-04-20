@@ -1024,26 +1024,45 @@ class JuliaBridge:
         except Exception as e:
             raise RuntimeError(f"Julia cknn_graph_accelerated failed: {e!r}")
 
-def quick_mapper_jl(self, G_raw: dict, max_loops: int = 1, min_modularity_gain: float = 1e-6) -> tuple[dict, dict]:
+    def quick_mapper_jl(self, G_raw: dict, max_loops: int = 1, min_modularity_gain: float = 1e-6) -> tuple[dict, dict]:
         """
         Executes the high-performance QuickMapper algorithm in Julia.
         G_raw must be a dict with keys "V" (list of ints) and "E" (list of tuples of ints).
-            Returns a simplified graph dict and a mapping dictionary L.
-            """
-            self.require_julia()
-            try:
-                G_simple, L_jl = self.backend.quick_mapper_jl(
-                    G_raw,
-                    int(max_loops),
-                    float(min_modularity_gain)
-                )
-                L_py = dict(L_jl)
-                G_simple_py = dict(G_simple)
-                if "E" in G_simple_py:
-                    G_simple_py["E"] = [tuple(e) for e in G_simple_py["E"]]
-                return G_simple_py, L_py
-            except Exception as e:
-                raise RuntimeError(f"quick_mapper_jl failed: {e!r}")
-    
+        Returns a simplified graph dict and a mapping dictionary L.
+        """
+        self.require_julia()
+        try:
+            G_simple, L_jl = self.backend.quick_mapper_jl(
+                G_raw,
+                int(max_loops),
+                float(min_modularity_gain)
+            )
+            L_py = dict(L_jl)
+            G_simple_py = dict(G_simple)
+            if "E" in G_simple_py:
+                G_simple_py["E"] = [tuple(e) for e in G_simple_py["E"]]
+            return G_simple_py, L_py
+        except Exception as e:
+            raise RuntimeError(f"quick_mapper_jl failed: {e!r}")
+
+    def quick_mapper_topology_jl(self, simplices: list[tuple], max_loops: int = 1, min_modularity_gain: float = 1e-6) -> tuple[list[tuple], dict]:
+        """
+        Executes the high-performance topology-preserving QuickMapper algorithm in Julia.
+        simplices must be a list of tuples representing all simplices in the complex.
+        Returns a list of remaining simplices and a mapping dictionary L.
+        """
+        self.require_julia()
+        try:
+            simplices_jl, L_jl = self.backend.quick_mapper_topology_jl(
+                simplices,
+                int(max_loops),
+                float(min_modularity_gain)
+            )
+            L_py = dict(L_jl)
+            simplices_py = [tuple(s) for s in simplices_jl]
+            return simplices_py, L_py
+        except Exception as e:
+            raise RuntimeError(f"quick_mapper_topology_jl failed: {e!r}")
+
     # Singleton instance
 julia_engine = JuliaBridge()
