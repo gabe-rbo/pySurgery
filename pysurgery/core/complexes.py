@@ -1457,24 +1457,26 @@ class SimplicialComplex(BaseModel):
         Construct a Witness complex from a point cloud.
         Used as a sparse approximation for large-scale TDA.
         """
+        from scipy.spatial.distance import cdist
 
         n_pts = len(points)
-        landmarks = points[np.random.choice(n_pts, n_landmarks, replace=False)]
+        landmarks_idx = np.random.choice(n_pts, n_landmarks, replace=False)
+        distances = cdist(points, points[landmarks_idx])  # Shape: (N, L)
         
-        # Simplex is in witness complex if there exists a 'witness' point
-        # such that the distance to landmark is within threshold of nearest landmark.
-        # This is a highly combinatorial step; we provide a simplified version.
-        simplices = []
-        for i in range(n_landmarks):
-            simplices.append((i,))
+        simplices = [(i,) for i in range(n_landmarks)]
         
-        # Build 1-skeleton
+        # True Witness Complex relaxed 1-skeleton
+        m_dist = np.min(distances, axis=1) # Closest landmark distance for each point
+        alpha_val = float(alpha) if alpha is not None else 0.0
+        
+        # Boolean mask of valid witness associations
+        valid_witnesses = distances <= (m_dist[:, None] + alpha_val)
+        
         for i in range(n_landmarks):
             for j in range(i + 1, n_landmarks):
-                # Is there a point that witnesses edge (i,j)?
-                # Simplification: if d(L_i, L_j) <= alpha
-                if alpha is not None and np.linalg.norm(landmarks[i] - landmarks[j]) <= alpha:
-                     simplices.append((i, j))
+                # Edge (i,j) exists if any point witnesses both L_i and L_j
+                if np.any(valid_witnesses[:, i] & valid_witnesses[:, j]):
+                    simplices.append((i, j))
 
         sc = cls.from_simplices(simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
         if max_dimension > 1:
