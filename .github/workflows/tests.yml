@@ -21,7 +21,16 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-        
+
+    - name: Set up Julia
+      uses: julia-actions/setup-julia@v2
+      with:
+        version: '1.9'
+
+    - name: Install Julia dependencies
+      run: |
+        julia -e 'using Pkg; Pkg.add(["SparseArrays", "LinearAlgebra", "JSON", "SmithNormalForm", "AbstractAlgebra"])'
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip

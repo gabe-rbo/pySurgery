@@ -28,7 +28,6 @@ from typing import Optional, Sequence
 
 import numpy as np
 from scipy.sparse import csr_matrix
-from scipy.sparse.linalg import spsolve
 
 from .complexes import SimplicialComplex
 

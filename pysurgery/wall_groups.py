@@ -1,6 +1,5 @@
 from typing import List, Optional, Union
 from math import comb
-import warnings
 from collections import Counter
 from pydantic import BaseModel, Field
 from .core.intersection_forms import IntersectionForm

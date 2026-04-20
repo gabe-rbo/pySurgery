@@ -2,10 +2,9 @@ import itertools
 import hashlib
 import numpy as np
 import warnings
-import math
 import sympy as sp
 from scipy.sparse import csr_matrix
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from .math_core import get_sparse_snf_diagonal
 from ..bridge.julia_bridge import julia_engine
@@ -893,7 +892,7 @@ class ChainComplex(BaseModel):
                         "Expect significant RAM consumption and slow execution without Julia."
                     )
 
-                mat = sp.SparseMatrix(
+                mat = sp.Matrix(
                     dn_plus_1.shape[1],
                     dn_plus_1.shape[0],
                     dict(dn_plus_1.T.todok().items()),
@@ -1371,8 +1370,7 @@ class SimplicialComplex(BaseModel):
                     valid_simplices.add((u, v))
         
         elif dim == 3:
-            # Similar logic for 3D faces (edges and triangles)
-            # Checking all sub-faces of the Delaunay triangulation
+            # 1. Check Tetrahedra (3-simplices)
             for i, s in enumerate(simplices_d):
                 p0, p1, p2, p3 = pts[s]
                 A = np.array([p1-p0, p2-p0, p3-p0])
@@ -1385,9 +1383,41 @@ class SimplicialComplex(BaseModel):
                 except np.linalg.LinAlgError:
                     pass
             
-            # Add all sub-faces (skeleton) for simplicity in fallback
-            # (Proper Gabriel check for 3D is complex, we ensure at least closure)
-            pass
+            # 2. Extract and check unique Triangles (2-simplices)
+            triangles = set()
+            for s in simplices_d:
+                for face in itertools.combinations(s, 3):
+                    triangles.add(tuple(sorted(face)))
+            
+            for tri in triangles:
+                p0, p1, p2 = pts[list(tri)]
+                # Circumradius squared of triangle in 3D
+                a2 = np.sum((p1 - p2)**2)
+                b2 = np.sum((p0 - p2)**2)
+                c2 = np.sum((p0 - p1)**2)
+                
+                # Area via cross product (more robust in 3D)
+                area = 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0))
+                if area > 1e-12:
+                    r2_tri = (a2 * b2 * c2) / (16.0 * area**2)
+                    # Obtuse check (diametral sphere)
+                    longest_edge_sq = max(a2, b2, c2)
+                    if (a2 + b2 < c2) or (a2 + c2 < b2) or (b2 + c2 < a2):
+                        r2_tri = longest_edge_sq / 4.0
+                    
+                    if r2_tri <= alpha2:
+                        valid_simplices.add(tri)
+            
+            # 3. Extract and check unique Edges (1-simplices)
+            edges = set()
+            for s in simplices_d:
+                for e in itertools.combinations(s, 2):
+                    edges.add(tuple(sorted(e)))
+            
+            for u, v in edges:
+                e_len2 = np.sum((pts[u] - pts[v])**2)
+                if e_len2 / 4.0 <= alpha2:
+                    valid_simplices.add((u, v))
 
         else:
             # Generalized N-dimensional fallback
@@ -1427,11 +1457,9 @@ class SimplicialComplex(BaseModel):
         Construct a Witness complex from a point cloud.
         Used as a sparse approximation for large-scale TDA.
         """
-        from scipy.spatial.distance import cdist
 
         n_pts = len(points)
         landmarks = points[np.random.choice(n_pts, n_landmarks, replace=False)]
-        distances = cdist(landmarks, points)
         
         # Simplex is in witness complex if there exists a 'witness' point
         # such that the distance to landmark is within threshold of nearest landmark.

@@ -68,10 +68,10 @@ def smith_normal_decomp(A_in: sp.Matrix) -> tuple[sp.Matrix, sp.Matrix, sp.Matri
         r, c = best_pos
         if r != k:
             A.row_swap(k, r)
-            U = U.elementary_row_op('row_swap', row1=k, row2=r)
+            U = U.elementary_row_op('n<->m', row1=k, row2=r)
         if c != k:
             A.col_swap(k, c)
-            V = V.elementary_col_op('col_swap', col1=k, col2=c)
+            V = V.elementary_col_op('n<->m', col1=k, col2=c)
             
         return True
 
@@ -178,7 +178,6 @@ def get_sparse_snf_diagonal(A_sparse, allow_approx: bool = False) -> np.ndarray:
     """
     from ..bridge.julia_bridge import julia_engine
     import warnings
-    import scipy.sparse.linalg as spla
 
     m, n = A_sparse.shape
 
