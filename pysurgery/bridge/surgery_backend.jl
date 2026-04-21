@@ -9,7 +9,7 @@ using Random
 using PythonCall: pyconvert, Py, PyDict
 import PrecompileTools
 
-export quick_mapper_topology_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_circumradius_sq_3d, compute_circumradius_sq_2d, quick_mapper_jl, cknn_graph_jl, cknn_graph_accelerated_jl
+export quick_mapper_topology_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_circumradius_sq_3d, compute_circumradius_sq_2d, quick_mapper_jl, cknn_graph_jl, cknn_graph_accelerated_jl, is_homology_manifold_jl
 
 const HAS_ABSTRACT_ALGEBRA = try
     @eval import AbstractAlgebra
@@ -2617,5 +2617,163 @@ function cknn_graph_accelerated_jl(pts::AbstractMatrix{Float64}, rho::AbstractVe
         end
     end
     return out
+end
+
+"""
+    is_homology_manifold_jl(simplex_entries, max_dim)
+
+Accelerated check for homology manifolds by computing links and reduced homology
+in Julia. Returns (is_manifold::Bool, dimension::Int, diagnostics::Dict{Int, String}).
+"""
+function is_homology_manifold_jl(simplex_entries, max_dim::Int)
+    # 1. Build full skeleton once
+    # simplex_entries can be a list of lists or similar from Python
+    boundaries, cells, sorted_dim_simplices, simplex_to_idx = _compute_boundary_data_internal(simplex_entries, max_dim)
+    
+    # Vertices are in sorted_dim_simplices[0]
+    vertices = if get(cells, 0, 0) == 0
+        Int64[]
+    else
+        [s[1] for s in sorted_dim_simplices[0]]
+    end
+    
+    if isempty(vertices)
+        return true, -1, Dict{Int, String}()
+    end
+
+    local_dims = Dict{Int, Union{Nothing, Int}}()
+    diagnostics = Dict{Int, String}()
+
+    # Helper for reduced homology in Julia
+    function get_reduced_homology(lk_simplices, lk_max_dim)
+        lk_b, lk_c = compute_boundary_payload_from_simplices(lk_simplices, lk_max_dim, false)
+        rh = Dict{Int, Tuple{Int, Vector{Int}}}()
+        
+        # Max dimension of link
+        d_max = -1
+        for d in 0:lk_max_dim
+            if get(lk_c, d, 0) > 0
+                d_max = d
+            end
+        end
+
+        for d in 0:d_max
+            # H_d = ker(d_d) / im(d_{d+1})
+            n_rows_d = get(lk_c, d-1, 0)
+            n_cols_d = get(lk_c, d, 0)
+            
+            # ker(d_d)
+            rank_ker_d = if n_cols_d == 0
+                0
+            elseif n_rows_d == 0
+                n_cols_d
+            else
+                b_d = lk_b[d]
+                # rank over Q for ker dimension
+                n_cols_d - rank_q_sparse(b_d["rows"], b_d["cols"], b_d["data"], b_d["n_rows"], b_d["n_cols"])
+            end
+            
+            # im(d_{d+1})
+            factors_dp1 = if haskey(lk_b, d+1)
+                b_dp1 = lk_b[d+1]
+                exact_snf_sparse(b_dp1["rows"], b_dp1["cols"], b_dp1["data"], b_dp1["n_rows"], b_dp1["n_cols"])
+            else
+                Int[]
+            end
+            
+            rank_im_dp1 = 0
+            torsion = Int[]
+            for f in factors_dp1
+                if f != 0
+                    rank_im_dp1 += 1
+                    if f > 1
+                        push!(torsion, f)
+                    end
+                end
+            end
+            
+            betti = max(0, rank_ker_d - rank_im_dp1)
+            
+            # Reduced homology adjustment
+            if d == 0
+                betti = max(0, betti - 1)
+            end
+            
+            if betti > 0 || !isempty(torsion)
+                rh[d] = (Int(betti), Int.(torsion))
+            end
+        end
+        return rh, d_max
+    end
+
+    for v in vertices
+        # Extract link of v
+        lk_max_simplices = Vector{Vector{Int64}}()
+        
+        # In a simplicial complex, tau is in the link of v if v is not in tau 
+        # and tau union {v} is a simplex in the complex.
+        # We look at all simplices s that contain v.
+        for d in 1:max_dim
+            for s in sorted_dim_simplices[d]
+                if v in s
+                    # This simplex s is in the star of v
+                    # Its faces not containing v are in the link
+                    push!(lk_max_simplices, [x for x in s if x != v])
+                end
+            end
+        end
+        
+        if isempty(lk_max_simplices)
+            # A 0-manifold vertex has an empty link. Reduced H_{-1} is Z.
+            # But we only check d >= 0 here.
+            local_dims[v] = 0
+            continue
+        end
+
+        rh, lk_d_max = get_reduced_homology(lk_max_simplices, max_dim - 1)
+        
+        if isempty(rh)
+            local_dims[v] = nothing # Acyclic link
+        elseif length(rh) == 1
+            deg = first(keys(rh))
+            betti, torsion = rh[deg]
+            if betti == 1 && isempty(torsion)
+                local_dims[v] = deg + 1
+            else
+                diagnostics[v] = "Link has non-sphere homology at degree $deg: rank=$betti, torsion=$torsion"
+            end
+        else
+            diagnostics[v] = "Link has multiple non-zero homology groups: $(collect(keys(rh)))"
+        end
+    end
+
+    detected_dims = Set{Int}([d for d in values(local_dims) if d !== nothing])
+    
+    # max dimension of the complex
+    max_d_complex = 0
+    for d in 0:max_dim
+        if get(cells, d, 0) > 0; max_d_complex = d; end
+    end
+
+    if isempty(detected_dims)
+        # All links were acyclic. This is consistent with a manifold if the complex is "disk-like"
+        return true, max_d_complex, Dict{Int, String}()
+    end
+
+    if length(detected_dims) > 1
+        return false, -1, Dict(-1 => "Inconsistent local dimensions: $detected_dims")
+    end
+
+    d_global = first(detected_dims)
+    
+    if d_global != max_d_complex
+         return false, d_global, Dict(-1 => "Detected manifold dimension $d_global does not match complex dimension $max_d_complex")
+    end
+
+    if !isempty(diagnostics)
+        return false, d_global, diagnostics
+    end
+
+    return true, d_global, Dict{Int, String}()
 end
 end # module

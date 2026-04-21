@@ -29,7 +29,7 @@ jobs:
 
     - name: Install Julia dependencies
       run: |
-        julia -e 'using Pkg; Pkg.add(["SparseArrays", "LinearAlgebra", "JSON", "IntegerSmithNormalForm", "AbstractAlgebra"])'
+        julia -e 'using Pkg; Pkg.add(["SparseArrays", "LinearAlgebra", "JSON", "IntegerSmithNormalForm", "AbstractAlgebra", "Statistics", "Combinatorics", "PrecompileTools", "Random", "Graphs", "SimpleWeightedGraphs", "DelaunayTriangulation"])'
 
     - name: Install dependencies
       run: |

@@ -4,7 +4,7 @@ import numpy as np
 import warnings
 import sympy as sp
 from scipy.sparse import csr_matrix
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast, Literal
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast, Literal, Set
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from .math_core import get_sparse_snf_diagonal
 from ..bridge.julia_bridge import julia_engine
@@ -1526,8 +1526,67 @@ class SimplicialComplex(BaseModel):
     def count_simplices(self, d: int) -> int:
         return len(self._simplices_table.get(int(d), []))
 
+    @property
+    def cells(self) -> Dict[int, int]:
+        return {d: self.count_simplices(d) for d in self.dimensions}
+
+    @property
+    def attaching_maps(self) -> Dict[int, csr_matrix]:
+        return self.boundary_matrices()
+
     def n_simplices(self, d: int) -> List[Tuple[int, ...]]:
         return self._simplices_table.get(int(d), [])
+
+    def star(self, simplex: Iterable[int]) -> Set[Tuple[int, ...]]:
+        """
+        Compute the star of a simplex: all simplices in the complex that contain it.
+        
+        The star St(σ) is the set of all simplices τ such that σ ⊆ τ.
+        Note that St(σ) is generally NOT a subcomplex (it is not closed under faces).
+        """
+        sigma = _normalize_simplex(simplex)
+        sigma_set = set(sigma)
+        star = set()
+        for d in self.dimensions:
+            if d < len(sigma) - 1:
+                continue
+            for tau in self.n_simplices(d):
+                if sigma_set.issubset(tau):
+                    star.add(tau)
+        return star
+
+    def closed_star(self, simplex: Iterable[int]) -> "SimplicialComplex":
+        """
+        Compute the closed star of a simplex: the smallest subcomplex containing its star.
+        """
+        star_simplices = self.star(simplex)
+        return SimplicialComplex.from_simplices(star_simplices, coefficient_ring=self.coefficient_ring, close_under_faces=True)
+
+    def link(self, simplex: Iterable[int]) -> "SimplicialComplex":
+        """
+        Compute the link of a simplex: Lk(σ) = {τ ∈ Cl(St(σ)) : τ ∩ σ = ∅}.
+        
+        The link is the "boundary" of the star, consisting of all faces of simplices 
+        in the star that do not intersect the given simplex.
+        """
+        sigma = _normalize_simplex(simplex)
+        sigma_set = set(sigma)
+        
+        # Collect all simplices in the star
+        star_simplices = self.star(sigma)
+        
+        # The link consists of all faces of simplices in the star that are disjoint from sigma
+        link_simplices = set()
+        for tau in star_simplices:
+            # For each simplex tau in the star, sigma is a subset.
+            # Any face of tau that is disjoint from sigma must be a subset of tau \ sigma.
+            face_candidates = tuple(sorted(set(tau) - sigma_set))
+            if face_candidates:
+                link_simplices.add(face_candidates)
+        
+        # link_simplices contains the maximal simplices of the link. 
+        # SimplicialComplex.from_simplices with close_under_faces=True will complete it.
+        return SimplicialComplex.from_simplices(link_simplices, coefficient_ring=self.coefficient_ring, close_under_faces=True)
 
     def simplex_to_index(self, d: int) -> Dict[Tuple[int, ...], int]:
         key = ("simplicial", "simplex_to_index", int(d))
@@ -1649,6 +1708,144 @@ class SimplicialComplex(BaseModel):
         mat = _boundary_matrix_from_simplices(self.n_simplices(d), self.n_simplices(d - 1))
         self._cache_set(key, mat)
         return mat
+
+    def homology(
+        self, n: int | None = None
+    ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
+        """Compute the homology of the simplicial complex."""
+        return self.cellular_chain_complex().homology(n)
+
+    def cohomology(
+        self, n: int | None = None
+    ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
+        """Compute the cohomology of the simplicial complex."""
+        return self.cellular_chain_complex().cohomology(n)
+
+    def cohomology_basis(self, n: int) -> list[np.ndarray]:
+        """Compute a basis for the n-th cohomology group."""
+        return self.cellular_chain_complex().cohomology_basis(n)
+
+    def reduced_homology(
+        self, n: int | None = None
+    ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
+        """
+        Compute the reduced homology groups \tilde{H}_n(K).
+        
+        \tilde{H}_n(K) is isomorphic to H_n(K) for n > 0.
+        For n = 0, \tilde{H}_0(K) is the free group of rank (Betti_0 - 1).
+        If the complex is empty, \tilde{H}_{-1}(\emptyset) = Z.
+        """
+        h = self.homology()
+        if not isinstance(h, dict):
+            # This should not happen with homology() call, but for safety:
+            h = {i: self.homology(i) for i in range(self.dimension + 1)}
+            
+        rh = {}
+        # H_k = \tilde{H}_k for k > 0
+        for k, (rank, torsion) in h.items():
+            if k > 0:
+                rh[k] = (rank, torsion)
+            elif k == 0:
+                rh[0] = (max(0, rank - 1), torsion)
+        
+        if n is not None:
+            if n < -1:
+                return (0, [])
+            if n == -1:
+                # \tilde{H}_{-1} is Z only if the complex is empty
+                return (1, []) if not self.dimensions else (0, [])
+            return rh.get(n, (0, []))
+        
+        return rh
+
+    def is_homology_manifold(self) -> tuple[bool, int | None, dict[int, str]]:
+        """
+        Check if the simplicial complex is a homology manifold (potentially with boundary).
+        
+        A complex is a d-dimensional homology manifold if for every vertex v:
+        - \tilde{H}_*(Lk(v)) \cong \tilde{H}_*(S^{d-1}) (interior vertex)
+        - \tilde{H}_*(Lk(v)) \cong \tilde{H}_*(D^{d-1}) \cong 0 (boundary vertex)
+        
+        Returns:
+            is_manifold: bool
+            dimension: int | None (the detected intrinsic dimension)
+            diagnostics: dict[int, str] mapping vertex ID to failure reason
+        """
+        if julia_engine.available:
+            try:
+                # Accelerate heavy vertex link homology loop in Julia
+                all_simplices = []
+                for d in self.dimensions:
+                    all_simplices.extend(self.n_simplices(d))
+                return julia_engine.is_homology_manifold_jl(all_simplices, self.dimension)
+            except Exception as e:
+                import warnings
+                warnings.warn(f"Julia is_homology_manifold failed ({e!r}). Falling back to pure Python.")
+
+        vertices = [v[0] for v in self.n_simplices(0)]
+        if not vertices:
+            return True, -1, {}
+            
+        local_dims = {}
+        diagnostics = {}
+        
+        for v in vertices:
+            lk = self.link((v,))
+            rh = lk.reduced_homology()
+            
+            # Filter non-zero reduced homology groups
+            non_zero = {k: v for k, v in rh.items() if v[0] > 0 or v[1]}
+            
+            if not non_zero:
+                # Potentially a boundary vertex of a d-manifold, or a vertex of a 0-manifold (link is empty)
+                if not lk.dimensions:
+                    # Link of a vertex in a 0-manifold is empty. \tilde{H}_{-1} is Z.
+                    # But our reduced_homology() doesn't return -1 in the dict.
+                    local_dims[v] = 0
+                else:
+                    # Acyclic link. This happens for boundary vertices. 
+                    # We can't determine d from an acyclic link alone, it must be consistent with others.
+                    local_dims[v] = None 
+            elif len(non_zero) == 1:
+                k = list(non_zero.keys())[0]
+                rank, torsion = non_zero[k]
+                if rank == 1 and not torsion:
+                    # Link has homology of S^k, so it's a local (k+1)-manifold
+                    local_dims[v] = k + 1
+                else:
+                    diagnostics[v] = f"Link has non-sphere homology at degree {k}: rank={rank}, torsion={torsion}"
+            else:
+                diagnostics[v] = f"Link has multiple non-zero homology groups: {list(non_zero.keys())}"
+                
+        # Determine global dimension from non-None local estimates
+        detected_dims = {d for d in local_dims.values() if d is not None}
+        
+        if not detected_dims:
+            # All links were acyclic but non-empty? 
+            # This shouldn't happen for a pure manifold unless it's just a contractible blob.
+            if any(v is None for v in local_dims.values()):
+                # If everything is acyclic, it might be a disk-like thing.
+                # We can't easily guess the dimension from acyclic links only.
+                # But we can look at the complex dimension.
+                d = self.dimension
+                return True, d, {}
+            return False, None, {"global": "Could not determine dimension from links."}
+            
+        if len(detected_dims) > 1:
+            return False, None, {"global": f"Inconsistent local dimensions: {detected_dims}"}
+            
+        d = list(detected_dims)[0]
+        
+        # Pure manifold condition: detected dimension must match top-level simplex dimension
+        if d != self.dimension:
+            return False, d, {"global": f"Detected manifold dimension {d} does not match complex dimension {self.dimension}"}
+
+        # Check if all acyclic links are consistent with this dimension
+        # (Actually, a d-manifold vertex link can be acyclic if it's on the boundary)
+        if diagnostics:
+            return False, d, diagnostics
+            
+        return True, d, {}
 
     def boundary_matrices(self) -> Dict[int, csr_matrix]:
         """Return all boundary matrices for the complex."""

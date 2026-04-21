@@ -4,10 +4,7 @@ import pytest
 import sys
 import types
 
-try:
-    from tests.discrete_surface_data import get_surfaces, get_3_manifolds, to_complex
-except ImportError:
-    pass
+from discrete_surface_data import get_surfaces, get_3_manifolds, to_complex
 from pysurgery.core.complexes import ChainComplex, CWComplex, SimplicialComplex
 import pysurgery.core.complexes as complexes
 from pysurgery.bridge.julia_bridge import julia_engine
@@ -290,7 +287,7 @@ def test_zmod_composite_modulus_tensor_contribution_from_integral_torsion():
 
 @pytest.mark.parametrize(
     "name, builder, bettis, torsion, euler",
-    get_surfaces() if "get_surfaces" in globals() else [],
+    get_surfaces(),
 )
 def test_discrete_surface_homology(name, builder, bettis, torsion, euler):
     st = builder()
@@ -309,7 +306,7 @@ def test_discrete_surface_homology(name, builder, bettis, torsion, euler):
 
 @pytest.mark.parametrize(
     "name, builder, bettis, torsion, euler",
-    get_3_manifolds() if "get_3_manifolds" in globals() else [],
+    get_3_manifolds(),
 )
 def test_discrete_3_manifold_homology(name, builder, bettis, torsion, euler):
     st = builder()
@@ -658,5 +655,3 @@ def test_simplicial_complex_expand_default_max_dim():
     assert sc_expanded.count_simplices(2) == 1
     assert sc_expanded.dimension == 2
     assert sc_expanded.verify_structure()["valid"] is True
-
-

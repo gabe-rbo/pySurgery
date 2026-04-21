@@ -4,6 +4,7 @@ import importlib.util
 import warnings
 from collections import OrderedDict
 import numpy as np
+import scipy.sparse as sp
 
 HAS_JULIACALL = importlib.util.find_spec("juliacall") is not None
 
@@ -217,6 +218,15 @@ class JuliaBridge:
             ("sparse_rank_mod_p", _sparse_rank_mod_p_workload),
             ("sparse_cohomology_basis", _sparse_cohomology_workload),
             (
+                "sparse_cohomology_mod_p",
+                lambda: self.compute_sparse_cohomology_basis_mod_p(
+                    sp.csr_matrix(np.zeros((1, 0), dtype=np.int64)),
+                    sp.csr_matrix(np.array([[1], [0]], dtype=np.int64)),
+                    2,
+                    cn_size=1
+                ),
+            ),
+            (
                 "alexander_whitney_cup",
                 lambda: self.compute_alexander_whitney_cup(
                     np.array([1, 0, 1], dtype=np.int64),
@@ -247,6 +257,43 @@ class JuliaBridge:
             (
                 "normal_surface_residual_norms",
                 _normal_surface_residual_workload,
+            ),
+            (
+                "manifold_certification",
+                lambda: self.is_homology_manifold_jl([(0, 1), (1, 2), (0, 2)], 1),
+            ),
+            (
+                "broad_phase_pairs",
+                lambda: self.compute_broad_phase_pairs(
+                    np.array([[0., 0.], [1., 1.]]), np.array([0.1, 0.1]), tol=0.1
+                ),
+            ),
+            (
+                "hermitian_signature",
+                lambda: self.compute_hermitian_signature(np.eye(2)),
+            ),
+            (
+                "multisignature",
+                lambda: self.compute_multisignature(np.eye(2), 2),
+            ),
+            (
+                "boundary_data_assembly",
+                lambda: (
+                    self.compute_boundary_data_from_simplices([(0, 1, 2)], 2),
+                    self.compute_boundary_payload_from_flat_simplices([(0, 1, 2)], 2),
+                    self.compute_trimesh_boundary_data([(0, 1, 2)], 3)
+                ),
+            ),
+            (
+                "geometric_kernels",
+                lambda: (
+                    self.triangulate_surface_delaunay(np.array([[0,0,0], [1,0,0], [0,1,0], [1,1,0]], dtype=float)),
+                    self.enumerate_cliques_sparse(np.array([1, 2, 3], dtype=np.int64), np.array([1, 0], dtype=np.int64), 2, 2),
+                    self.compute_circumradius_sq_2d(np.array([[0,0], [1,0], [0,1]], dtype=float), np.array([[0, 1, 2]], dtype=np.int64)),
+                    self.compute_circumradius_sq_3d(np.array([[0,0,0], [1,0,0], [0,1,0], [0,0,1]], dtype=float), np.array([[0, 1, 2, 3]], dtype=np.int64)),
+                    self.compute_cknn_graph_accelerated(np.array([[0,0], [1,1]], dtype=float), np.array([1.0, 1.0]), 1.0),
+                    self.quick_mapper_topology_jl([(0, 1), (1, 2), (0, 2)], 1, 0.001)
+                ),
             ),
         ]
 
@@ -1063,6 +1110,23 @@ class JuliaBridge:
             return simplices_py, L_py
         except Exception as e:
             raise RuntimeError(f"quick_mapper_topology_jl failed: {e!r}")
+
+    def is_homology_manifold_jl(self, simplices: list[list[int]], max_dim: int) -> tuple[bool, int, dict[int, str]]:
+        """
+        Accelerated manifold certification in Julia.
+        Returns (is_manifold, dimension, diagnostics).
+        """
+        self.require_julia()
+        try:
+            is_manifold, dimension, diagnostics_jl = self.backend.is_homology_manifold_jl(
+                simplices,
+                int(max_dim)
+            )
+            # diagnostics_jl is a Dict{Int, String} from Julia
+            diagnostics = {int(k): str(v) for k, v in dict(diagnostics_jl).items()}
+            return bool(is_manifold), int(dimension), diagnostics
+        except Exception as e:
+            raise RuntimeError(f"is_homology_manifold_jl failed: {e!r}")
 
     # Singleton instance
 julia_engine = JuliaBridge()

@@ -2,18 +2,15 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-try:
-    from tests.discrete_surface_data import (
-        build_tetrahedron,
-        build_octahedron,
-        build_icosahedron,
-        build_torus,
-        to_complex,
-    )
-    from pysurgery.homeomorphism import analyze_homeomorphism_2d
-except ImportError:
-    pass
+from discrete_surface_data import (
+    build_tetrahedron,
+    build_octahedron,
+    build_icosahedron,
+    build_torus,
+    to_complex,
+)
 from pysurgery.homeomorphism import (
+    analyze_homeomorphism_2d,
     HomotopyCompletionCertificate,
     ProductAssemblyCertificate,
     ThreeManifoldRecognitionCertificate,
@@ -1132,26 +1129,20 @@ def test_high_dim_cup_product_requires_both_signatures_when_used():
 
 
 def test_s2_models_homeomorphism():
-    try:
-        c1 = to_complex(build_tetrahedron())
-        c2 = to_complex(build_octahedron())
-        c3 = to_complex(build_icosahedron())
+    c1 = to_complex(build_tetrahedron())
+    c2 = to_complex(build_octahedron())
+    c3 = to_complex(build_icosahedron())
 
-        # They should all be homeomorphic to each other
-        is_homeo_1, _ = analyze_homeomorphism_2d(c1, c2)
-        is_homeo_2, _ = analyze_homeomorphism_2d(c2, c3)
-        assert is_homeo_1
-        assert is_homeo_2
-    except NameError:
-        pytest.skip("GUDHI not available")
+    # They should all be homeomorphic to each other
+    is_homeo_1, _ = analyze_homeomorphism_2d(c1, c2)
+    is_homeo_2, _ = analyze_homeomorphism_2d(c2, c3)
+    assert is_homeo_1
+    assert is_homeo_2
 
 
 def test_s2_vs_torus_homeomorphism():
-    try:
-        c1 = to_complex(build_tetrahedron())
-        c2 = to_complex(build_torus())
+    c1 = to_complex(build_tetrahedron())
+    c2 = to_complex(build_torus())
 
-        is_homeo, _ = analyze_homeomorphism_2d(c1, c2)
-        assert not is_homeo
-    except NameError:
-        pytest.skip("GUDHI not available")
+    is_homeo, _ = analyze_homeomorphism_2d(c1, c2)
+    assert not is_homeo

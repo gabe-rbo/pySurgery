@@ -113,13 +113,40 @@ pip install "pysurgery[ml]"
 ```
 
 **Julia (Exact Integer Engine):**
-Ensure `julia` is available on your `PATH`, then install the required exact algebra dependencies:
+Ensure `julia` is available on your `PATH`, then install the required dependencies:
 ```julia
 import Pkg
-Pkg.add(["AbstractAlgebra", "PrecompileTools", "Combinatorics"])
+Pkg.add(["AbstractAlgebra", "PrecompileTools", "Combinatorics", "SparseArrays", "LinearAlgebra", "JSON", "IntegerSmithNormalForm", "Statistics", "Random"])
 ```
+*Optional but recommended for geometric kernels:* `Pkg.add(["Graphs", "SimpleWeightedGraphs", "DelaunayTriangulation"])`.
 
 The bridge will automatically detect the Julia environment and distribute SNF and multisignature kernels across available CPU threads.
+
+---
+
+## Testing
+
+pySurgery utilizes `pytest` for its comprehensive test suite. To run the tests, ensure you have installed the package with test dependencies:
+
+```bash
+pip install -e ".[test,all]"
+```
+
+### Running Tests Locally
+
+Execute the suite using:
+```bash
+pytest tests/
+```
+
+For a detailed report including skipped tests and reasons:
+```bash
+pytest -v -rs tests/
+```
+
+### CI Dependencies
+
+The test suite requires both Python and Julia environments. On GitHub Actions, we utilize `julia-actions/setup-julia` and install the full set of backends to ensure 100% test coverage with zero skips.
 
 ---
 

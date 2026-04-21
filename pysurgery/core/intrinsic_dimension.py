@@ -399,6 +399,50 @@ def local_pca_tangent_space_dimension(
     )
 
 
+def exact_intrinsic_dimension(
+    data: SimplicialComplex | object,
+) -> IntrinsicDimensionMethodResult:
+    """
+    Calculate the exact intrinsic dimension of a manifold using link homology.
+    
+    This method requires the input to be a SimplicialComplex or expose a 
+    compatible interface. It verifies if the complex is a homology manifold 
+    and returns its dimension with 100% certainty (within the homology regime).
+    """
+    if not isinstance(data, SimplicialComplex):
+        if hasattr(data, "simplicial_complex"):
+            sc = getattr(data, "simplicial_complex")
+        else:
+            return IntrinsicDimensionMethodResult(
+                method="exact_homology",
+                global_dimension=float("nan"),
+                status="inconclusive",
+                exact=True,
+                diagnostics=["Input is not a SimplicialComplex; exact calculation aborted."],
+            )
+    else:
+        sc = data
+
+    is_manifold, dim, diagnostics = sc.is_homology_manifold()
+    
+    diag_list = [f"{k}: {v}" for k, v in diagnostics.items()]
+    if not is_manifold:
+        diag_list.append("Complex is not a pure homology manifold.")
+        status = "inconclusive"
+    else:
+        status = "success"
+
+    return IntrinsicDimensionMethodResult(
+        method="exact_homology",
+        global_dimension=float(dim) if dim is not None else float("nan"),
+        valid_points=len(sc.n_simplices(0)),
+        exact=True,
+        status=status,
+        confidence=1.0 if is_manifold else 0.0,
+        diagnostics=diag_list,
+    )
+
+
 def estimate_intrinsic_dimension(
     data: np.ndarray | SimplicialComplex | object,
     k: int = 10,
@@ -419,7 +463,19 @@ def estimate_intrinsic_dimension(
     local_pool: list[float] = []
     diagnostics: list[str] = []
 
-    methods_norm = tuple(m.lower() for m in methods)
+    methods_norm = list(m.lower() for m in methods)
+    is_complex = isinstance(data, SimplicialComplex) or hasattr(data, "simplicial_complex")
+    
+    if is_complex and "exact" not in methods_norm:
+        methods_norm.append("exact")
+
+    if "exact" in methods_norm or "exact_homology" in methods_norm:
+        res = exact_intrinsic_dimension(data)
+        method_results["exact"] = res
+        if res.status == "success":
+            estimates["exact"] = float(res.global_dimension)
+        diagnostics.extend(res.diagnostics)
+
     if "mle" in methods_norm or "levina_bickel" in methods_norm:
         res = levina_bickel_mle(
             data,
@@ -495,5 +551,6 @@ __all__ = [
     "levina_bickel_mle",
     "local_pca_tangent_space_dimension",
     "twonn",
+    "exact_intrinsic_dimension",
 ]
 
