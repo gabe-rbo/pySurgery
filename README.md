@@ -51,19 +51,19 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 ### 2. Algebraic Topology & Cohomological Operations
 * **Cup Products:** Full simplicial implementation of the Alexander-Whitney diagonal approximation to evaluate $\alpha \smile \beta$, exposing the ring structure of cohomology.
 * **Characteristic Classes:** Extraction of Stiefel-Whitney classes (e.g., $w_2$) via Wu's formula to evaluate spin/pin structures and orientability.
-* **Fundamental Group ($\pi_1$):** Extraction of group presentations via spanning-tree retractions, supporting both raw and optimized (reduced trace) generator modes.
+* **Fundamental Group** ($\pi_1$): Extraction of group presentations via spanning-tree retractions, supporting both raw and optimized (reduced trace) generator modes.
 * **Whitehead Torsion:** $K$-theoretic heuristics for evaluating Whitehead groups ($Wh(\pi_1)$) and s-cobordism obstructions.
 
 ### 3. 4-Manifold Topology & Intersection Forms
-* **Intersection Forms ($Q$):** Rigorous extraction of symmetric bilinear forms $Q: H_2(M) \times H_2(M) \to \mathbb{Z}$ evaluated on fundamental classes.
+* **Intersection Forms** ($Q$): Rigorous extraction of symmetric bilinear forms $Q: H_2(M) \times H_2(M) \to \mathbb{Z}$ evaluated on fundamental classes.
 * **Algebraic Classification:** Exact classification of $\mathbb{Z}$-forms by Rank, Signature, Parity (Type I/II), and Definiteness. Detects foundational components like $E_8$ and Hyperbolic ($H$) forms.
 * **Quadratic Refinements:** Evaluation of $q(\alpha)$ refinements to compute the **Arf Invariant** over $\mathbb{Z}/2\mathbb{Z}$ via symplectic basis reductions.
 * **Kirby Calculus:** Tracking 4-manifold surgery diagrams through algorithmic handle slides and blow-ups/blow-downs.
 
 ### 4. Surgery Theory & High-Dimensional Classification
-* **Wall Groups ($L_n(\pi_1)$):** Algorithmic evaluation of surgery obstructions mapping into $L$-groups. Supports product-group decompositions and Shaneson splitting sequences.
+* **Wall Groups** ($L_n(\pi_1)$): Algorithmic evaluation of surgery obstructions mapping into $L$-groups. Supports product-group decompositions and Shaneson splitting sequences.
 * **Twisted Multisignatures:** Multi-threaded Julia kernels for computing exact twisted signatures over group rings $\mathbb{Z}[\pi]$ using roots of unity.
-* **Structure Sets ($\mathcal{S}(M)$):** Navigation of the Surgery Exact Sequence, calculating normal invariants over $\mathbb{Z}$ and $\mathbb{Z}/2\mathbb{Z}$ to determine the existence and uniqueness of manifold structures.
+* **Structure Sets** ($\mathcal{S}(M)$): Navigation of the Surgery Exact Sequence, calculating normal invariants over $\mathbb{Z}$ and $\mathbb{Z}/2\mathbb{Z}$ to determine the existence and uniqueness of manifold structures.
 
 ### 5. Homeomorphism Certification & Witnesses
 * **Dimension-Aware Analyzers:** Specialized homeomorphism classification signals tailored for 2D (genus/orientability), 3D (prime decomposition signals), 4D (Freedman/Donaldson invariants), and 5D+ (Surgery theory).
