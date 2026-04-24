@@ -46,3 +46,20 @@ def test_poincare_homology_sphere():
     is_homeo, reason = analyze_homeomorphism_3d(cc_phs, cc_s3)
     assert not is_homeo
     assert "INCONCLUSIVE: Both are homology-sphere candidates" in reason
+
+def test_S2xS1_homology():
+    """
+    S2 x S1 has homology H0=Z, H1=Z, H2=Z, H3=Z.
+    """
+    # Smallest CW structure: one 0-cell, one 1-cell, one 2-cell, one 3-cell.
+    # Boundary operators are all zero.
+    cc = ChainComplex(
+        boundaries={1: sp.csr_matrix((1, 1)), 2: sp.csr_matrix((1, 1)), 3: sp.csr_matrix((1, 1))},
+        dimensions=[0, 1, 2, 3],
+        cells={0: 1, 1: 1, 2: 1, 3: 1},
+    )
+    
+    assert cc.homology(0) == (1, [])
+    assert cc.homology(1) == (1, [])
+    assert cc.homology(2) == (1, [])
+    assert cc.homology(3) == (1, [])

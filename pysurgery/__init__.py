@@ -74,6 +74,11 @@ from .core.characteristic_classes import (
     extract_pontryagin_p1,
     verify_hirzebruch_signature,
 )
+from .core.gauss_bonnet import (
+    verify_gauss_bonnet_2d,
+    verify_chern_gauss_bonnet_4d,
+    chern_gauss_bonnet_integral_expected,
+)
 from .core.kirby_calculus import KirbyDiagram
 from .core.k_theory import WhiteheadGroup, compute_whitehead_group
 from .core.foundations import (
@@ -140,7 +145,7 @@ from .homeomorphism_witness import (
 )
 from . import integrations
 
-__version__ = "1.3"
+__version__ = "1.5"
 __all__ = [
     "ChainComplex",
     "CWComplex",
@@ -205,6 +210,9 @@ __all__ = [
     "check_spin_structure",
     "extract_pontryagin_p1",
     "verify_hirzebruch_signature",
+    "verify_gauss_bonnet_2d",
+    "verify_chern_gauss_bonnet_4d",
+    "chern_gauss_bonnet_integral_expected",
     "KirbyDiagram",
     "WhiteheadGroup",
     "compute_whitehead_group",

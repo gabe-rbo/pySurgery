@@ -74,6 +74,7 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 * **Intrinsic Dimension:** Hardware-accelerated manifold dimension estimators using Maximum Likelihood (Levina-Bickel), Two-NN, and Local PCA tangent-space approximations.
 * **Metric Alignment:** Orthogonal Procrustes, discrete Fréchet distances, and JAX-accelerated Entropic Gromov-Wasserstein alignment for comparing ambient metric spaces.
 * **Geometrization & Uniformization:** Heuristics for Thurston's 8 geometries, normal surface residual norms, and discrete conformal equivalence metrics for 2D meshes.
+* **Gauss-Bonnet & Chern-Gauss-Bonnet:** Tools for verifying the relationship between total curvature and Euler characteristic across dimensions, including 4D Weyl and Q-curvature integrations.
 
 ### 7. Integrations & Interoperability
 * **JAX:** Differentiable soft-signatures and high-throughput metric tensors.

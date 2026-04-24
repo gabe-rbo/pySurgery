@@ -37,3 +37,14 @@ def test_jax_gw():
     # With epsilon=0.001 it should be very small
     assert dist_jax < 0.05
     assert np.isclose(float(dist_jax), dist_py, atol=1e-2)
+
+@pytest.mark.skipif(not HAS_JAX, reason="JAX not installed")
+def test_jax_pairwise_distance_consistency():
+    points = np.random.normal(size=(50, 3))
+    from pysurgery.integrations.jax_bridge import jax_pairwise_distance
+    from scipy.spatial.distance import pdist, squareform
+    
+    dist_jax = jax_pairwise_distance(points)
+    dist_py = squareform(pdist(points, 'euclidean'))
+    
+    assert np.allclose(np.asarray(dist_jax), dist_py, atol=1e-5)

@@ -51,3 +51,30 @@ def test_evaluate_structure_set_typed():
     assert seq.computable
     assert seq.exact
     assert seq.normal_invariants is not None
+
+def test_assembly_map_nonzero_signature():
+    cc = ChainComplex(boundaries={}, dimensions=[0, 1], cells={0: 1, 1: 0})
+    apc1 = AlgebraicPoincareComplex(
+        chain_complex=cc, fundamental_class=np.array([1]), dimension=4
+    )
+    apc2 = AlgebraicPoincareComplex(
+        chain_complex=cc, fundamental_class=np.array([1]), dimension=4
+    )
+    asc = AlgebraicSurgeryComplex(domain=apc1, codomain=apc2, degree=1)
+
+    # E8 has signature 8. 8/8 = 1.
+    E8 = np.array([
+        [2, 0, -1, 0, 0, 0, 0, 0],
+        [0, 2, 0, -1, 0, 0, 0, 0],
+        [-1, 0, 2, -1, 0, 0, 0, 0],
+        [0, -1, -1, 2, -1, 0, 0, 0],
+        [0, 0, 0, -1, 2, -1, 0, 0],
+        [0, 0, 0, 0, -1, 2, -1, 0],
+        [0, 0, 0, 0, 0, -1, 2, -1],
+        [0, 0, 0, 0, 0, 0, -1, 2]
+    ])
+    form = IntersectionForm(matrix=E8, dimension=4)
+    obstruction = asc.assembly_map(pi_1_group="1", form=form)
+
+    # In our model for L4(1), it returns signature/8
+    assert obstruction == 1

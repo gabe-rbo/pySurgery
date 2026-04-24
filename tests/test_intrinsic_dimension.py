@@ -76,5 +76,21 @@ def test_intrinsic_dimension_reports_inconclusive_on_too_small_sample():
     assert out.status in {"success", "inconclusive"}
     assert out.method_estimates
 
+def test_intrinsic_dimension_sphere():
+    # Points on S2 in 3D
+    n = 600
+    rng = np.random.default_rng(42)
+    phi = rng.uniform(0, 2*np.pi, n)
+    theta = np.arccos(rng.uniform(-1, 1, n))
+    x = np.sin(theta) * np.cos(phi)
+    y = np.sin(theta) * np.sin(phi)
+    z = np.cos(theta)
+    points = np.column_stack([x, y, z])
+    
+    res = estimate_intrinsic_dimension(points, k=15, methods=("mle", "twonn", "pca"))
+    assert res.status == "success"
+    # Expected dimension is 2
+    assert 1.5 < res.global_dimension < 2.5
+
 
 

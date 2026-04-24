@@ -74,3 +74,9 @@ class StructureSetError(SurgeryError):
     """Raised when the Surgery Exact Sequence cannot be resolved due to missing L-group data."""
 
     pass
+
+
+class MathError(SurgeryError):
+    """Raised when general mathematical or geometric consistency checks fail."""
+
+    pass
