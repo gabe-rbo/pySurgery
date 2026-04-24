@@ -1,28 +1,78 @@
-name: Build and Upload Python Package
+name: Release and Build
 
 on:
   push:
     branches:
-      - main  # or your default branch
+      - main
   pull_request:
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install build tools
-        run: pip install build
+      - name: Install tools
+        run: |
+          pip install build bump-my-version
+
+      - name: Bump version and push
+        id: bump
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if [[ ! $(git log -1 --pretty=%B) =~ "Bump version" ]]; then
+            bump-my-version bump patch
+            git push --follow-tags
+          fi
+          
+          # Extract version for later steps
+          VERSION=$(python -c "import configparser; config = configparser.ConfigParser(); config.read('.bumpversion.cfg'); print(config['bumpversion']['current_version'])")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Build package
         run: python -m build
 
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          tag_name: v${{ steps.bump.outputs.version }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+  build-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build tools
+        run: pip install build
+      - name: Build package
+        run: python -m build
       - name: Upload dist as artifact
         uses: actions/upload-artifact@v4
         with:
