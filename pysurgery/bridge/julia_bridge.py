@@ -280,7 +280,7 @@ class JuliaBridge:
                 "boundary_data_assembly",
                 lambda: (
                     self.compute_boundary_data_from_simplices([(0, 1, 2)], 2),
-                    self.compute_boundary_payload_from_flat_simplices([(0, 1, 2)], 2),
+                    self.compute_boundary_payload_from_simplices([(0, 1, 2)], 2),
                     self.compute_trimesh_boundary_data([(0, 1, 2)], 3)
                 ),
             ),
@@ -661,6 +661,23 @@ class JuliaBridge:
         return self.backend.compute_boundary_payload_from_flat_simplices(
             flat_vertices,
             simplex_offsets,
+            int(max_dim),
+            bool(include_metadata),
+        )
+
+    def compute_boundary_payload_from_flat_simplices(
+        self,
+        flat_vertices: np.ndarray,
+        simplex_offsets: np.ndarray,
+        max_dim: int,
+        *,
+        include_metadata: bool = True,
+    ) -> tuple:
+        """Build boundary payloads through Julia using pre-flattened data."""
+        self.require_julia()
+        return self.backend.compute_boundary_payload_from_flat_simplices(
+            np.asarray(flat_vertices, dtype=np.int64),
+            np.asarray(simplex_offsets, dtype=np.int64),
             int(max_dim),
             bool(include_metadata),
         )

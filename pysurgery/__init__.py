@@ -143,6 +143,7 @@ from .homeomorphism_witness import (
     build_high_dim_homeomorphism_witness,
     build_surface_homeomorphism_witness,
 )
+from .topoview import visualize_topoview
 from . import integrations
 
 __version__ = "1.5"
@@ -264,5 +265,6 @@ __all__ = [
     "build_3d_homeomorphism_witness",
     "build_4d_homeomorphism_witness",
     "build_high_dim_homeomorphism_witness",
+    "visualize_topoview",
     "integrations",
 ]

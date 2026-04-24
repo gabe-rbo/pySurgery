@@ -1817,7 +1817,7 @@ function triangulate_surface_delaunay(points::AbstractMatrix{Float64}, tolerance
     # 3. Extract faces (triangles)
     faces = Vector{Vector{Int64}}()
     for tri in each_solid_triangle(triangulation)
-        u, v, w = indices(tri)
+        u, v, w = tri
         # Return 0-indexed for Python consistency
         push!(faces, [Int64(u-1), Int64(v-1), Int64(w-1)])
     end
