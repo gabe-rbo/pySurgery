@@ -41,7 +41,7 @@ def test_homology_algorithms_consistency():
 
 def test_h1_pi1_rank_consistency():
     # For a torus, H1 rank should be 2, pi1 should have 2 generators
-    from tests.discrete_surface_data import build_torus
+    from discrete_surface_data import build_torus
     sc = build_torus()
     
     # H1

@@ -7,7 +7,7 @@ to higher-dimensional Chern-Gauss-Bonnet generalizations.
 
 import math
 import numpy as np
-from typing import Optional, Union, Dict, Any
+from typing import Union, Dict, Any
 
 from .uniformization import SurfaceMesh, vertex_gaussian_curvature
 from .exceptions import MathError
