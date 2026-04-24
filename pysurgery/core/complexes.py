@@ -1014,6 +1014,27 @@ class CWComplex(BaseModel):
              object.__setattr__(self, "dimensions", sorted({int(dim) for dim in self.dimensions}))
         return self
 
+    @classmethod
+    def from_simplicial_complex(cls, sc: "SimplicialComplex") -> "CWComplex":
+        """
+        Converts a SimplicialComplex to a CWComplex.
+        Each n-simplex is treated as an n-cell.
+        """
+        # Check if Julia pre-calculated the boundary operators
+        if hasattr(sc, "_boundaries_cache") and hasattr(sc, "_cells_cache") and sc._boundaries_cache and sc._cells_cache:
+            boundaries = sc._boundaries_cache
+            cells = sc._cells_cache
+        else:
+            boundaries = sc.boundary_matrices()
+            cells = {dim: len(simplices) for dim, simplices in sc.simplices_field.items()}
+            
+        return cls(
+            cells=cells,
+            attaching_maps=boundaries,
+            dimensions=sc.dimensions,
+            coefficient_ring=sc.coefficient_ring
+        )
+
     def _structure_signature(self) -> tuple[object, ...]:
         map_sig = tuple(
             (int(dim), _csr_matrix_signature(mat))
@@ -1880,6 +1901,10 @@ class SimplicialComplex(BaseModel):
     def cellular_chain_complex(self, *, coefficient_ring: str | None = None) -> ChainComplex:
         """Alias for `chain_complex` for compatibility with cellular workflows."""
         return self.chain_complex(coefficient_ring=coefficient_ring)
+
+    def to_cw_complex(self) -> "CWComplex":
+        """Converts the simplicial complex to a CWComplex."""
+        return CWComplex.from_simplicial_complex(self)
 
     def expand(self, max_dim: int | None = None) -> "SimplicialComplex":
         """

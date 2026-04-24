@@ -87,46 +87,42 @@ def visualize_topoview(
     show: bool = True,
     features: Optional[List[str]] = None,
     max_individual_plots: Optional[int] = None,
-) -> List[go.Figure]:
+    output_mode: Literal["full", "modular"] = "modular",
+) -> Union[go.Figure, List[go.Figure]]:
     """
     Create an interactive visual workspace for SimplicialComplex invariants.
     
     Layout (Web-page style):
-    - Generates a list of figures, one for each invariant/generator.
-    - Each Figure contains:
-        - Left: Metadata Table.
-        - Right: Geometric UMAP Plot.
-    - Background is white.
+    - Left Column: Metadata Table.
+    - Right Column: Geometric UMAP Plot.
+    
+    output_mode:
+        - "modular": Returns a list of separate figures (one per generator). Best for notebooks.
+        - "full": Returns a single large figure with all rows. Best for exporting.
     """
     if features is None:
         features = []
 
-    # 1. Prepare Coordinates (UMAP if needed)
+    # 1. Prepare Coordinates
     coords = _get_coordinates(sc, dimension=dimension, points=points)
     
-    # 2. Collect all items to visualize
+    # 2. Collect items
     items: List[Dict[str, Any]] = []
-    
     if pi1_result:
         for i, tr in enumerate(pi1_result.traces):
-            items.append({"type": "pi1", "id": i, "data": tr, "title": f"Fundamental Group Generator: {tr.generator}"})
-            
+            items.append({"type": "pi1", "id": i, "data": tr, "title": f"pi1 Generator: {tr.generator}"})
     if h1_basis:
         for i, gen in enumerate(h1_basis.generators):
-            items.append({"type": "H1", "id": i, "data": gen, "title": f"H1 Homology Generator {i}"})
-    
+            items.append({"type": "H1", "id": i, "data": gen, "title": f"H1 Generator {i}"})
     if h2_basis:
         for i, gen in enumerate(h2_basis.generators):
-            items.append({"type": "H2", "id": i, "data": gen, "title": f"H2 Homology Generator {i}"})
-
+            items.append({"type": "H2", "id": i, "data": gen, "title": f"H2 Generator {i}"})
     if h0_basis:
         for i, gen in enumerate(h0_basis.generators):
-            items.append({"type": "H0", "id": i, "data": gen, "title": f"Connected Component (H0) {i}"})
+            items.append({"type": "H0", "id": i, "data": gen, "title": f"H0 Component {i}"})
 
     if max_individual_plots is not None:
         items = items[:max_individual_plots]
-
-    figures = []
 
     # Helper for adding base skeleton
     def add_base(fig, row, col):
@@ -135,128 +131,90 @@ def visualize_topoview(
             fig.add_trace(go.Mesh3d(
                 x=coords[:, 0], y=coords[:, 1], z=coords[:, 2],
                 i=[f[0] for f in faces], j=[f[1] for f in faces], k=[f[2] for f in faces],
-                opacity=0.05, color="gray", name="Base Surface", showlegend=False
+                opacity=0.04, color="gray", name="Base Surface", showlegend=False
             ), row=row, col=col)
         else:
             edges = [tuple(e) for e in sc.n_simplices(1)]
             xs, ys = [], []
             for u, v in edges:
-                xs.extend([coords[u, 0], coords[v, 0], None])
-                ys.extend([coords[u, 1], coords[v, 1], None])
-            fig.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines",
-                line=dict(color="rgba(200, 200, 200, 0.3)", width=1),
-                showlegend=False
-            ), row=row, col=col)
+                xs.extend([coords[u, 0], coords[v, 0], None]); ys.extend([coords[u, 1], coords[v, 1], None])
+            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color="rgba(200, 200, 200, 0.2)", width=1), showlegend=False), row=row, col=col)
 
-    # 3. Create one figure per item
-    for item in items:
-        g_type = item["type"]
-        g_data = item["data"]
-        
-        fig = make_subplots(
-            rows=1, cols=2,
-            column_widths=[0.3, 0.7],
-            specs=[[{"type": "table"}, {"type": "scene" if dimension == 3 else "xy"}]]
-        )
-        
-        # --- Metadata Table ---
-        header = ["Property", "Value"]
-        cells = []
+    def populate_row(fig, row, item):
+        g_type, g_data = item["type"], item["data"]
+        # Table
+        cells = [["Type", g_type]]
         if g_type == "pi1":
-            cells = [
-                ["Type", "pi1 Generator"],
-                ["Word", g_data.generator],
-                ["Path Length", str(len(g_data.vertex_path))],
-            ]
+            cells.extend([["Word", g_data.generator], ["Path Len", str(len(g_data.vertex_path))]])
         else:
-            cells = [
-                ["Type", f"Homology ({g_type})"],
-                ["Weight", f"{g_data.weight:.4f}"],
-                ["Simplices", str(len(g_data.support_simplices))],
-            ]
-        if points is not None:
-            cells.append(["Ambient Dim", str(points.shape[1])])
-        
-        fig.add_trace(go.Table(
-            header=dict(values=header, fill_color='royalblue', font=dict(color='white'), align='left'),
-            cells=dict(values=list(zip(*cells)), fill_color='aliceblue', align='left')
-        ), row=1, col=1)
+            cells.extend([["Weight", f"{g_data.weight:.3f}"], ["Simplices", str(len(g_data.support_simplices))]])
+        if points is not None: cells.append(["Data Dim", str(points.shape[1])])
 
-        # --- Geometric Plot ---
-        add_base(fig, 1, 2)
-        
+        fig.add_trace(go.Table(
+            header=dict(values=["Property", "Value"], fill_color='royalblue', font=dict(color='white')),
+            cells=dict(values=list(zip(*cells)), fill_color='aliceblue')
+        ), row=row, col=1)
+
+        # Plot
+        add_base(fig, row, 2)
         if g_type == "pi1":
             path = g_data.vertex_path
-            xs, ys, zs = [], [], []
-            for i in range(len(path) - 1):
-                u, v = path[i], path[i+1]
-                xs.extend([coords[u, 0], coords[v, 0], None]); ys.extend([coords[u, 1], coords[v, 1], None])
-                if dimension == 3: zs.extend([coords[u, 2], coords[v, 2], None])
-            
-            trace = go.Scatter3d(x=xs, y=ys, z=zs, mode="lines+markers", line=dict(color="magenta", width=6), name=item["title"]) if dimension == 3 else \
-                    go.Scatter(x=xs, y=ys, mode="lines+markers", line=dict(color="magenta", width=4), name=item["title"])
-            fig.add_trace(trace, row=1, col=2)
-
+            px, py, pz = [], [], []
+            for i in range(len(path)-1):
+                u,v = path[i], path[i+1]
+                px.extend([coords[u,0], coords[v,0], None]); py.extend([coords[u,1], coords[v,1], None])
+                if dimension == 3: pz.extend([coords[u,2], coords[v,2], None])
+            trace = go.Scatter3d(x=px, y=py, z=pz, mode="lines+markers", line=dict(color="magenta", width=6), name=item["title"]) if dimension == 3 else \
+                    go.Scatter(x=px, y=py, mode="lines+markers", line=dict(color="magenta", width=4), name=item["title"])
+            fig.add_trace(trace, row=row, col=2)
         elif g_type == "H1":
-            edges = g_data.support_edges
-            xs, ys, zs = [], [], []
-            for u, v in edges:
-                xs.extend([coords[u, 0], coords[v, 0], None]); ys.extend([coords[u, 1], coords[v, 1], None])
-                if dimension == 3: zs.extend([coords[u, 2], coords[v, 2], None])
-            
-            trace = go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(color="red", width=8), name=item["title"]) if dimension == 3 else \
-                    go.Scatter(x=xs, y=ys, mode="lines", line=dict(color="red", width=5), name=item["title"])
-            fig.add_trace(trace, row=1, col=2)
-
+            hx, hy, hz = [], [], []
+            for u, v in g_data.support_edges:
+                hx.extend([coords[u,0], coords[v,0], None]); hy.extend([coords[u,1], coords[v,1], None])
+                if dimension == 3: hz.extend([coords[u,2], coords[v,2], None])
+            trace = go.Scatter3d(x=hx, y=hy, z=hz, mode="lines", line=dict(color="red", width=8), name=item["title"]) if dimension == 3 else \
+                    go.Scatter(x=hx, y=hy, mode="lines", line=dict(color="red", width=5), name=item["title"])
+            fig.add_trace(trace, row=row, col=2)
         elif g_type == "H2":
-            faces = [s for s in g_data.support_simplices if len(s) == 3]
+            fcs = [s for s in g_data.support_simplices if len(s) == 3]
             if dimension == 3:
-                fig.add_trace(go.Mesh3d(
-                    x=coords[:, 0], y=coords[:, 1], z=coords[:, 2],
-                    i=[f[0] for f in faces], j=[f[1] for f in faces], k=[f[2] for f in faces],
-                    color="gold", opacity=0.9, name=item["title"]
-                ), row=1, col=2)
+                fig.add_trace(go.Mesh3d(x=coords[:,0], y=coords[:,1], z=coords[:,2], i=[f[0] for f in fcs], j=[f[1] for f in fcs], k=[f[2] for f in fcs], color="gold", opacity=0.8, name=item["title"]), row=row, col=2)
             else:
-                pts_idx = list(set([v for f in faces for v in f]))
-                fig.add_trace(go.Scatter(x=coords[pts_idx, 0], y=coords[pts_idx, 1], mode="markers", marker=dict(color="gold", size=10), name=item["title"]), row=1, col=2)
-
+                idx = list(set([v for f in fcs for v in f]))
+                fig.add_trace(go.Scatter(x=coords[idx,0], y=coords[idx,1], mode="markers", marker=dict(color="gold", size=10), name=item["title"]), row=row, col=2)
         elif g_type == "H0":
-            pts_idx = [s[0] for s in g_data.support_simplices if len(s) == 1]
-            trace = go.Scatter3d(x=coords[pts_idx, 0], y=coords[pts_idx, 1], z=coords[pts_idx, 2], mode="markers", marker=dict(size=14, color="black"), name=item["title"]) if dimension == 3 else \
-                    go.Scatter(x=coords[pts_idx, 0], y=coords[pts_idx, 1], mode="markers", marker=dict(size=14, color="black"), name=item["title"])
-            fig.add_trace(trace, row=1, col=2)
+            idx = [s[0] for s in g_data.support_simplices if len(s) == 1]
+            trace = go.Scatter3d(x=coords[idx,0], y=coords[idx,1], z=coords[idx,2], mode="markers", marker=dict(size=14, color="black"), name=item["title"]) if dimension == 3 else \
+                    go.Scatter(x=coords[idx,0], y=coords[idx,1], mode="markers", marker=dict(size=14, color="black"), name=item["title"])
+            fig.add_trace(trace, row=row, col=2)
 
-        fig.update_layout(
-            title=f"<b>{item['title']}</b>",
-            template="plotly_white",
-            height=500,
-            margin=dict(t=50, b=20, l=20, r=20)
-        )
-        figures.append(fig)
-
-    # 4. Final Overview Figure
-    ov_fig = make_subplots(
-        rows=1, cols=2,
-        column_widths=[0.3, 0.7],
-        specs=[[{"type": "table"}, {"type": "scene" if dimension == 3 else "xy"}]]
-    )
-    add_base(ov_fig, 1, 2)
-    ov_cells = [
-        ["Total Vertices", str(len(sc.n_simplices(0)))],
-        ["Total Edges", str(len(sc.n_simplices(1)))],
-        ["Total Faces", str(len(sc.n_simplices(2)))],
-        ["Ambient Dim", str(points.shape[1] if points is not None else "N/A")],
-    ]
-    ov_fig.add_trace(go.Table(
-        header=dict(values=["Overview", "Value"], fill_color='darkgray', font=dict(color='white'), align='left'),
-        cells=dict(values=list(zip(*ov_cells)), fill_color='whitesmoke', align='left')
-    ), row=1, col=1)
-    ov_fig.update_layout(title="<b>Complex Overview</b>", template="plotly_white", height=400)
-    figures.append(ov_fig)
-
-    if show:
-        for f in figures:
-            f.show()
-            
-    return figures
+    # 3. Execution
+    if output_mode == "modular":
+        figures = []
+        for item in items:
+            f = make_subplots(rows=1, cols=2, column_widths=[0.3, 0.7], specs=[[{"type": "table"}, {"type": "scene" if dimension == 3 else "xy"}]])
+            populate_row(f, 1, item)
+            f.update_layout(title=f"<b>{item['title']}</b>", template="plotly_white", height=500)
+            figures.append(f)
+        # Overview
+        ov = make_subplots(rows=1, cols=2, column_widths=[0.3, 0.7], specs=[[{"type": "table"}, {"type": "scene" if dimension == 3 else "xy"}]])
+        add_base(ov, 1, 2)
+        ov.add_trace(go.Table(header=dict(values=["Overview", "Value"]), cells=dict(values=[["Vertices", "Edges", "Faces"], [len(sc.n_simplices(0)), len(sc.n_simplices(1)), len(sc.n_simplices(2))]])), row=1, col=1)
+        ov.update_layout(title="<b>Complex Overview</b>", template="plotly_white", height=400)
+        figures.append(ov)
+        if show:
+            for f in figures: f.show()
+        return figures
+    else:
+        # Full Mode
+        n_rows = len(items) + 1
+        v_spacing = 0.05 if n_rows < 10 else 0.8 / n_rows
+        fig = make_subplots(rows=n_rows, cols=2, column_widths=[0.3, 0.7], vertical_spacing=v_spacing, specs=[[{"type": "table"}, {"type": "scene" if dimension == 3 else "xy"}]] * n_rows)
+        for i, item in enumerate(items):
+            populate_row(fig, i+1, item)
+        # Overview
+        add_base(fig, n_rows, 2)
+        fig.add_trace(go.Table(header=dict(values=["Overview", "Value"]), cells=dict(values=[["Vertices", "Edges", "Faces"], [len(sc.n_simplices(0)), len(sc.n_simplices(1)), len(sc.n_simplices(2))]])), row=n_rows, col=1)
+        fig.update_layout(title=f"<b>{title}</b>", template="plotly_white", height=500 * n_rows)
+        if show: fig.show()
+        return fig
