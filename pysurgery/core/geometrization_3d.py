@@ -38,6 +38,14 @@ from .theorem_tags import infer_theorem_tag
 
 
 def _freeze_value(value: object) -> object:
+    """Recursively freeze mutable structures into immutable hashes.
+
+    Args:
+        value (object): The value to freeze.
+
+    Returns:
+        object: The frozen immutable version of the value.
+    """
     if isinstance(value, dict):
         return tuple(
             (str(k), _freeze_value(v))
@@ -55,6 +63,17 @@ def _freeze_value(value: object) -> object:
 
 
 def _sorted_face(face: Iterable[int]) -> tuple[int, int, int]:
+    """Normalize a triangle face to a sorted tuple.
+
+    Args:
+        face (Iterable[int]): The vertices of the face.
+
+    Returns:
+        tuple[int, int, int]: The sorted vertices.
+
+    Raises:
+        ValueError: If the face does not have exactly 3 vertices.
+    """
     t = tuple(sorted(int(v) for v in face))
     if len(t) != 3:
         raise ValueError(f"Expected a triangle face, got {face!r}")
@@ -62,6 +81,17 @@ def _sorted_face(face: Iterable[int]) -> tuple[int, int, int]:
 
 
 def _sorted_tetra(tetra: Iterable[int]) -> tuple[int, int, int, int]:
+    """Normalize a tetrahedron to a sorted tuple.
+
+    Args:
+        tetra (Iterable[int]): The vertices of the tetrahedron.
+
+    Returns:
+        tuple[int, int, int, int]: The sorted vertices.
+
+    Raises:
+        ValueError: If the tetrahedron does not have exactly 4 distinct vertices.
+    """
     t = tuple(sorted(int(v) for v in tetra))
     if len(t) != 4:
         raise ValueError(f"Expected a tetrahedron, got {tetra!r}")
@@ -85,7 +115,16 @@ _JULIA_RESIDUAL_BATCH_THRESHOLD = 32
 
 @dataclass
 class Triangulated3Manifold:
-    """A finite triangulated 3-manifold encoded by tetrahedra and a simplicial closure."""
+    """A finite triangulated 3-manifold encoded by tetrahedra and a simplicial closure.
+
+    Attributes:
+        tetrahedra (tuple[tuple[int, int, int, int], ...]): List of tetrahedra.
+        simplicial_complex (SimplicialComplex): The underlying simplicial complex.
+        face_to_tetrahedra (dict[tuple[int, int, int], tuple[int, ...]]): Mapping from
+            faces to indices of tetrahedra containing them.
+        boundary_faces (tuple[tuple[int, int, int], ...]): List of boundary faces.
+        name (str): The name of the manifold.
+    """
 
     tetrahedra: tuple[tuple[int, int, int, int], ...]
     simplicial_complex: SimplicialComplex
@@ -100,6 +139,18 @@ class Triangulated3Manifold:
         *,
         name: str = "triangulated_3_manifold",
     ) -> "Triangulated3Manifold":
+        """Create a manifold from a list of tetrahedra.
+
+        Args:
+            tetrahedra (Sequence[Sequence[int]]): The tetrahedra.
+            name (str): The name of the manifold. Defaults to "triangulated_3_manifold".
+
+        Returns:
+            Triangulated3Manifold: The created manifold.
+
+        Raises:
+            ValueError: If no tetrahedra are provided.
+        """
         tetra_list = tuple(_sorted_tetra(t) for t in tetrahedra)
         if not tetra_list:
             raise ValueError("At least one tetrahedron is required.")
@@ -121,6 +172,18 @@ class Triangulated3Manifold:
         *,
         name: str = "triangulated_3_manifold",
     ) -> "Triangulated3Manifold":
+        """Create a manifold from a SimplicialComplex.
+
+        Args:
+            complex_ (SimplicialComplex): The simplicial complex.
+            name (str): The name of the manifold. Defaults to "triangulated_3_manifold".
+
+        Returns:
+            Triangulated3Manifold: The created manifold.
+
+        Raises:
+            ValueError: If the complex contains no 3-simplices.
+        """
         tetrahedra = complex_.n_simplices(3)
         if not tetrahedra:
             raise ValueError("A 3-manifold triangulation requires 3-simplices.")
@@ -128,30 +191,48 @@ class Triangulated3Manifold:
 
     @property
     def n_tetrahedra(self) -> int:
+        """Return the number of tetrahedra in the triangulation."""
         return len(self.tetrahedra)
 
     @property
     def n_vertices(self) -> int:
+        """Return the number of vertices in the triangulation."""
         return len(self.simplicial_complex.n_simplices(0))
 
     @property
     def is_closed(self) -> bool:
+        """Return True if the manifold is closed (no boundary faces)."""
         return len(self.boundary_faces) == 0
 
     @property
     def euler_characteristic(self) -> int:
+        """Return the Euler characteristic of the manifold."""
         return self.simplicial_complex.euler_characteristic()
 
     def chain_complex(self) -> ChainComplex:
+        """Return the chain complex of the manifold."""
         return self.simplicial_complex.chain_complex()
 
     def homology(
         self, n: int | None = None
     ) -> tuple[int, list[int]] | dict[int, tuple[int, list[int]]]:
-        """Return homology in degree ``n`` or all degrees when ``n`` is omitted."""
+        """Return homology in degree ``n`` or all degrees when ``n`` is omitted.
+
+        Args:
+            n (int | None): The degree of homology. Defaults to None.
+
+        Returns:
+            tuple[int, list[int]] | dict[int, tuple[int, list[int]]]: Homology group
+                or dictionary of homology groups.
+        """
         return self.chain_complex().homology(n)
 
     def dual_graph(self) -> dict[int, set[int]]:
+        """Compute the dual graph of the triangulation.
+
+        Returns:
+            dict[int, set[int]]: Adjacency list for the dual graph.
+        """
         graph = {i: set() for i in range(self.n_tetrahedra)}
         for tets in self.face_to_tetrahedra.values():
             if len(tets) == 2:
@@ -161,9 +242,23 @@ class Triangulated3Manifold:
         return graph
 
     def edge_set(self) -> list[tuple[int, int]]:
+        """Return the set of edges in the triangulation.
+
+        Returns:
+            list[tuple[int, int]]: List of edges as sorted pairs of vertex indices.
+        """
         return [tuple(edge) for edge in self.simplicial_complex.n_simplices(1)]
 
     def submanifold(self, tetra_indices: Iterable[int], *, name: Optional[str] = None) -> "Triangulated3Manifold":
+        """Extract a sub-manifold defined by a subset of tetrahedra.
+
+        Args:
+            tetra_indices (Iterable[int]): Indices of tetrahedra to include.
+            name (Optional[str]): Name of the submanifold.
+
+        Returns:
+            Triangulated3Manifold: The extracted submanifold.
+        """
         idx = sorted({int(i) for i in tetra_indices if 0 <= int(i) < self.n_tetrahedra})
         if not idx:
             return self
@@ -174,6 +269,11 @@ class Triangulated3Manifold:
         )
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return a dictionary representation of the manifold for serialization.
+
+        Returns:
+            dict[str, object]: Dictionary with manifold data.
+        """
         return {
             "name": self.name,
             "tetrahedra": [list(t) for t in self.tetrahedra],
@@ -186,7 +286,23 @@ class Triangulated3Manifold:
 
 @dataclass
 class NormalSurfaceCandidate:
-    """A canonical normal-surface candidate with exact combinatorial bookkeeping."""
+    """A canonical normal-surface candidate with exact combinatorial bookkeeping.
+
+    Attributes:
+        kind (str): Surface kind (e.g., "sphere", "torus").
+        surface_type (str): Type of surface (e.g., "vertex_link", "edge_link").
+        exact (bool): Whether the candidate is exact.
+        validated (bool): Whether the candidate has been validated.
+        coordinates (np.ndarray): Normal coordinates.
+        triangle_coordinates (np.ndarray): Triangle coordinates.
+        quad_coordinates (np.ndarray): Quadrilateral coordinates.
+        support_tetrahedra (tuple[int, ...]): Indices of tetrahedra in the support.
+        euler_characteristic (int): Euler characteristic of the surface.
+        matching_residual (float): Residual of the matching constraints.
+        quadrilateral_ok (bool): Whether quadrilateral constraints are satisfied.
+        source (str): Source of the candidate.
+        notes (list[str]): Additional notes.
+    """
 
     kind: str
     surface_type: str
@@ -203,6 +319,11 @@ class NormalSurfaceCandidate:
     notes: list[str] = field(default_factory=list)
 
     def decision_ready(self) -> bool:
+        """Check if the candidate is ready for geometric decision making.
+
+        Returns:
+            bool: True if exact, validated, and satisfying all constraints.
+        """
         return bool(
             self.exact
             and self.validated
@@ -211,6 +332,11 @@ class NormalSurfaceCandidate:
         )
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return a dictionary representation for serialization.
+
+        Returns:
+            dict[str, object]: Dictionary representation.
+        """
         return {
             "kind": self.kind,
             "surface_type": self.surface_type,
@@ -236,6 +362,16 @@ class NormalSurfaceCandidate:
         *,
         matching_matrix: Optional[csr_matrix] = None,
     ) -> "NormalSurfaceCandidate":
+        """Create a normal-surface candidate from a vertex link.
+
+        Args:
+            manifold (Triangulated3Manifold): The 3-manifold.
+            vertex (int): The vertex index.
+            matching_matrix (Optional[csr_matrix]): Optional pre-computed matching matrix.
+
+        Returns:
+            NormalSurfaceCandidate: The vertex-link candidate.
+        """
         n_tet = manifold.n_tetrahedra
         triangle_coords = np.zeros((n_tet, 4), dtype=np.int64)
         support = []
@@ -275,6 +411,16 @@ class NormalSurfaceCandidate:
         *,
         matching_matrix: Optional[csr_matrix] = None,
     ) -> "NormalSurfaceCandidate":
+        """Create a normal-surface candidate from an edge link.
+
+        Args:
+            manifold (Triangulated3Manifold): The 3-manifold.
+            edge (tuple[int, int]): The edge vertex indices.
+            matching_matrix (Optional[csr_matrix]): Optional pre-computed matching matrix.
+
+        Returns:
+            NormalSurfaceCandidate: The edge-link candidate.
+        """
         n_tet = manifold.n_tetrahedra
         triangle_coords = np.zeros((n_tet, 4), dtype=np.int64)
         quad_coords = np.zeros((n_tet, 3), dtype=np.int64)
@@ -320,6 +466,19 @@ class NormalSurfaceCandidate:
         source: str,
         matching_matrix: Optional[csr_matrix] = None,
     ) -> "NormalSurfaceCandidate":
+        """Create a normal-surface candidate from a dual-graph cut.
+
+        Args:
+            manifold (Triangulated3Manifold): The 3-manifold.
+            support_tetrahedra (Iterable[int]): Tetrahedra in the cut support.
+            kind (str): Surface kind.
+            surface_type (str): Surface type.
+            source (str): Source description.
+            matching_matrix (Optional[csr_matrix]): Optional matching matrix.
+
+        Returns:
+            NormalSurfaceCandidate: The heuristic cut candidate.
+        """
         support = tuple(sorted({int(i) for i in support_tetrahedra}))
         n_tet = manifold.n_tetrahedra
         coords = np.zeros(7 * n_tet, dtype=np.int64)
@@ -354,7 +513,19 @@ class NormalSurfaceCandidate:
 
 @dataclass
 class PieceDecomposition:
-    """A coarse decomposition returned by the prime/JSJ/crushing heuristics."""
+    """A coarse decomposition returned by the prime/JSJ/crushing heuristics.
+
+    Attributes:
+        kind (str): Type of decomposition (e.g., "prime", "jsj").
+        exact (bool): Whether the decomposition is exact.
+        validated (bool): Whether the decomposition has been validated.
+        pieces (list[Triangulated3Manifold]): List of manifolds resulting from the cut.
+        cut_surfaces (list[NormalSurfaceCandidate]): Surfaces used for the cut.
+        adjacency (list[tuple[int, int]]): Adjacency in the decomposition graph.
+        support_tetrahedra (list[list[int]]): Tetrahedra in the support of the cuts.
+        summary (str): Brief summary of the decomposition.
+        notes (list[str]): Additional notes.
+    """
 
     kind: str
     exact: bool
@@ -367,6 +538,11 @@ class PieceDecomposition:
     notes: list[str] = field(default_factory=list)
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return a dictionary representation for serialization.
+
+        Returns:
+            dict[str, object]: Dictionary representation.
+        """
         return {
             "kind": self.kind,
             "exact": self.exact,
@@ -382,7 +558,27 @@ class PieceDecomposition:
 
 @dataclass
 class GeometrizationResult:
-    """Geometrization-oriented recognition result with an exportable certificate payload."""
+    """Geometrization-oriented recognition result with an exportable certificate payload.
+
+    Attributes:
+        status (str): Classification status ("success" or "inconclusive").
+        classification (str): Geometric classification.
+        theorem (str): Theorem name.
+        theorem_tag (str): Theorem unique tag.
+        exact (bool): Whether the result is exact.
+        validated (bool): Whether the result has been validated.
+        manifold (Triangulated3Manifold): The analyzed manifold.
+        homology (dict[int, tuple[int, list[int]]]): Homology groups.
+        candidates (list[NormalSurfaceCandidate]): Evaluated normal surfaces.
+        prime_decomposition (Optional[PieceDecomposition]): Prime decomposition.
+        jsj_decomposition (Optional[PieceDecomposition]): JSJ decomposition.
+        pi1_descriptor (Optional[str]): Fundamental group descriptor.
+        assumptions (list[str]): List of assumptions.
+        evidence (list[str]): List of evidentiary findings.
+        missing_data (list[str]): List of missing data required for exactness.
+        certificates (dict[str, object]): Dictionary of supporting certificates.
+        summary (str): Human-readable summary.
+    """
 
     status: str
     classification: str
@@ -403,9 +599,19 @@ class GeometrizationResult:
     summary: str = ""
 
     def decision_ready(self) -> bool:
+        """Check if the result is ready for downstream geometric logic.
+
+        Returns:
+            bool: True if status is success, exact, and validated.
+        """
         return bool(self.status == "success" and self.exact and self.validated)
 
     def to_recognition_certificate(self):
+        """Convert the result into a 3-manifold recognition certificate.
+
+        Returns:
+            ThreeManifoldRecognitionCertificate: The generated certificate.
+        """
         from ..homeomorphism import ThreeManifoldRecognitionCertificate
 
         return ThreeManifoldRecognitionCertificate(
@@ -420,6 +626,11 @@ class GeometrizationResult:
         )
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return a dictionary representation for serialization.
+
+        Returns:
+            dict[str, object]: Dictionary representation.
+        """
         return {
             "status": self.status,
             "classification": self.classification,
@@ -452,6 +663,14 @@ class GeometrizationResult:
 def _build_face_to_tetrahedra(
     tetrahedra: Sequence[tuple[int, int, int, int]],
 ) -> dict[tuple[int, int, int], tuple[int, ...]]:
+    """Build a mapping from faces to indices of tetrahedra containing them.
+
+    Args:
+        tetrahedra (Sequence[tuple[int, int, int, int]]): List of tetrahedra.
+
+    Returns:
+        dict[tuple[int, int, int], tuple[int, ...]]: Face to tetrahedron indices.
+    """
     face_map: dict[tuple[int, int, int], list[int]] = {}
     for tet_idx, tet in enumerate(tetrahedra):
         for face in combinations(tet, 3):
@@ -460,6 +679,17 @@ def _build_face_to_tetrahedra(
 
 
 def _quad_type_for_local_edge(local_edge: tuple[int, int]) -> int:
+    """Return the quadrilateral type index for a local edge pair.
+
+    Args:
+        local_edge (tuple[int, int]): Indices of local vertices in a tetrahedron.
+
+    Returns:
+        int: The quad type index (0, 1, or 2).
+
+    Raises:
+        ValueError: If the edge pair is invalid.
+    """
     key = frozenset(local_edge)
     if key not in _QUAD_EDGE_PAIRS:
         raise ValueError(f"Invalid local edge for tetrahedron: {local_edge!r}")
@@ -467,6 +697,16 @@ def _quad_type_for_local_edge(local_edge: tuple[int, int]) -> int:
 
 
 def _piece_intersects_face(local_vertex_count: np.ndarray, local_quad_count: np.ndarray, face_local_vertices: tuple[int, int, int]) -> np.ndarray:
+    """Determine which normal pieces in a tetrahedron intersect a given face.
+
+    Args:
+        local_vertex_count (np.ndarray): Dummy counts.
+        local_quad_count (np.ndarray): Dummy counts.
+        face_local_vertices (tuple[int, int, int]): Indices of vertices forming the face.
+
+    Returns:
+        np.ndarray: A binary mask of size 7 indicating intersection.
+    """
     face_mask = np.zeros(7, dtype=np.int64)
     for idx in face_local_vertices:
         face_mask[idx] = 1
@@ -480,6 +720,12 @@ def _normal_surface_matching_matrix(manifold: Triangulated3Manifold) -> csr_matr
     This matrix encodes a conservative combinatorial compatibility check: the
     count of normal pieces intersecting each paired face must agree on both
     sides of the face identification.
+
+    Args:
+        manifold (Triangulated3Manifold): The 3-manifold.
+
+    Returns:
+        csr_matrix: The face-matching matrix.
     """
 
     rows: list[int] = []
@@ -524,11 +770,30 @@ def _normal_surface_matching_residual(
     *,
     matching_matrix: Optional[csr_matrix] = None,
 ) -> float:
+    """Compute the residual of the matching constraints for given coordinates.
+
+    Args:
+        manifold (Triangulated3Manifold): The manifold.
+        coords (np.ndarray): Normal coordinates.
+        matching_matrix (Optional[csr_matrix]): Optional pre-computed matching matrix.
+
+    Returns:
+        float: The L2 norm of the matching constraint violation.
+    """
     matrix = matching_matrix if matching_matrix is not None else _normal_surface_matching_matrix(manifold)
     return _normal_surface_matching_residual_with_matrix(matrix, coords)
 
 
 def _normal_surface_matching_residual_with_matrix(matrix: csr_matrix, coords: np.ndarray) -> float:
+    """Compute matching residual given a matching matrix.
+
+    Args:
+        matrix (csr_matrix): The matching matrix.
+        coords (np.ndarray): Normal coordinates.
+
+    Returns:
+        float: The L2 norm of the residual.
+    """
     if matrix.shape[0] == 0:
         return 0.0
     resid = matrix @ np.asarray(coords, dtype=np.int64)
@@ -536,6 +801,15 @@ def _normal_surface_matching_residual_with_matrix(matrix: csr_matrix, coords: np
 
 
 def _normal_surface_quadrilateral_ok(coords: np.ndarray, n_tetrahedra: int) -> bool:
+    """Check if the quadrilateral constraints are satisfied (at most one quad type per tet).
+
+    Args:
+        coords (np.ndarray): Normal coordinates.
+        n_tetrahedra (int): Number of tetrahedra.
+
+    Returns:
+        bool: True if constraints are satisfied, False otherwise.
+    """
     coords = np.asarray(coords, dtype=np.int64).reshape(n_tetrahedra, 7)
     quads = coords[:, 4:]
     for row in quads:
@@ -545,10 +819,28 @@ def _normal_surface_quadrilateral_ok(coords: np.ndarray, n_tetrahedra: int) -> b
 
 
 def normal_surface_matching_matrix(manifold: Triangulated3Manifold) -> csr_matrix:
+    """Public API for building the normal-surface matching matrix.
+
+    Args:
+        manifold (Triangulated3Manifold): The manifold.
+
+    Returns:
+        csr_matrix: The matching matrix.
+    """
     return _normal_surface_matching_matrix(manifold)
 
 
 def normal_surface_candidates(manifold: Triangulated3Manifold) -> list[NormalSurfaceCandidate]:
+    """Generate a list of canonical normal-surface candidates.
+
+    Includes vertex links, edge links, and surfaces derived from dual-graph cuts.
+
+    Args:
+        manifold (Triangulated3Manifold): The manifold.
+
+    Returns:
+        list[NormalSurfaceCandidate]: List of validated candidates.
+    """
     candidates: list[NormalSurfaceCandidate] = []
     seen: set[tuple[str, tuple[int, ...], str]] = set()
     matching_matrix = _normal_surface_matching_matrix(manifold)
@@ -629,6 +921,15 @@ def _batch_matching_residuals(
     matrix: csr_matrix,
     coordinates: Sequence[np.ndarray],
 ) -> np.ndarray:
+    """Compute matching residuals for a batch of coordinate vectors.
+
+    Args:
+        matrix (csr_matrix): Matching matrix.
+        coordinates (Sequence[np.ndarray]): List of coordinate vectors.
+
+    Returns:
+        np.ndarray: Vector of residual norms.
+    """
     if not coordinates:
         return np.zeros(0, dtype=np.float64)
     if matrix.shape[0] == 0:
@@ -658,6 +959,18 @@ def _validate_normal_surface_candidate(
     residual: Optional[float] = None,
     tol: float = _MATCHING_RESIDUAL_TOL,
 ) -> NormalSurfaceCandidate:
+    """Validate a normal-surface candidate against coordinate and matching constraints.
+
+    Args:
+        manifold (Triangulated3Manifold): The manifold.
+        candidate (NormalSurfaceCandidate): The candidate to validate.
+        matching_matrix (csr_matrix): Matching matrix.
+        residual (Optional[float]): Optional pre-computed residual.
+        tol (float): Tolerance for matching residuals. Defaults to 1e-12.
+
+    Returns:
+        NormalSurfaceCandidate: The validated (and possibly adjusted) candidate.
+    """
     n_tet = manifold.n_tetrahedra
     notes = list(candidate.notes)
     exact = bool(candidate.exact)
@@ -759,6 +1072,14 @@ def _validate_normal_surface_candidate(
 
 
 def _dual_graph_articulation_points(graph: dict[int, set[int]]) -> list[int]:
+    """Find articulation points in the dual graph of the manifold.
+
+    Args:
+        graph (dict[int, set[int]]): Adjacency list of the dual graph.
+
+    Returns:
+        list[int]: Indices of tetrahedra which are articulation points.
+    """
     index = 0
     indices: dict[int, int] = {}
     lowlink: dict[int, int] = {}
@@ -795,6 +1116,14 @@ def _dual_graph_articulation_points(graph: dict[int, set[int]]) -> list[int]:
 
 
 def _dual_graph_bridges(graph: dict[int, set[int]]) -> list[tuple[int, int]]:
+    """Find bridges in the dual graph of the manifold.
+
+    Args:
+        graph (dict[int, set[int]]): Adjacency list of the dual graph.
+
+    Returns:
+        list[tuple[int, int]]: Pairs of tetrahedra indices forming bridges.
+    """
     index = 0
     indices: dict[int, int] = {}
     lowlink: dict[int, int] = {}
@@ -824,6 +1153,15 @@ def crush_normal_surface(
     manifold: Triangulated3Manifold,
     surface: NormalSurfaceCandidate,
 ) -> PieceDecomposition:
+    """Crush a manifold along a normal surface and decompose into components.
+
+    Args:
+        manifold (Triangulated3Manifold): The manifold.
+        surface (NormalSurfaceCandidate): The normal surface to cut along.
+
+    Returns:
+        PieceDecomposition: The resulting decomposition.
+    """
     support = set(surface.support_tetrahedra)
     remaining = [i for i in range(manifold.n_tetrahedra) if i not in support]
     if not remaining:
@@ -857,6 +1195,14 @@ def crush_normal_surface(
 
 
 def _connected_components(graph: dict[int, set[int]]) -> list[list[int]]:
+    """Find connected components in an adjacency list graph.
+
+    Args:
+        graph (dict[int, set[int]]): The graph.
+
+    Returns:
+        list[list[int]]: List of component vertex sets.
+    """
     seen: set[int] = set()
     components: list[list[int]] = []
     for start in graph:
@@ -877,6 +1223,14 @@ def _connected_components(graph: dict[int, set[int]]) -> list[list[int]]:
 
 
 def _graph_adjacency_from_components(graph: dict[int, set[int]]) -> list[tuple[int, int]]:
+    """Return all edges in the graph as sorted pairs.
+
+    Args:
+        graph (dict[int, set[int]]): The graph.
+
+    Returns:
+        list[tuple[int, int]]: List of edges.
+    """
     edges = set()
     for a, neighbors in graph.items():
         for b in neighbors:
@@ -890,6 +1244,16 @@ def _choose_best_decomposition(
     candidates: Sequence[NormalSurfaceCandidate],
     kind: str,
 ) -> PieceDecomposition:
+    """Evaluate and choose the best decomposition among candidates.
+
+    Args:
+        manifold (Triangulated3Manifold): The manifold.
+        candidates (Sequence[NormalSurfaceCandidate]): Candidate surfaces.
+        kind (str): Target decomposition kind ("prime" or "jsj").
+
+    Returns:
+        PieceDecomposition: The selected best decomposition.
+    """
     best: Optional[PieceDecomposition] = None
     best_score = -np.inf
     best_notes: list[str] = []
@@ -952,6 +1316,16 @@ def _decomposition_score(
     surface: NormalSurfaceCandidate,
     decomposition: PieceDecomposition,
 ) -> tuple[float, list[str]]:
+    """Compute a heuristic score for a decomposition.
+
+    Args:
+        manifold (Triangulated3Manifold): The original manifold.
+        surface (NormalSurfaceCandidate): The surface used for cutting.
+        decomposition (PieceDecomposition): The resulting decomposition.
+
+    Returns:
+        tuple[float, list[str]]: The score and a list of scoring notes.
+    """
     n_pieces = len(decomposition.pieces)
     split_gain = 8.0 * max(0, n_pieces - 1)
     validation_bonus = 4.0 if surface.validated else -6.0
@@ -989,14 +1363,38 @@ def _decomposition_score(
 
 
 def prime_decomposition(manifold: Triangulated3Manifold) -> PieceDecomposition:
+    """Heuristically compute the prime decomposition of a 3-manifold.
+
+    Args:
+        manifold (Triangulated3Manifold): The manifold.
+
+    Returns:
+        PieceDecomposition: The selected best prime decomposition.
+    """
     return _choose_best_decomposition(manifold, normal_surface_candidates(manifold), kind="prime")
 
 
 def jsj_decomposition(manifold: Triangulated3Manifold) -> PieceDecomposition:
+    """Heuristically compute the JSJ decomposition of a 3-manifold.
+
+    Args:
+        manifold (Triangulated3Manifold): The manifold.
+
+    Returns:
+        PieceDecomposition: The selected best JSJ decomposition.
+    """
     return _choose_best_decomposition(manifold, normal_surface_candidates(manifold), kind="jsj")
 
 
 def _homology_sphere_like(manifold: Triangulated3Manifold) -> bool:
+    """Check if the manifold has the homology of a 3-sphere.
+
+    Args:
+        manifold (Triangulated3Manifold): The manifold.
+
+    Returns:
+        bool: True if homology matches S^3, False otherwise.
+    """
     h = manifold.homology()
     # A 3-manifold is homology-sphere-like if H_*(M; Z) ≅ H_*(S^3; Z)
     # This requires rank(H0)=1, rank(H3)=1, and H1=H2=0 (including NO torsion)
@@ -1015,7 +1413,20 @@ def analyze_geometrization(
     allow_approx: bool = False,
     name: str = "triangulated_3_manifold",
 ) -> GeometrizationResult:
-    """Analyze a triangulated 3-manifold using conservative combinatorial heuristics."""
+    """Analyze a triangulated 3-manifold using conservative combinatorial heuristics.
+
+    Args:
+        manifold (Triangulated3Manifold | SimplicialComplex | Sequence[Sequence[int]]):
+            The manifold to analyze.
+        pi1_descriptor (Optional[str]): Known fundamental group descriptor.
+        embedding_certificate (Optional[object]): Supporting embedding certificate.
+        allow_approx (bool): Whether to allow heuristic/approximate success.
+            Defaults to False.
+        name (str): Name of the manifold. Defaults to "triangulated_3_manifold".
+
+    Returns:
+        GeometrizationResult: The result of the geometrization analysis.
+    """
 
     tri = _coerce_manifold(manifold, name=name)
     homology = {n: tri.homology(n) for n in range(4)}
@@ -1129,6 +1540,16 @@ def _coerce_manifold(
     *,
     name: str = "triangulated_3_manifold",
 ) -> Triangulated3Manifold:
+    """Coerce various input formats into a Triangulated3Manifold.
+
+    Args:
+        manifold (Triangulated3Manifold | SimplicialComplex | Sequence[Sequence[int]]):
+            Input data.
+        name (str): Name for the manifold. Defaults to "triangulated_3_manifold".
+
+    Returns:
+        Triangulated3Manifold: The coerced manifold object.
+    """
     if isinstance(manifold, Triangulated3Manifold):
         return manifold
     if isinstance(manifold, SimplicialComplex):
@@ -1148,6 +1569,3 @@ __all__ = [
     "normal_surface_matching_matrix",
     "prime_decomposition",
 ]
-
-
-

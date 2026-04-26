@@ -7,12 +7,27 @@ from .fundamental_group import FundamentalGroup, infer_standard_group_descriptor
 
 
 class Pi1Evidence(BaseModel):
+    """Evidence for fundamental group properties.
+
+    Attributes:
+        generators (list[str]): List of generator names.
+        relation_count (int): Number of relations in the presentation.
+        inferred_descriptor (str | None): Inferred standard group descriptor.
+    """
     generators: list[str] = Field(default_factory=list)
     relation_count: int = 0
     inferred_descriptor: str | None = None
 
 
 class GroupRingContext(BaseModel):
+    """Context for group ring computations.
+
+    Attributes:
+        descriptor (str): The group descriptor string.
+        valid_descriptor (bool): Whether the descriptor is valid.
+        descriptor_message (str): Status message from descriptor validation.
+        family (str): The classified group family.
+    """
     descriptor: str
     valid_descriptor: bool
     descriptor_message: str
@@ -20,6 +35,14 @@ class GroupRingContext(BaseModel):
 
 
 class Phase2Readiness(BaseModel):
+    """Readiness status for phase 2 computations.
+
+    Attributes:
+        ready (bool): Whether the inputs are ready for phase 2.
+        gaps (list[str]): List of missing requirements or gaps.
+        pi1_evidence (Pi1Evidence | None): Evidence from the fundamental group.
+        group_ring_context (GroupRingContext | None): Group ring context metadata.
+    """
     ready: bool
     gaps: list[str] = Field(default_factory=list)
     pi1_evidence: Pi1Evidence | None = None
@@ -27,7 +50,14 @@ class Phase2Readiness(BaseModel):
 
 
 def _descriptor_family(descriptor: str) -> str:
-    """Classify descriptor into broad computational family buckets."""
+    """Classify descriptor into broad computational family buckets.
+
+    Args:
+        descriptor (str): The group descriptor string.
+
+    Returns:
+        str: The name of the group family.
+    """
     d = descriptor.strip()
     if d == "1":
         return "trivial"
@@ -41,7 +71,14 @@ def _descriptor_family(descriptor: str) -> str:
 
 
 def build_pi1_evidence(pi1: FundamentalGroup | None) -> Pi1Evidence | None:
-    """Build pi1 evidence payload for readiness diagnostics."""
+    """Build pi1 evidence payload for readiness diagnostics.
+
+    Args:
+        pi1 (FundamentalGroup | None): The fundamental group to analyze.
+
+    Returns:
+        Pi1Evidence | None: The evidence payload, or None if pi1 is None.
+    """
     if pi1 is None:
         return None
     return Pi1Evidence(
@@ -52,7 +89,14 @@ def build_pi1_evidence(pi1: FundamentalGroup | None) -> Pi1Evidence | None:
 
 
 def build_group_ring_context(descriptor: str | None) -> GroupRingContext | None:
-    """Validate descriptor and package group-ring context metadata."""
+    """Validate descriptor and package group-ring context metadata.
+
+    Args:
+        descriptor (str | None): The group descriptor string.
+
+    Returns:
+        GroupRingContext | None: The context metadata, or None if descriptor is None.
+    """
     if descriptor is None:
         return None
     ok, msg = validate_group_descriptor(descriptor)
@@ -67,7 +111,15 @@ def build_group_ring_context(descriptor: str | None) -> GroupRingContext | None:
 def evaluate_phase2_readiness(
     pi1: FundamentalGroup | None, descriptor: str | None
 ) -> Phase2Readiness:
-    """Evaluate whether inputs satisfy current phase-2 group-ring prerequisites."""
+    """Evaluate whether inputs satisfy current phase-2 group-ring prerequisites.
+
+    Args:
+        pi1 (FundamentalGroup | None): The fundamental group.
+        descriptor (str | None): The group descriptor string.
+
+    Returns:
+        Phase2Readiness: The readiness evaluation result.
+    """
     pi1_evidence = build_pi1_evidence(pi1)
     context = build_group_ring_context(descriptor)
 

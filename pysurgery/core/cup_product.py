@@ -14,9 +14,22 @@ def _numpy_alexander_whitney_cup(
     q_simplex_to_idx: Dict[Tuple[int, ...], int],
     modulus: int | None = None,
 ) -> np.ndarray:
-    """
-    Optimized map-based evaluation for Cup Product.
+    """Optimized map-based evaluation for Cup Product.
+
     Avoids native Python for-loops via list comprehensions and direct mapping.
+
+    Args:
+        alpha: The p-cochain vector.
+        beta: The q-cochain vector.
+        p: Dimension of alpha.
+        q: Dimension of beta.
+        simplices: (n, p+q+1) array of (p+q)-simplices.
+        p_simplex_to_idx: Mapping from p-simplex tuple to cochain index.
+        q_simplex_to_idx: Mapping from q-simplex tuple to cochain index.
+        modulus: Optional modulus for arithmetic.
+
+    Returns:
+        The resulting (p+q)-cochain evaluation.
     """
     if len(simplices) == 0:
         return np.zeros(0, dtype=np.int64)
@@ -53,8 +66,24 @@ def cup_i_product(
     simplex_to_idx_q: Dict[Tuple[int, ...], int],
     modulus: int | None = None,
 ) -> np.ndarray:
-    """
-    Simplicial cup-i product on ordered simplices using exact Steenrod interleaved intervals.
+    """Simplicial cup-i product on ordered simplices using exact Steenrod interleaved intervals.
+
+    Args:
+        alpha: The p-cochain vector.
+        beta: The q-cochain vector.
+        p: Dimension of alpha.
+        q: Dimension of beta.
+        i: Interleaving degree (cup-i).
+        simplices_target: List of (p+q-i)-simplices.
+        simplex_to_idx_p: Mapping from p-simplex to cochain index.
+        simplex_to_idx_q: Mapping from q-simplex to cochain index.
+        modulus: Optional modulus.
+
+    Returns:
+        The resulting (p+q-i)-cochain evaluated on target simplices.
+
+    Raises:
+        ValueError: If i is not in range [0, min(p, q)].
     """
     if i < 0 or i > min(p, q):
         raise ValueError("cup-i requires 0 <= i <= min(p, q).")
@@ -133,35 +162,25 @@ def alexander_whitney_cup(
     i: int = 0,
     modulus: int | None = None,
 ) -> np.ndarray:
-    """
-    Computes the Alexander-Whitney cup product of a p-cochain alpha and a q-cochain beta.
+    """Computes the Alexander-Whitney cup product of a p-cochain alpha and a q-cochain beta.
+
     The result is a (p+q)-cochain.
-
     Formula: (alpha U beta)([v_0, ..., v_{p+q}]) = alpha([v_0, ..., v_p]) * beta([v_p, ..., v_{p+q}])
-
     Uses Julia backend acceleration when available, with a pure-Python fallback.
 
-    Parameters
-    ----------
-    alpha : np.ndarray
-        The p-cochain vector.
-    beta : np.ndarray
-        The q-cochain vector.
-    p : int
-        Dimension of alpha.
-    q : int
-        Dimension of beta.
-    simplices_p_plus_q : List[Tuple[int, ...]]
-        List of all (p+q)-simplices, where each simplex is a sorted tuple of vertex indices.
-    simplex_to_idx_p : Dict[Tuple[int, ...], int]
-        Mapping from a p-simplex tuple to its index in the alpha cochain vector.
-    simplex_to_idx_q : Dict[Tuple[int, ...], int]
-        Mapping from a q-simplex tuple to its index in the beta cochain vector.
+    Args:
+        alpha: The p-cochain vector.
+        beta: The q-cochain vector.
+        p: Dimension of alpha.
+        q: Dimension of beta.
+        simplices_p_plus_q: List of all (p+q)-simplices, each as a sorted tuple.
+        simplex_to_idx_p: Mapping from p-simplex tuple to cochain index.
+        simplex_to_idx_q: Mapping from q-simplex tuple to cochain index.
+        i: Interleaving degree (defaults to 0 for standard cup product).
+        modulus: Optional modulus for arithmetic.
 
-    Returns
-    -------
-    np.ndarray
-        The resulting (p+q)-cochain evaluated on all (p+q)-simplices.
+    Returns:
+        The resulting (p+q-i)-cochain evaluated on target simplices.
     """
     # Convert list of tuples to a contiguous NumPy array for cache-friendly iteration
     # This prevents object-overhead in memory when dealing with millions of simplices.

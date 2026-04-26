@@ -324,13 +324,13 @@ def test_simplicial_boundary_matrix_is_cached(monkeypatch):
     sc.clear_cache()
 
     calls = {"count": 0}
-    original = complexes._boundary_matrix_from_simplices
+    original = complexes._boundary_matrix_from_simplices_with_maps
 
-    def _wrapped(source, target):
+    def _wrapped(source, target_map):
         calls["count"] += 1
-        return original(source, target)
+        return original(source, target_map)
 
-    monkeypatch.setattr(complexes, "_boundary_matrix_from_simplices", _wrapped)
+    monkeypatch.setattr(complexes, "_boundary_matrix_from_simplices_with_maps", _wrapped)
     # We must also ensure it doesn't use the Julia-bridge if available for this specific test
     monkeypatch.setattr(complexes.julia_engine, "available", False)
 
@@ -591,7 +591,7 @@ def test_quick_mapper_validity_and_euler():
     # 2. Run quick_mapper to simplify the topology
     # We use preserve_topology=True to ensure Betti numbers (and thus Chi) remain the same
     # though the complex will have fewer vertices/edges.
-    sc_simple, _ = sc_orig.quick_mapper(max_loops=2, preserve_topology=True)
+    sc_simple, _ = sc_orig.simplify()
 
     # 3. Verify mathematical validity
     validity = sc_simple.verify_structure()

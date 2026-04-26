@@ -55,7 +55,16 @@ _JULIA_PAIR_BATCH_THRESHOLD = 256
 
 @dataclass
 class SimplexIntersectionWitness:
-    """One detected geometric intersection between two simplices."""
+    """One detected geometric intersection between two simplices.
+
+    Attributes:
+        simplex_a: Tuple of vertex labels for the first simplex.
+        simplex_b: Tuple of vertex labels for the second simplex.
+        kind: Type of intersection (e.g., 'segment_segment').
+        distance: Minimum distance between the simplices.
+        overlap_dimension: Dimension of the intersection.
+        notes: Additional diagnostic information.
+    """
 
     simplex_a: tuple[int, ...]
     simplex_b: tuple[int, ...]
@@ -65,6 +74,11 @@ class SimplexIntersectionWitness:
     notes: list[str] = field(default_factory=list)
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Convert the witness to a legacy dictionary format.
+
+        Returns:
+            A dictionary containing the witness data.
+        """
         return {
             "simplex_a": list(self.simplex_a),
             "simplex_b": list(self.simplex_b),
@@ -77,7 +91,23 @@ class SimplexIntersectionWitness:
 
 @dataclass
 class ImmersionResult:
-    """Result for local PL immersion checks."""
+    """Result for local PL immersion checks.
+
+    Attributes:
+        status: Status of the check (e.g., 'success', 'impediment', 'inconclusive').
+        exact: Whether the check was performed using exact predicates.
+        immersed: Whether the source is locally immersed in the ambient space.
+        theorem: Name of the theorem used for the check.
+        theorem_tag: Unique tag for the theorem.
+        source_dimension: Dimension of the source complex.
+        ambient_dimension: Dimension of the ambient space.
+        local_failures: Details of local injectivity failures.
+        simplex_rank_failures: Details of simplices with insufficient affine rank.
+        evidence: Human-readable evidence for the result.
+        missing_data: Description of any missing data that prevented a conclusive result.
+        certificates: Machine-readable evidence for the result.
+        summary: Short summary of the check result.
+    """
 
     status: str
     exact: bool
@@ -94,9 +124,19 @@ class ImmersionResult:
     summary: str = ""
 
     def decision_ready(self) -> bool:
+        """Check if the result is conclusive and positive.
+
+        Returns:
+            True if the status is 'success', the check is exact, and it is immersed.
+        """
         return bool(self.status == "success" and self.exact and self.immersed)
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Convert the result to a legacy dictionary format.
+
+        Returns:
+            A dictionary containing the result data.
+        """
         return {
             "status": self.status,
             "exact": self.exact,
@@ -117,7 +157,28 @@ class ImmersionResult:
 
 @dataclass
 class EmbeddingResult:
-    """Result for global PL embedding checks."""
+    """Result for global PL embedding checks.
+
+    Attributes:
+        status: Status of the check (e.g., 'success', 'impediment', 'inconclusive').
+        exact: Whether the check was performed using exact predicates.
+        embedded: Whether the source is globally embedded in the ambient space.
+        theorem: Name of the theorem used for the check.
+        theorem_tag: Unique tag for the theorem.
+        source_dimension: Dimension of the source complex.
+        ambient_dimension: Dimension of the ambient space.
+        immersion: The result of the local immersion check.
+        intersections: List of detected self-intersections.
+        candidate_pairs_checked: Number of simplex pairs checked for intersection.
+        pruned_pairs: Number of simplex pairs pruned by broad-phase checks.
+        projection_used: Whether a projection was used to reduce the ambient dimension.
+        projection_method: Method used for projection (e.g., 'pca', 'random').
+        projection_matrix: The matrix used for projection.
+        evidence: Human-readable evidence for the result.
+        missing_data: Description of any missing data that prevented a conclusive result.
+        certificates: Machine-readable evidence for the result.
+        summary: Short summary of the check result.
+    """
 
     status: str
     exact: bool
@@ -139,9 +200,19 @@ class EmbeddingResult:
     summary: str = ""
 
     def decision_ready(self) -> bool:
+        """Check if the result is conclusive and positive.
+
+        Returns:
+            True if the status is 'success', the check is exact, and it is embedded.
+        """
         return bool(self.status == "success" and self.exact and self.embedded)
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Convert the result to a legacy dictionary format.
+
+        Returns:
+            A dictionary containing the result data.
+        """
         return {
             "status": self.status,
             "exact": self.exact,
@@ -167,7 +238,18 @@ class EmbeddingResult:
 
 @dataclass
 class PLMap:
-    """A piecewise-affine map from a simplicial source to Euclidean coordinates."""
+    """A piecewise-affine map from a simplicial source to Euclidean coordinates.
+
+    Attributes:
+        source: The original source object (e.g., SurfaceMesh).
+        source_complex: The underlying simplicial complex.
+        vertex_coordinates: Coordinates of each vertex in the ambient space.
+        vertex_labels: Unique labels for each vertex in the source complex.
+        ambient_dimension: Dimension of the ambient Euclidean space.
+        source_dimension: Dimension of the source simplicial complex.
+        projection_matrix: Optional matrix used to project from a higher dimension.
+        source_name: Name of the source for identification.
+    """
 
     source: object
     source_complex: SimplicialComplex
@@ -181,6 +263,11 @@ class PLMap:
     _simplex_vertices_cache: dict[tuple[int, ...], np.ndarray] = field(init=False, repr=False, default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Initialize label to index mapping and validate labels.
+
+        Raises:
+            ValueError: If vertex_labels are not unique.
+        """
         labels = [int(v) for v in self.vertex_labels]
         if len(set(labels)) != len(labels):
             raise ValueError("vertex_labels must be unique for embedding analysis.")
@@ -195,6 +282,20 @@ class PLMap:
         projection_matrix: Optional[np.ndarray] = None,
         source_name: Optional[str] = None,
     ) -> "PLMap":
+        """Create a PLMap from various source types.
+
+        Args:
+            source: A source object (SimplicialComplex, SurfaceMesh, etc.).
+            coordinates: Optional explicit vertex coordinates.
+            projection_matrix: Optional projection matrix.
+            source_name: Optional name for the map.
+
+        Returns:
+            A new PLMap instance.
+
+        Raises:
+            ValueError: If coordinates do not match the number of vertices.
+        """
         source_complex, vertex_labels, source_dimension = _coerce_source_complex(source)
         coords = _coerce_coordinates(source, coordinates=coordinates)
         if coords.shape[0] != len(vertex_labels):
@@ -214,9 +315,25 @@ class PLMap:
         )
 
     def simplex_index(self, simplex: Sequence[int]) -> tuple[int, ...]:
+        """Convert a simplex sequence to a canonical tuple of integers.
+
+        Args:
+            simplex: Sequence of vertex labels.
+
+        Returns:
+            Tuple of integer vertex labels.
+        """
         return tuple(int(v) for v in simplex)
 
     def simplex_vertices(self, simplex: Sequence[int]) -> np.ndarray:
+        """Get the coordinates of the vertices for a given simplex.
+
+        Args:
+            simplex: Sequence of vertex labels.
+
+        Returns:
+            An (n_vertices, ambient_dim) array of coordinates.
+        """
         simplex_key = self.simplex_index(simplex)
         cached = self._simplex_vertices_cache.get(simplex_key)
         if cached is not None:
@@ -227,6 +344,17 @@ class PLMap:
         return vertices
 
     def vertex_label_to_index(self, label: int) -> int:
+        """Get the coordinate index for a given vertex label.
+
+        Args:
+            label: The vertex label.
+
+        Returns:
+            The corresponding row index in vertex_coordinates.
+
+        Raises:
+            KeyError: If the label is not found.
+        """
         try:
             return self._label_to_index[int(label)]
         except ValueError as exc:
@@ -235,6 +363,14 @@ class PLMap:
             raise KeyError("Unknown vertex label {!r}".format(label)) from exc
 
     def simplex_affine_rank(self, simplex: Sequence[int]) -> int:
+        """Compute the affine rank of a simplex in the ambient space.
+
+        Args:
+            simplex: Sequence of vertex labels.
+
+        Returns:
+            The affine rank of the simplex.
+        """
         vertices = self.simplex_vertices(simplex)
         if vertices.shape[0] <= 1:
             return 0
@@ -245,14 +381,35 @@ class PLMap:
         return int(np.linalg.matrix_rank(mat))
 
     def simplex_barycenter(self, simplex: Sequence[int]) -> np.ndarray:
+        """Compute the barycenter of a simplex.
+
+        Args:
+            simplex: Sequence of vertex labels.
+
+        Returns:
+            The barycenter as a 1D array.
+        """
         vertices = self.simplex_vertices(simplex)
         return np.mean(vertices, axis=0)
 
     def simplex_bounding_box(self, simplex: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
+        """Compute the axis-aligned bounding box of a simplex.
+
+        Args:
+            simplex: Sequence of vertex labels.
+
+        Returns:
+            A tuple (min_coords, max_coords).
+        """
         vertices = self.simplex_vertices(simplex)
         return np.min(vertices, axis=0), np.max(vertices, axis=0)
 
     def simplices_by_dim(self) -> dict[int, list[tuple[int, ...]]]:
+        """Group simplices by their dimension.
+
+        Returns:
+            A dictionary mapping dimension to list of simplices.
+        """
         return {
             dim: [tuple(simplex) for simplex in simplices]
             for dim, simplices in self.source_complex.simplices.items()
@@ -261,7 +418,15 @@ class PLMap:
 
 @dataclass
 class ProjectionResult:
-    """Result of a PCA/random projection helper."""
+    """Result of a PCA/random projection helper.
+
+    Attributes:
+        points: The projected vertex coordinates.
+        projection_matrix: The matrix used for the projection.
+        method: The projection method used.
+        explained_variance: Optional explained variance (for PCA).
+        summary: A short summary of the projection.
+    """
 
     points: np.ndarray
     projection_matrix: np.ndarray
@@ -272,7 +437,18 @@ class ProjectionResult:
 
 @dataclass
 class SelfIntersectionReport:
-    """Broad-phase and narrow-phase self-intersection diagnostics."""
+    """Broad-phase and narrow-phase self-intersection diagnostics.
+
+    Attributes:
+        status: Status of the check.
+        exact: Whether the check used exact predicates.
+        has_intersections: Whether any self-intersections were detected.
+        witnesses: List of detected intersection witnesses.
+        candidate_pairs_checked: Number of pairs that passed broad-phase.
+        pruned_pairs: Number of pairs pruned by broad-phase.
+        max_violation: Maximum distance violation detected.
+        notes: Additional diagnostic notes.
+    """
 
     status: str
     exact: bool
@@ -284,9 +460,19 @@ class SelfIntersectionReport:
     notes: list[str] = field(default_factory=list)
 
     def decision_ready(self) -> bool:
+        """Check if the result is conclusive and positive (no intersections).
+
+        Returns:
+            True if status is 'success', check is exact, and no intersections.
+        """
         return bool(self.status == "success" and self.exact and not self.has_intersections)
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Convert the report to a legacy dictionary format.
+
+        Returns:
+            A dictionary containing the report data.
+        """
         return {
             "status": self.status,
             "exact": self.exact,
@@ -310,7 +496,23 @@ def analyze_embedding(
     projection_matrix: Optional[np.ndarray] = None,
     tol: float = _EPS,
 ) -> EmbeddingResult:
-    """High-level embedding / immersion analysis entry point."""
+    """High-level embedding / immersion analysis entry point.
+
+    Args:
+        source: Source complex or mesh object.
+        coordinates: Optional explicit vertex coordinates.
+        target_dimension: Optional target ambient dimension.
+        allow_projection: Whether to allow projection to a lower dimension.
+        projection_method: Method for projection ('pca' or 'random').
+        projection_matrix: Optional custom projection matrix.
+        tol: Numerical tolerance for geometric checks.
+
+    Returns:
+        The result of the embedding analysis.
+
+    Raises:
+        ValueError: If target_dimension is smaller than ambient dimension and allow_projection is False.
+    """
     pl_map = PLMap.from_source(
         source,
         coordinates=coordinates,
@@ -416,7 +618,15 @@ def analyze_embedding(
 
 
 def check_immersion(pl_map: PLMap, *, tol: float = _EPS) -> ImmersionResult:
-    """Check local injectivity/rank conditions for a PL map."""
+    """Check local injectivity/rank conditions for a PL map.
+
+    Args:
+        pl_map: The PL map to check.
+        tol: Numerical tolerance for rank checks.
+
+    Returns:
+        The result of the immersion check.
+    """
     top_dim = pl_map.source_dimension
     source_simplices = _top_simplices(pl_map.source_complex)
     local_failures: list[dict[str, object]] = []
@@ -515,7 +725,15 @@ def check_immersion(pl_map: PLMap, *, tol: float = _EPS) -> ImmersionResult:
 
 
 def detect_self_intersections(pl_map: PLMap, *, tol: float = _EPS) -> SelfIntersectionReport:
-    """Detect self-intersections using broad-phase pruning and exact low-dimensional predicates."""
+    """Detect self-intersections using broad-phase pruning and exact low-dimensional predicates.
+
+    Args:
+        pl_map: The PL map to check.
+        tol: Numerical tolerance for intersection checks.
+
+    Returns:
+        The self-intersection report.
+    """
     source_simplices = _all_simplices_by_dim(pl_map.source_complex)
     simplices = [
         s
@@ -601,7 +819,21 @@ def project_coordinates(
     projection_matrix: Optional[np.ndarray] = None,
     random_state: int = 0,
 ) -> ProjectionResult:
-    """Project a point cloud down to a lower ambient dimension."""
+    """Project a point cloud down to a lower ambient dimension.
+
+    Args:
+        points: (n_points, ambient_dim) array of coordinates.
+        target_dimension: Desired ambient dimension.
+        method: Projection method ('pca', 'random', or 'identity').
+        projection_matrix: Optional custom projection matrix.
+        random_state: Seed for random projection.
+
+    Returns:
+        The result of the projection.
+
+    Raises:
+        ValueError: If inputs are invalid or method is unknown.
+    """
     pts = np.asarray(points, dtype=np.float64)
     if pts.ndim != 2:
         raise ValueError("points must be a 2D array")
@@ -655,13 +887,30 @@ def project_coordinates(
 
 
 def jitter_coordinates(points: np.ndarray, *, scale: float = 1e-8, random_state: int = 0) -> np.ndarray:
-    """Apply a deterministic small jitter for transversality-style retries."""
+    """Apply a deterministic small jitter for transversality-style retries.
+
+    Args:
+        points: (n_points, ambient_dim) array of coordinates.
+        scale: Magnitude of the jitter.
+        random_state: Seed for the random generator.
+
+    Returns:
+        The jittered coordinates.
+    """
     pts = np.asarray(points, dtype=np.float64)
     rng = np.random.default_rng(random_state)
     return pts + scale * rng.normal(size=pts.shape)
 
 
 def _freeze_value(value: object) -> object:
+    """Deeply convert dictionaries, lists, and numpy arrays to hashable tuples.
+
+    Args:
+        value: The object to freeze.
+
+    Returns:
+        A hashable version of the input value.
+    """
     if isinstance(value, dict):
         return tuple(
             (str(k), _freeze_value(v))
@@ -679,6 +928,17 @@ def _freeze_value(value: object) -> object:
 
 
 def _coerce_source_complex(source: object) -> tuple[SimplicialComplex, list[int], int]:
+    """Coerce various source types into a SimplicialComplex and vertex labels.
+
+    Args:
+        source: The source object.
+
+    Returns:
+        A tuple (SimplicialComplex, vertex_labels, dimension).
+
+    Raises:
+        TypeError: If the source type is unsupported.
+    """
     if isinstance(source, SimplicialComplex):
         vertices = sorted({int(v[0]) for v in source.n_simplices(0)})
         return source, vertices, _source_dimension(source)
@@ -724,6 +984,18 @@ def _coerce_source_complex(source: object) -> tuple[SimplicialComplex, list[int]
 
 
 def _coerce_coordinates(source: object, *, coordinates: Optional[np.ndarray] = None) -> np.ndarray:
+    """Coerce various source types and optional input into a coordinate array.
+
+    Args:
+        source: The source object.
+        coordinates: Optional explicit coordinates.
+
+    Returns:
+        An (n_vertices, ambient_dim) array of coordinates.
+
+    Raises:
+        ValueError: If coordinates cannot be obtained or are malformed.
+    """
     if coordinates is not None:
         pts = np.asarray(coordinates, dtype=np.float64)
     elif hasattr(source, "coordinates") and getattr(source, "coordinates") is not None:
@@ -741,20 +1013,53 @@ def _coerce_coordinates(source: object, *, coordinates: Optional[np.ndarray] = N
 
 
 def _source_dimension(source_complex: SimplicialComplex) -> int:
+    """Determine the maximum dimension of a simplicial complex.
+
+    Args:
+        source_complex: The simplicial complex.
+
+    Returns:
+        The maximum dimension, or -1 if empty.
+    """
     return max(source_complex.dimensions, default=-1)
 
 
 def _top_simplices(source_complex: SimplicialComplex) -> list[tuple[int, ...]]:
+    """Get all simplices of the maximum dimension in the complex.
+
+    Args:
+        source_complex: The simplicial complex.
+
+    Returns:
+        A list of top-dimensional simplices.
+    """
     dim = _source_dimension(source_complex)
     return [tuple(s) for s in source_complex.n_simplices(dim)]
 
 
 def _incident_top_simplices(source_complex: SimplicialComplex, vertex: int) -> list[tuple[int, ...]]:
+    """Get all top-dimensional simplices incident to a given vertex.
+
+    Args:
+        source_complex: The simplicial complex.
+        vertex: The vertex label.
+
+    Returns:
+        A list of incident top-dimensional simplices.
+    """
     top = _top_simplices(source_complex)
     return [s for s in top if int(vertex) in s]
 
 
 def _all_simplices_by_dim(source_complex: SimplicialComplex) -> dict[int, list[tuple[int, ...]]]:
+    """Group all simplices in the complex by dimension.
+
+    Args:
+        source_complex: The simplicial complex.
+
+    Returns:
+        A dictionary mapping dimension to list of simplices.
+    """
     return {
         dim: sorted(tuple(s) for s in source_complex.n_simplices(dim))
         for dim in source_complex.dimensions
@@ -762,11 +1067,28 @@ def _all_simplices_by_dim(source_complex: SimplicialComplex) -> dict[int, list[t
 
 
 def _bbox_for_simplex(pl_map: PLMap, simplex: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
+    """Compute the axis-aligned bounding box for a simplex.
+
+    Args:
+        pl_map: The PL map.
+        simplex: Sequence of vertex labels.
+
+    Returns:
+        A tuple (min_coords, max_coords).
+    """
     vertices = pl_map.simplex_vertices(simplex)
     return np.min(vertices, axis=0), np.max(vertices, axis=0)
 
 
 def _bbox_radius(bbox: tuple[np.ndarray, np.ndarray]) -> float:
+    """Compute the radius of the bounding sphere for an axis-aligned bounding box.
+
+    Args:
+        bbox: A tuple (min_coords, max_coords).
+
+    Returns:
+        The radius of the bounding sphere.
+    """
     lo, hi = bbox
     return float(0.5 * np.linalg.norm(hi - lo))
 
@@ -777,12 +1099,31 @@ def _bbox_overlap(
     *,
     tol: float,
 ) -> bool:
+    """Check if two axis-aligned bounding boxes overlap within a tolerance.
+
+    Args:
+        bbox_a: First bounding box.
+        bbox_b: Second bounding box.
+        tol: Numerical tolerance.
+
+    Returns:
+        True if the boxes overlap.
+    """
     lo_a, hi_a = bbox_a
     lo_b, hi_b = bbox_b
     return bool(np.all(hi_a + tol >= lo_b) and np.all(hi_b + tol >= lo_a))
 
 
 def _combinatorially_adjacent(s1: Sequence[int], s2: Sequence[int]) -> bool:
+    """Check if two simplices share at least one vertex.
+
+    Args:
+        s1: First simplex vertex labels.
+        s2: Second simplex vertex labels.
+
+    Returns:
+        True if they share a vertex.
+    """
     return len(set(int(v) for v in s1).intersection(int(v) for v in s2)) > 0
 
 
@@ -792,9 +1133,15 @@ def _broad_phase_candidate_pairs(
     *,
     tol: float,
 ) -> set[tuple[int, int]]:
-    """
-    Standardized broad-phase pruning using O(N log N) KDTree.
-    Unified implementation for all point cloud scales (10 - 100k+).
+    """Standardized broad-phase pruning using O(N log N) KDTree.
+
+    Args:
+        centroids: (n_simplices, ambient_dim) array of simplex centroids.
+        radii: (n_simplices,) array of simplex bounding radii.
+        tol: Numerical tolerance for overlap.
+
+    Returns:
+        A set of candidate index pairs (i, j) with i < j.
     """
     n = int(centroids.shape[0])
     if n <= 1:
@@ -830,6 +1177,19 @@ def _simplex_intersection(
     pa: Optional[np.ndarray] = None,
     pb: Optional[np.ndarray] = None,
 ) -> Optional[SimplexIntersectionWitness]:
+    """Calculate the intersection between two simplices using exact or heuristic methods.
+
+    Args:
+        pl_map: The PL map.
+        simplex_a: First simplex vertex labels.
+        simplex_b: Second simplex vertex labels.
+        tol: Numerical tolerance.
+        pa: Optional precomputed coordinates for simplex_a.
+        pb: Optional precomputed coordinates for simplex_b.
+
+    Returns:
+        A SimplexIntersectionWitness if an intersection is found, else None.
+    """
     dim_a = len(simplex_a) - 1
     dim_b = len(simplex_b) - 1
     pa = pl_map.simplex_vertices(simplex_a) if pa is None else np.asarray(pa, dtype=np.float64)
@@ -868,6 +1228,16 @@ def _simplex_intersection(
 
 
 def _affine_hulls_overlap(pa: np.ndarray, pb: np.ndarray, *, tol: float) -> bool:
+    """Heuristic check if the affine hulls of two sets of points overlap.
+
+    Args:
+        pa: Coordinates for the first set of points.
+        pb: Coordinates for the second set of points.
+        tol: Numerical tolerance.
+
+    Returns:
+        True if the hulls likely overlap.
+    """
     # Conservative heuristic using hull rank and barycenter distance.
     if pa.size == 0 or pb.size == 0:
         return False
@@ -883,6 +1253,18 @@ def _segment_segment_intersection(
     *,
     tol: float,
 ) -> tuple[bool, float]:
+    """Find the closest points between two segments in R^m.
+
+    Args:
+        a0: Start of first segment.
+        a1: End of first segment.
+        b0: Start of second segment.
+        b1: End of second segment.
+        tol: Numerical tolerance.
+
+    Returns:
+        A tuple (intersect, distance).
+    """
     # Closest points between two segments in R^m.
     u = a1 - a0
     v = b1 - b0
@@ -914,6 +1296,14 @@ def _segment_segment_intersection(
 
 
 def _triangle_plane_normal(tri: np.ndarray) -> np.ndarray:
+    """Compute the unit normal for a triangle in R^3.
+
+    Args:
+        tri: (3, 3) array of triangle vertices.
+
+    Returns:
+        The unit normal vector.
+    """
     n = np.cross(tri[1] - tri[0], tri[2] - tri[0])
     norm = np.linalg.norm(n)
     if norm <= _EPS:
@@ -928,6 +1318,17 @@ def _segment_triangle_intersection(
     *,
     tol: float,
 ) -> tuple[bool, float]:
+    """Find the intersection between a segment and a triangle in R^3.
+
+    Args:
+        p0: Start of segment.
+        p1: End of segment.
+        tri: (3, 3) array of triangle vertices.
+        tol: Numerical tolerance.
+
+    Returns:
+        A tuple (intersect, distance).
+    """
     tri = np.asarray(tri, dtype=np.float64)
     n = _triangle_plane_normal(tri)
     if np.linalg.norm(n) <= tol:
@@ -959,6 +1360,16 @@ def _triangle_triangle_intersection(
     *,
     tol: float,
 ) -> tuple[bool, float]:
+    """Find the intersection between two triangles in R^3.
+
+    Args:
+        tri_a: (3, 3) array of vertices for the first triangle.
+        tri_b: (3, 3) array of vertices for the second triangle.
+        tol: Numerical tolerance.
+
+    Returns:
+        A tuple (intersect, distance).
+    """
     tri_a = np.asarray(tri_a, dtype=np.float64)
     tri_b = np.asarray(tri_b, dtype=np.float64)
     n_a = _triangle_plane_normal(tri_a)
@@ -985,6 +1396,16 @@ def _triangle_triangle_intersection(
 
 
 def _point_in_triangle_3d(point: np.ndarray, tri: np.ndarray, *, tol: float) -> bool:
+    """Test if a point lies inside a triangle in R^3.
+
+    Args:
+        point: 3D point coordinates.
+        tri: (3, 3) array of triangle vertices.
+        tol: Numerical tolerance.
+
+    Returns:
+        True if the point is inside the triangle.
+    """
     tri = np.asarray(tri, dtype=np.float64)
     n = _triangle_plane_normal(tri)
     if np.linalg.norm(n) <= tol:
@@ -1003,6 +1424,18 @@ def _point_in_triangle_3d(point: np.ndarray, tri: np.ndarray, *, tol: float) -> 
 
 
 def _point_in_triangle_2d(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray, *, tol: float) -> bool:
+    """Test if a point lies inside a triangle in R^2 using barycentric coordinates.
+
+    Args:
+        p: 2D point coordinates.
+        a: First triangle vertex.
+        b: Second triangle vertex.
+        c: Third triangle vertex.
+        tol: Numerical tolerance.
+
+    Returns:
+        True if the point is inside the triangle.
+    """
     v0 = c - a
     v1 = b - a
     v2 = p - a
@@ -1015,6 +1448,17 @@ def _point_in_triangle_2d(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.nda
 
 
 def _coplanar_segment_triangle_overlap(p0: np.ndarray, p1: np.ndarray, tri: np.ndarray, *, tol: float) -> bool:
+    """Test if a segment overlaps with a triangle in the same plane.
+
+    Args:
+        p0: Start of segment.
+        p1: End of segment.
+        tri: Triangle vertices.
+        tol: Numerical tolerance.
+
+    Returns:
+        True if they overlap.
+    """
     # Project to 2D plane and test segment/triangle overlap via endpoint containment and edge intersections.
     n = _triangle_plane_normal(tri)
     ax = int(np.argmax(np.abs(n)))
@@ -1033,6 +1477,16 @@ def _coplanar_segment_triangle_overlap(p0: np.ndarray, p1: np.ndarray, tri: np.n
 
 
 def _coplanar_triangle_overlap(tri_a: np.ndarray, tri_b: np.ndarray, *, tol: float) -> bool:
+    """Test if two triangles overlap in the same plane.
+
+    Args:
+        tri_a: First triangle vertices.
+        tri_b: Second triangle vertices.
+        tol: Numerical tolerance.
+
+    Returns:
+        True if they overlap.
+    """
     n = _triangle_plane_normal(tri_a)
     ax = int(np.argmax(np.abs(n)))
     idx = [0, 1, 2]
@@ -1063,6 +1517,18 @@ def _segment_segment_intersection_2d(
     *,
     tol: float,
 ) -> tuple[bool, float]:
+    """Find the intersection between two segments in R^2.
+
+    Args:
+        a0: Start of first segment.
+        a1: End of first segment.
+        b0: Start of second segment.
+        b1: End of second segment.
+        tol: Numerical tolerance.
+
+    Returns:
+        A tuple (intersect, distance).
+    """
     u = a1 - a0
     v = b1 - b0
     den = float(u[0] * v[1] - u[1] * v[0])
@@ -1092,4 +1558,3 @@ __all__ = [
     "jitter_coordinates",
     "project_coordinates",
 ]
-

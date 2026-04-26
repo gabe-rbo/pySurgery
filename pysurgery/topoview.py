@@ -1,9 +1,7 @@
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from typing import Optional, List, Tuple, Dict, Any, Literal, Union
-import warnings
-import math
+from typing import Optional, List, Dict, Any, Literal, Union
 
 try:
     import umap
@@ -12,16 +10,8 @@ except ImportError:
 
 from .core import (
     SimplicialComplex,
-    compute_homology_basis_from_complex,
-    extract_pi_1_with_traces,
-    HomologyGenerator,
     HomologyBasisResult,
-    Pi1GeneratorTrace,
     Pi1PresentationWithTraces,
-    vertex_gaussian_curvature,
-    detect_self_intersections,
-    PLMap,
-    extract_stiefel_whitney_w2,
 )
 
 
@@ -30,7 +20,16 @@ def _get_coordinates(
     dimension: int = 3, 
     points: Optional[np.ndarray] = None
 ) -> np.ndarray:
-    """Obtain or compute coordinates for the simplicial complex vertices."""
+    """Obtain or compute coordinates for the simplicial complex vertices.
+
+    Args:
+        sc: The simplicial complex.
+        dimension: The target dimension (2 or 3).
+        points: Optional original point cloud.
+
+    Returns:
+        A numpy array of coordinates.
+    """
     # Collect all vertex indices present in the complex
     vertices = sorted([v[0] for v in sc.n_simplices(0)])
     if not vertices:
@@ -88,24 +87,37 @@ def visualize_topoview(
     features: Optional[List[str]] = None,
     max_individual_plots: Optional[int] = None,
     output_mode: Literal["full", "modular"] = "modular",
-) -> Union[go.Figure, List[go.Figure]]:
+) -> Union[str, List[go.Figure]]:
     """
     Create an interactive visual workspace for SimplicialComplex invariants.
-    
+
     Layout (Web-page style):
-    - Left Column: Metadata Table.
-    - Right Column: Geometric UMAP Plot.
-    
-    output_mode:
-        - "modular": Returns a list of separate figures (one per generator). Best for notebooks.
-        - "full": Returns a single large figure with all rows. Best for exporting.
+    - Each section contains a Metadata Table (left) and a Geometric UMAP Plot (right).
+
+    Args:
+        sc: The simplicial complex to visualize.
+        dimension: The target dimension for visualization (2 or 3).
+        points: Optional original point cloud for UMAP and detail info.
+        h0_basis: Pre-computed H0 homology basis.
+        h1_basis: Pre-computed H1 homology basis.
+        h2_basis: Pre-computed H2 homology basis.
+        pi1_result: Pre-computed fundamental group with traces.
+        title: Title of the workspace.
+        show: Whether to display the result immediately.
+        features: List of additional features (e.g., 'curvature', 'dual').
+        max_individual_plots: Maximum number of generators to show separately.
+        output_mode: 'modular' for list of figures, 'full' for a single combined HTML string.
+
+    Returns:
+        If modular: List of plotly.graph_objects.Figure.
+        If full: A combined HTML string representing the entire workspace.
     """
     if features is None:
         features = []
 
     # 1. Prepare Coordinates
     coords = _get_coordinates(sc, dimension=dimension, points=points)
-    
+
     # 2. Collect items
     items: List[Dict[str, Any]] = []
     if pi1_result:
@@ -137,7 +149,8 @@ def visualize_topoview(
             edges = [tuple(e) for e in sc.n_simplices(1)]
             xs, ys = [], []
             for u, v in edges:
-                xs.extend([coords[u, 0], coords[v, 0], None]); ys.extend([coords[u, 1], coords[v, 1], None])
+                xs.extend([coords[u, 0], coords[v, 0], None])
+                ys.extend([coords[u, 1], coords[v, 1], None])
             fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color="rgba(200, 200, 200, 0.2)", width=1), showlegend=False), row=row, col=col)
 
     def populate_row(fig, row, item):
@@ -148,7 +161,8 @@ def visualize_topoview(
             cells.extend([["Word", g_data.generator], ["Path Len", str(len(g_data.vertex_path))]])
         else:
             cells.extend([["Weight", f"{g_data.weight:.3f}"], ["Simplices", str(len(g_data.support_simplices))]])
-        if points is not None: cells.append(["Data Dim", str(points.shape[1])])
+        if points is not None:
+            cells.append(["Data Dim", str(points.shape[1])])
 
         fig.add_trace(go.Table(
             header=dict(values=["Property", "Value"], fill_color='royalblue', font=dict(color='white')),
@@ -162,16 +176,20 @@ def visualize_topoview(
             px, py, pz = [], [], []
             for i in range(len(path)-1):
                 u,v = path[i], path[i+1]
-                px.extend([coords[u,0], coords[v,0], None]); py.extend([coords[u,1], coords[v,1], None])
-                if dimension == 3: pz.extend([coords[u,2], coords[v,2], None])
+                px.extend([coords[u,0], coords[v,0], None])
+                py.extend([coords[u,1], coords[v,1], None])
+                if dimension == 3:
+                    pz.extend([coords[u,2], coords[v,2], None])
             trace = go.Scatter3d(x=px, y=py, z=pz, mode="lines+markers", line=dict(color="magenta", width=6), name=item["title"]) if dimension == 3 else \
                     go.Scatter(x=px, y=py, mode="lines+markers", line=dict(color="magenta", width=4), name=item["title"])
             fig.add_trace(trace, row=row, col=2)
         elif g_type == "H1":
             hx, hy, hz = [], [], []
             for u, v in g_data.support_edges:
-                hx.extend([coords[u,0], coords[v,0], None]); hy.extend([coords[u,1], coords[v,1], None])
-                if dimension == 3: hz.extend([coords[u,2], coords[v,2], None])
+                hx.extend([coords[u,0], coords[v,0], None])
+                hy.extend([coords[u,1], coords[v,1], None])
+                if dimension == 3:
+                    hz.extend([coords[u,2], coords[v,2], None])
             trace = go.Scatter3d(x=hx, y=hy, z=hz, mode="lines", line=dict(color="red", width=8), name=item["title"]) if dimension == 3 else \
                     go.Scatter(x=hx, y=hy, mode="lines", line=dict(color="red", width=5), name=item["title"])
             fig.add_trace(trace, row=row, col=2)
@@ -189,32 +207,39 @@ def visualize_topoview(
             fig.add_trace(trace, row=row, col=2)
 
     # 3. Execution
+    figures = []
+    for item in items:
+        f = make_subplots(rows=1, cols=2, column_widths=[0.3, 0.7], specs=[[{"type": "table"}, {"type": "scene" if dimension == 3 else "xy"}]])
+        populate_row(f, 1, item)
+        f.update_layout(title=f"<b>{item['title']}</b>", template="plotly_white", height=500)
+        figures.append(f)
+
+    # Overview Card
+    ov = make_subplots(rows=1, cols=2, column_widths=[0.3, 0.7], specs=[[{"type": "table"}, {"type": "scene" if dimension == 3 else "xy"}]])
+    add_base(ov, 1, 2)
+    ov.add_trace(go.Table(header=dict(values=["Overview", "Value"]), cells=dict(values=[["Vertices", "Edges", "Faces"], [len(sc.n_simplices(0)), len(sc.n_simplices(1)), len(sc.n_simplices(2))]])), row=1, col=1)
+    ov.update_layout(title="<b>Complex Overview</b>", template="plotly_white", height=400)
+    figures.append(ov)
+
     if output_mode == "modular":
-        figures = []
-        for item in items:
-            f = make_subplots(rows=1, cols=2, column_widths=[0.3, 0.7], specs=[[{"type": "table"}, {"type": "scene" if dimension == 3 else "xy"}]])
-            populate_row(f, 1, item)
-            f.update_layout(title=f"<b>{item['title']}</b>", template="plotly_white", height=500)
-            figures.append(f)
-        # Overview
-        ov = make_subplots(rows=1, cols=2, column_widths=[0.3, 0.7], specs=[[{"type": "table"}, {"type": "scene" if dimension == 3 else "xy"}]])
-        add_base(ov, 1, 2)
-        ov.add_trace(go.Table(header=dict(values=["Overview", "Value"]), cells=dict(values=[["Vertices", "Edges", "Faces"], [len(sc.n_simplices(0)), len(sc.n_simplices(1)), len(sc.n_simplices(2))]])), row=1, col=1)
-        ov.update_layout(title="<b>Complex Overview</b>", template="plotly_white", height=400)
-        figures.append(ov)
         if show:
-            for f in figures: f.show()
+            for f in figures:
+                f.show()
         return figures
     else:
-        # Full Mode
-        n_rows = len(items) + 1
-        v_spacing = 0.05 if n_rows < 10 else 0.8 / n_rows
-        fig = make_subplots(rows=n_rows, cols=2, column_widths=[0.3, 0.7], vertical_spacing=v_spacing, specs=[[{"type": "table"}, {"type": "scene" if dimension == 3 else "xy"}]] * n_rows)
-        for i, item in enumerate(items):
-            populate_row(fig, i+1, item)
-        # Overview
-        add_base(fig, n_rows, 2)
-        fig.add_trace(go.Table(header=dict(values=["Overview", "Value"]), cells=dict(values=[["Vertices", "Edges", "Faces"], [len(sc.n_simplices(0)), len(sc.n_simplices(1)), len(sc.n_simplices(2))]])), row=n_rows, col=1)
-        fig.update_layout(title=f"<b>{title}</b>", template="plotly_white", height=500 * n_rows)
-        if show: fig.show()
-        return fig
+        # Full Mode: Compose modular figures into a single HTML string
+        html_str = "<html><head><meta charset='utf-8' /></head><body style='background: white;'>"
+        html_str += f"<h1 style='text-align: center;'>{title}</h1>"
+        for i, f in enumerate(figures):
+            # include_plotlyjs='cdn' for the first figure, then 'False' for subsequent to save space/time
+            include_js = 'cdn' if i == 0 else False
+            html_str += f.to_html(full_html=False, include_plotlyjs=include_js)
+        html_str += "</body></html>"
+        
+        if show:
+            try:
+                from IPython.display import HTML, display
+                display(HTML(html_str))
+            except ImportError:
+                print("HTML display requires IPython.")
+        return html_str

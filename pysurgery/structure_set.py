@@ -384,6 +384,14 @@ class StructureSet(BaseModel):
         )
 
     def _format_wall_group(self, k: int) -> str:
+        """Returns the structure of L_k(1) for reporting.
+
+        Args:
+            k: Dimension index.
+
+        Returns:
+            A string representing the L-group structure.
+        """
         if k % 4 == 0:
             return "Z"
         if k % 4 == 2:

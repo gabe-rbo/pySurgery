@@ -4,8 +4,7 @@ from .exceptions import CharacteristicClassError
 
 
 def extract_stiefel_whitney_w2(q: IntersectionForm) -> np.ndarray:
-    """
-    Evaluates the 2nd Stiefel-Whitney class w_2 in H^2(M; Z_2) from the intersection form.
+    """Evaluates the 2nd Stiefel-Whitney class w_2 in H^2(M; Z_2) from the intersection form.
 
     By Wu's formula, the total Stiefel-Whitney class corresponds to the
     Wu class v_2 under the Steenrod Square Sq^i.
@@ -13,15 +12,15 @@ def extract_stiefel_whitney_w2(q: IntersectionForm) -> np.ndarray:
     intersection form over Z_2, meaning:
     Q(x, w_2) = Q(x, x) mod 2  for all x in H_2(M; Z).
 
-    Parameters
-    ----------
-    q : IntersectionForm
-        The 4-manifold's intersection form matrix.
+    Args:
+        q: The 4-manifold's intersection form.
 
-    Returns
-    -------
-    np.ndarray
+    Returns:
         The Z_2 coefficient vector representing the w_2 class in the H_{k} basis.
+
+    Raises:
+        CharacteristicClassError: If the manifold dimension is odd, if it's not unimodular,
+            or if inversion over Z_2 fails.
     """
     if q.dimension % 2 != 0:
         raise CharacteristicClassError(
@@ -79,9 +78,15 @@ def extract_stiefel_whitney_w2(q: IntersectionForm) -> np.ndarray:
 
 
 def check_spin_structure(q: IntersectionForm) -> str:
-    """
-    Uses the 2nd Stiefel-Whitney class to mathematically prove if the manifold is Spin.
+    """Uses the 2nd Stiefel-Whitney class to mathematically prove if the manifold is Spin.
+
     A manifold admits a Spin structure if and only if w_2 = 0.
+
+    Args:
+        q: The 4-manifold's intersection form.
+
+    Returns:
+        A string describing the Spin structure result and w_2 coefficients.
     """
     w2 = extract_stiefel_whitney_w2(q)
 
@@ -94,11 +99,21 @@ def check_spin_structure(q: IntersectionForm) -> str:
 
 
 def extract_pontryagin_p1(q: IntersectionForm) -> int:
-    """
+    """Evaluates the first Pontryagin class.
+
     By the Hirzebruch Signature Theorem for 4-manifolds:
     signature(M) = 1/3 * <p_1(M), [M]>.
     Therefore, the evaluation of the first Pontryagin class on the fundamental class is:
     p_1(M)[M] = 3 * signature(M).
+
+    Args:
+        q: The 4-manifold's intersection form.
+
+    Returns:
+        The evaluation of the first Pontryagin class on the fundamental class.
+
+    Raises:
+        CharacteristicClassError: If the manifold is not 4-dimensional.
     """
     if q.dimension != 4:
         raise CharacteristicClassError(
@@ -108,8 +123,15 @@ def extract_pontryagin_p1(q: IntersectionForm) -> int:
 
 
 def verify_hirzebruch_signature(q: IntersectionForm, p1_eval: int) -> bool:
-    """
-    Verifies if the topological intersection form matches the geometric vector bundle integrations
-    by checking if 3 * signature == p1_eval.
+    """Verifies if the intersection form matches the geometric vector bundle integrations.
+
+    Checks if 3 * signature == p1_eval.
+
+    Args:
+        q: The 4-manifold's intersection form.
+        p1_eval: The integration of p_1 over the fundamental class.
+
+    Returns:
+        True if the signature theorem holds, False otherwise.
     """
     return extract_pontryagin_p1(q) == p1_eval

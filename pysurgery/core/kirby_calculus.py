@@ -5,9 +5,13 @@ from .exceptions import KirbyMoveError
 
 
 class KirbyDiagram(BaseModel):
-    """
-    Represents a 3D/4D manifold as a framed link in S^3 via Kirby Calculus.
+    """Represents a 3D/4D manifold as a framed link in S^3 via Kirby Calculus.
+
     Each component of the link represents the attachment of a 2-handle.
+
+    Attributes:
+        framings: Diagonal of the linking matrix.
+        linking_matrix: The symmetric linking numbers Lk(K_i, K_j).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -17,17 +21,36 @@ class KirbyDiagram(BaseModel):
 
     @classmethod
     def from_matrix(cls, matrix: np.ndarray):
-        """Creates a Kirby Diagram directly from an integer matrix."""
+        """Creates a Kirby Diagram directly from an integer matrix.
+
+        Args:
+            matrix: An integer matrix representing the linking numbers and framings.
+
+        Returns:
+            A KirbyDiagram instance.
+
+        Raises:
+            KirbyMoveError: If the matrix is not symmetric.
+        """
         mat = np.array(matrix, dtype=int)
         if not np.allclose(mat, mat.T):
             raise KirbyMoveError("A Kirby linking matrix must be symmetric.")
         return cls(framings=np.diag(mat).copy(), linking_matrix=mat.copy())
 
     def blow_up(self, sign: int = 1) -> "KirbyDiagram":
-        """
-        Performs a +1 or -1 blow-up.
+        """Performs a +1 or -1 blow-up.
+
         This corresponds geometrically to taking the connected sum with CP^2 or -CP^2.
         It adds an isolated +1 or -1 framed unknot to the diagram.
+
+        Args:
+            sign: The sign of the blow-up, must be 1 or -1. Defaults to 1.
+
+        Returns:
+            A new KirbyDiagram instance after the blow-up.
+
+        Raises:
+            KirbyMoveError: If sign is not 1 or -1.
         """
         if sign not in (1, -1):
             raise KirbyMoveError("Blow-up sign must be strictly +1 or -1.")
@@ -40,12 +63,21 @@ class KirbyDiagram(BaseModel):
         return KirbyDiagram.from_matrix(new_mat)
 
     def handle_slide(self, source_idx: int, target_idx: int) -> "KirbyDiagram":
-        """
-        Performs a handle slide of K_{source} over K_{target}.
-        This adds the target column (and row) to the source column (and row).
+        """Performs a handle slide of K_{source} over K_{target}.
 
+        This adds the target column (and row) to the source column (and row).
         Geometrically, the framing of the source knot changes by:
         f_s -> f_s + f_t + 2 * lk(K_s, K_t).
+
+        Args:
+            source_idx: Index of the source knot.
+            target_idx: Index of the target knot.
+
+        Returns:
+            A new KirbyDiagram instance after the handle slide.
+
+        Raises:
+            KirbyMoveError: If indices are out of bounds or source_idx equals target_idx.
         """
         n = self.linking_matrix.shape[0]
         if not (0 <= source_idx < n) or not (0 <= target_idx < n):
@@ -66,8 +98,12 @@ class KirbyDiagram(BaseModel):
         return KirbyDiagram.from_matrix(new_mat)
 
     def extract_intersection_form(self) -> IntersectionForm:
-        """
+        """Extracts the intersection form of the resulting 4-manifold.
+
         The symmetric linking matrix of a Kirby diagram defines the
-        intersection form of the resulting 4-manifold exactly.
+        intersection form exactly.
+
+        Returns:
+            The IntersectionForm of the manifold.
         """
         return IntersectionForm(matrix=self.linking_matrix, dimension=4)

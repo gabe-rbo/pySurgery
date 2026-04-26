@@ -7,6 +7,16 @@ from pydantic import BaseModel, ConfigDict
 
 
 class LeanCheckResult(BaseModel):
+    """Result of a Lean 4 code check.
+
+    Attributes:
+        available (bool): Whether Lean was available on the system.
+        exit_code (int): The exit code of the Lean process.
+        stdout (str): Standard output from Lean.
+        stderr (str): Standard error from Lean.
+        success (bool): Whether the check was successful.
+        command (str): The command executed.
+    """
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     available: bool
@@ -20,7 +30,16 @@ class LeanCheckResult(BaseModel):
 def run_lean_check(
     lean_code: str, lean_cmd: str = "lean", timeout_sec: int = 20
 ) -> LeanCheckResult:
-    """Optionally run local Lean on generated code and return structured diagnostics."""
+    """Optionally run local Lean on generated code and return structured diagnostics.
+
+    Args:
+        lean_code (str): The Lean code to check.
+        lean_cmd (str): The command to run Lean. Defaults to "lean".
+        timeout_sec (int): Timeout in seconds. Defaults to 20.
+
+    Returns:
+        LeanCheckResult: The result of the Lean check.
+    """
     exe = shutil.which(lean_cmd)
     if exe is None:
         return LeanCheckResult(
@@ -55,16 +74,22 @@ def run_lean_check(
 def generate_lean_isomorphism_certificate(
     Q1: np.ndarray, Q2: np.ndarray, P: np.ndarray, theorem_name: str = "homeo_cert"
 ) -> str:
-    """
-    Generates a Lean 4 proof script verifying that P is an Algebraic Isomorphism Certificate
-    between the intersection forms Q1 and Q2.
+    """Generates a Lean 4 proof script verifying that P is an Algebraic Isomorphism Certificate between the intersection forms Q1 and Q2.
 
     This fulfills the Formal Verification requirement for Surgery Theory.
 
-    Returns
-    -------
-    str
-        The Lean 4 source code.
+    Args:
+        Q1 (np.ndarray): The first intersection form matrix.
+        Q2 (np.ndarray): The second intersection form matrix.
+        P (np.ndarray): The isomorphism certificate matrix.
+        theorem_name (str): The name for the Lean theorem. Defaults to "homeo_cert".
+
+    Returns:
+        str: The Lean 4 source code.
+
+    Raises:
+        ValueError: If matrices are not 2D, not square, have mismatched shapes,
+            or contain non-integers, or if theorem_name is invalid.
     """
 
     Q1 = np.asarray(Q1)

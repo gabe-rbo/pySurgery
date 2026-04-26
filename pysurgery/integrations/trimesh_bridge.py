@@ -13,22 +13,24 @@ except ImportError:
 
 
 def trimesh_to_cw_complex(mesh) -> CWComplex:
-    """
-    Converts a Trimesh object (3D geometric mesh) into a topological CW Complex.
+    """Converts a Trimesh object (3D geometric mesh) into a topological CW Complex.
+
     This extracts the 0-cells (vertices), 1-cells (edges), and 2-cells (faces)
     and constructs the exact boundary operators (attaching maps) over Z.
 
     Uses Julia acceleration for large face meshes, with pure-Python fallback.
 
-    Parameters
-    ----------
-    mesh : trimesh.Trimesh
-        A loaded Trimesh object.
+    Args:
+        mesh (trimesh.Trimesh): A loaded Trimesh object.
 
-    Returns
-    -------
-    CWComplex
-        The abstract topological representation of the mesh.
+    Returns:
+        CWComplex: The abstract topological representation of the mesh.
+
+    Raises:
+        ImportError: If 'trimesh' library is not installed.
+        TypeError: If input is not a trimesh.Trimesh object.
+        ValueError: If faces are invalid or missing.
+        DimensionError: If boundary operator d_1 o d_2 != 0.
     """
     if not HAS_TRIMESH:
         raise ImportError(
@@ -142,9 +144,15 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
 
 
 def heal_mesh_topology(mesh) -> str:
-    """
-    Identifies high-genus topology in a mesh (e.g., unintended handles/tunnels)
-    by computing H_1(M; Z). Returns a report indicating if surgery is required.
+    """Identifies high-genus topology in a mesh (e.g., unintended handles/tunnels) by computing H_1(M; Z).
+
+    Returns a report indicating if surgery is required.
+
+    Args:
+        mesh: The mesh object to analyze.
+
+    Returns:
+        str: A report of the mesh topology and recommendations.
     """
     cw = trimesh_to_cw_complex(mesh)
     chain = cw.cellular_chain_complex()

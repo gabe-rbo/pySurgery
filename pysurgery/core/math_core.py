@@ -1,12 +1,11 @@
 import numpy as np
 import numba
 import sympy as sp
-from sympy.matrices.normalforms import smith_normal_form as sympy_smith_normal_form
 
 
 @numba.njit
 def swap_rows(A, i, j):
-    """In-place row swap for integer elimination kernels."""
+    """In-place row swap."""
     if i == j:
         return
     for k in range(A.shape[1]):
@@ -14,17 +13,15 @@ def swap_rows(A, i, j):
         A[i, k] = A[j, k]
         A[j, k] = tmp
 
-
 @numba.njit
 def swap_cols(A, i, j):
-    """In-place column swap for integer elimination kernels."""
+    """In-place column swap."""
     if i == j:
         return
     for k in range(A.shape[0]):
         tmp = A[k, i]
         A[k, i] = A[k, j]
         A[k, j] = tmp
-
 
 @numba.njit
 def extended_gcd(a, b):
@@ -38,98 +35,105 @@ def extended_gcd(a, b):
     return a, x0, y0
 
 
-def smith_normal_decomp(A_in: sp.Matrix) -> tuple[sp.Matrix, sp.Matrix, sp.Matrix]:
+def smith_normal_decomp(A_in: sp.Matrix | np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Computes the Smith Normal Decomposition S = U*A*V for a SymPy Matrix A.
+
+    This implementation handles the reduction iteratively over Z using NumPy object arrays.
+
+    Args:
+        A_in: The input integer matrix (SymPy Matrix or NumPy array).
+
+    Returns:
+        A tuple (S, U, V) where S is the Smith Normal Form and U, V are unimodular matrices.
     """
-    Computes the Smith Normal Decomposition S = U*A*V for a SymPy Matrix A.
-    Returns (S, U, V) where U, V are unimodular.
-    
-    This implementation handles the reduction iteratively over Z.
-    """
-    A = A_in.copy()
-    m, n = A.rows, A.cols
-    U = sp.eye(m)
-    V = sp.eye(n)
+    # Use NumPy object arrays for speed while maintaining arbitrary precision
+    if isinstance(A_in, sp.Matrix):
+        A = np.array(A_in.tolist(), dtype=object)
+    else:
+        A = np.array(A_in, dtype=object)
+        
+    m, n = A.shape
+    U = np.eye(m, dtype=object)
+    V = np.eye(n, dtype=object)
     
     def pivot(A, U, V, k):
-        # 1. Find smallest non-zero entry at or below/right of (k,k)
-        best_val = -1
-        best_pos = (-1, -1)
-        for r in range(k, m):
-            for c in range(k, n):
-                val = abs(A[r, c])
-                if val != 0 and (best_val == -1 or val < best_val):
-                    best_val = val
-                    best_pos = (r, c)
-        
-        if best_pos == (-1, -1):
-            return False
-
-        # Move to (k,k)
-        r, c = best_pos
-        if r != k:
-            A.row_swap(k, r)
-            U = U.elementary_row_op('n<->m', row1=k, row2=r)
-        if c != k:
-            A.col_swap(k, c)
-            V = V.elementary_col_op('n<->m', col1=k, col2=c)
+        # Optimized pivot: find first non-zero in row/col k, or then search
+        if A[k, k] != 0:
+            return True
             
-        return True
+        # Search row k
+        for c in range(k + 1, n):
+            if A[k, c] != 0:
+                A[:, [k, c]] = A[:, [c, k]]
+                V[:, [k, c]] = V[:, [c, k]]
+                return True
+        # Search col k
+        for r in range(k + 1, m):
+            if A[r, k] != 0:
+                A[[k, r], :] = A[[r, k], :]
+                U[[k, r], :] = U[[r, k], :]
+                return True
+                
+        # Full submatrix search (rare fallback)
+        for r in range(k + 1, m):
+            for c in range(k + 1, n):
+                if A[r, c] != 0:
+                    A[[k, r], :] = A[[r, k], :]
+                    U[[k, r], :] = U[[r, k], :]
+                    A[:, [k, c]] = A[:, [c, k]]
+                    V[:, [k, c]] = V[:, [c, k]]
+                    return True
+        return False
 
     for k in range(min(m, n)):
         if not pivot(A, U, V, k):
             break
             
         while True:
-            # Clear row
             changed = False
+            # Clear row k
             for c in range(k + 1, n):
-                if A[k, c] % A[k, k] != 0:
-                    g, s, t = extended_gcd(int(A[k, k]), int(A[k, c]))
-                    # [k, k] = g, [k, c] = 0
-                    # T = [[s, t], [-A[k,c]/g, A[k,k]/g]]
-                    u, v = -A[k, c] // g, A[k, k] // g
-                    
-                    # Update A
-                    col_k = A[:, k]
-                    col_c = A[:, c]
-                    A[:, k] = s * col_k + t * col_c
-                    A[:, c] = u * col_k + v * col_c
-                    
-                    # Update V
-                    V_k = V[:, k]
-                    V_c = V[:, c]
-                    V[:, k] = s * V_k + t * V_c
-                    V[:, c] = u * V_k + v * V_c
-                    
-                    changed = True
-                else:
-                    q = A[k, c] // A[k, k]
-                    A[:, c] -= q * A[:, k]
-                    V[:, c] -= q * V[:, k]
+                if A[k, c] != 0:
+                    if A[k, c] % A[k, k] != 0:
+                        g, s, t = extended_gcd(int(A[k, k]), int(A[k, c]))
+                        u, v = -A[k, c] // g, A[k, k] // g
+                        
+                        col_k = A[:, k].copy()
+                        col_c = A[:, c].copy()
+                        A[:, k] = s * col_k + t * col_c
+                        A[:, c] = u * col_k + v * col_c
+                        
+                        V_k = V[:, k].copy()
+                        V_c = V[:, c].copy()
+                        V[:, k] = s * V_k + t * V_c
+                        V[:, c] = u * V_k + v * V_c
+                        changed = True
+                    else:
+                        q = A[k, c] // A[k, k]
+                        A[:, c] -= q * A[:, k]
+                        V[:, c] -= q * V[:, k]
             
-            # Clear column
+            # Clear column k
             for r in range(k + 1, m):
-                if A[r, k] % A[k, k] != 0:
-                    g, s, t = extended_gcd(int(A[k, k]), int(A[r, k]))
-                    u, v = -A[r, k] // g, A[k, k] // g
-                    
-                    # Update A
-                    row_k = A[k, :]
-                    row_r = A[r, :]
-                    A[k, :] = s * row_k + t * row_r
-                    A[r, :] = u * row_k + v * row_r
-                    
-                    # Update U
-                    U_k = U[k, :]
-                    U_r = U[r, :]
-                    U[k, :] = s * U_k + t * U_r
-                    U[r, :] = u * U_k + v * U_r
-                    
-                    changed = True
-                else:
-                    q = A[r, k] // A[k, k]
-                    A[r, :] -= q * A[k, :]
-                    U[r, :] -= q * U[k, :]
+                if A[r, k] != 0:
+                    if A[r, k] % A[k, k] != 0:
+                        g, s, t = extended_gcd(int(A[k, k]), int(A[r, k]))
+                        u, v = -A[r, k] // g, A[k, k] // g
+                        
+                        row_k = A[k, :].copy()
+                        row_r = A[r, :].copy()
+                        A[k, :] = s * row_k + t * row_r
+                        A[r, :] = u * row_k + v * row_r
+                        
+                        U_k = U[k, :].copy()
+                        U_r = U[r, :].copy()
+                        U[k, :] = s * U_k + t * U_r
+                        U[r, :] = u * U_k + v * U_r
+                        changed = True
+                    else:
+                        q = A[r, k] // A[k, k]
+                        A[r, :] -= q * A[k, :]
+                        U[r, :] -= q * U[k, :]
             
             if not changed:
                 break
@@ -142,39 +146,56 @@ def smith_normal_decomp(A_in: sp.Matrix) -> tuple[sp.Matrix, sp.Matrix, sp.Matri
 
 
 def smith_normal_form(A_in: np.ndarray) -> np.ndarray:
-    """
-    Compute the Smith Normal Form of an integer matrix A exactly.
+    """Compute the Smith Normal Form of an integer matrix A exactly.
 
-    This is the default exact backend used for homology/torsion computations.
-    Returns only the diagonal matrix S such that S = U*A*V for unimodular U,V.
-    """
-    if A_in.dtype != object and not np.issubdtype(A_in.dtype, np.integer):
-        A_in = np.asarray(A_in, dtype=object)
+    Optimized via our own SNF reduction kernel.
 
-    A = sp.Matrix(A_in)
-    S = sympy_smith_normal_form(A, domain=sp.ZZ)
-    
-    try:
-        return np.array(S.tolist(), dtype=np.int64)
-    except OverflowError:
-        return np.array(S.tolist(), dtype=object)
+    Args:
+        A_in: The input integer matrix as a numpy array.
+
+    Returns:
+        The diagonal matrix S (as a numpy array).
+    """
+    S, _, _ = smith_normal_decomp(A_in)
+    return S
 
 
 def get_snf_diagonal(A: np.ndarray) -> np.ndarray:
-    """Convenience wrapper to extract the invariant factors."""
-    S = smith_normal_form(A)
+    """Convenience wrapper to extract the invariant factors.
+
+    Args:
+        A: The input integer matrix.
+
+    Returns:
+        A 1D array of non-zero invariant factors.
+    """
+    S, _, _ = smith_normal_decomp(A)
     diag_len = min(S.shape)
-    factors = np.zeros(diag_len, dtype=np.int64)
+    factors = np.zeros(diag_len, dtype=object)
     for i in range(diag_len):
         factors[i] = abs(S[i, i])
-    # Preserve the natural SNF order; sorting can destroy the invariant-factor structure.
-    return factors[factors != 0]
+    
+    non_zero = factors[factors != 0]
+    try:
+        return np.array(non_zero, dtype=np.int64)
+    except (OverflowError, TypeError, ValueError):
+        return np.array(non_zero, dtype=object)
 
 
 def get_sparse_snf_diagonal(A_sparse, allow_approx: bool = False) -> np.ndarray:
-    """
-    Computes the SNF diagonal for sparse matrices.
+    """Computes the SNF diagonal for sparse matrices.
+
     Uses exact integer SNF by default, with optional explicit approximate fallback.
+
+    Args:
+        A_sparse: The input sparse matrix (e.g., scipy.sparse).
+        allow_approx: Whether to allow approximate floating-point fallback (prohibited).
+
+    Returns:
+        A 1D array of non-zero invariant factors.
+
+    Raises:
+        ValueError: If allow_approx is True (mathematically invalid for surgery).
     """
     from ..bridge.julia_bridge import julia_engine
     import warnings
@@ -184,9 +205,10 @@ def get_sparse_snf_diagonal(A_sparse, allow_approx: bool = False) -> np.ndarray:
     if julia_engine.available:
         try:
             A_coo = A_sparse.tocoo()
-            return julia_engine.compute_sparse_snf(
+            out = julia_engine.compute_sparse_snf(
                 A_coo.row, A_coo.col, A_coo.data, A_sparse.shape
             )
+            return out
         except Exception as e:
             msg = f"Topological Hint: Julia backend failed ({e!r}). Falling back to exact Python/SymPy SNF (slower)."
             warnings.warn(msg)

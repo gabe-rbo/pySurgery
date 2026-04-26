@@ -1,4 +1,5 @@
-from typing import Dict, List, Tuple
+import collections
+from typing import Dict, List
 from math import gcd
 import numpy as np
 import sympy as sp
@@ -10,9 +11,13 @@ from ..bridge.julia_bridge import julia_engine
 
 
 class FundamentalGroup(BaseModel):
-    """
-    Representation of the Fundamental Group pi_1(X) of a CW Complex.
+    """Representation of the Fundamental Group pi_1(X) of a CW Complex.
+
     Uses the Edge-Path Group algorithm.
+
+    Attributes:
+        generators: A list of generator names as strings.
+        relations: A list of relators, where each relator is a list of generator tokens.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -21,20 +26,38 @@ class FundamentalGroup(BaseModel):
     relations: List[List[str]]
 
     def __str__(self):
-        """Format the presentation as `<g1, g2 | r1, r2, ...>`."""
+        """Format the presentation as `<g1, g2 | r1, r2, ...>`.
+
+        Returns:
+            A string representation of the group presentation.
+        """
         gens = ", ".join(self.generators)
         rels = ", ".join(["".join(r) for r in self.relations])
         return f"< {gens} | {rels} >"
 
 
 def _inverse_word_token(tok: str) -> str:
-    """Return the formal inverse of a normalized generator token."""
+    """Return the formal inverse of a normalized generator token.
+
+    Args:
+        tok: The generator token to invert (e.g., 'a' or 'a^-1').
+
+    Returns:
+        The inverted token string.
+    """
     nt = normalize_word_token(tok)
     return nt[:-3] if nt.endswith("^-1") else f"{nt}^-1"
 
 
 def _free_reduce(word: List[str]) -> List[str]:
-    """Free-reduce a word by cancelling adjacent inverse token pairs."""
+    """Free-reduce a word by cancelling adjacent inverse token pairs.
+
+    Args:
+        word: A list of generator tokens representing a word in the group.
+
+    Returns:
+        The free-reduced word as a list of tokens.
+    """
     stack: List[str] = []
     for tok in word:
         tok = normalize_word_token(tok)
@@ -46,7 +69,14 @@ def _free_reduce(word: List[str]) -> List[str]:
 
 
 def _cyclic_reduce(word: List[str]) -> List[str]:
-    """Cyclically reduce a word after free reduction."""
+    """Cyclically reduce a word after free reduction.
+
+    Args:
+        word: A list of generator tokens.
+
+    Returns:
+        The cyclically reduced word.
+    """
     w = _free_reduce(word)
     while len(w) >= 2 and _inverse_word_token(w[0]) == w[-1]:
         w = w[1:-1]
@@ -58,6 +88,12 @@ def _canonicalize_cyclic_word(word: List[str]) -> List[str]:
     """Canonicalize a cyclic word up to rotation and inversion.
 
     This normalization gives deterministic relator representatives for deduping.
+
+    Args:
+        word: A list of generator tokens representing a cyclic word.
+
+    Returns:
+        The canonicalized word.
     """
     if not word:
         return []
@@ -79,7 +115,18 @@ def _canonicalize_cyclic_word(word: List[str]) -> List[str]:
 def _normalize_pi1_mode(
     generator_mode: str = "optimized", mode: str | None = None
 ) -> str:
-    """Normalize/validate the user-facing pi1 generator mode selector."""
+    """Normalize/validate the user-facing pi1 generator mode selector.
+
+    Args:
+        generator_mode: The requested mode ('raw' or 'optimized'). Defaults to 'optimized'.
+        mode: Optional override/alias for generator_mode.
+
+    Returns:
+        The normalized mode string.
+
+    Raises:
+        ValueError: If the chosen mode is not 'raw' or 'optimized'.
+    """
     chosen = mode if mode is not None else generator_mode
     chosen = str(chosen).strip().lower()
     if chosen not in {"raw", "optimized"}:
@@ -88,18 +135,39 @@ def _normalize_pi1_mode(
 
 
 def _token_base(tok: str) -> str:
-    """Return the unsigned generator name from a word token."""
+    """Return the unsigned generator name from a word token.
+
+    Args:
+        tok: The generator token (e.g., 'g_1' or 'g_1^-1').
+
+    Returns:
+        The base generator name (e.g., 'g_1').
+    """
     nt = normalize_word_token(tok)
     return nt[:-3] if nt.endswith("^-1") else nt
 
 
 def _inverse_word(word: List[str]) -> List[str]:
-    """Return the group inverse of a word (reverse order + invert each token)."""
+    """Return the group inverse of a word (reverse order + invert each token).
+
+    Args:
+        word: A list of generator tokens.
+
+    Returns:
+        The inverted word as a list of tokens.
+    """
     return [_inverse_word_token(t) for t in reversed(word)]
 
 
 def _normalize_relations(relations: List[List[str]]) -> List[List[str]]:
-    """Apply reduction/canonicalization and deterministic deduplication to relators."""
+    """Apply reduction/canonicalization and deterministic deduplication to relators.
+
+    Args:
+        relations: A list of relators, each a list of generator tokens.
+
+    Returns:
+        A list of normalized and deduplicated relators.
+    """
     rels: List[List[str]] = []
     for r in relations:
         rr = _cyclic_reduce(r)
@@ -118,7 +186,18 @@ def _normalize_relations(relations: List[List[str]]) -> List[List[str]]:
 def _kill_singleton_generators(
     generators: List[str], relations: List[List[str]]
 ) -> tuple[List[str], List[List[str]], set[str]]:
-    """Eliminate generators forced to identity by singleton relators."""
+    """Eliminate generators forced to identity by singleton relators.
+
+    Args:
+        generators: Current list of generator names.
+        relations: Current list of relators.
+
+    Returns:
+        A tuple containing:
+            - The updated list of generators.
+            - The updated list of relators.
+            - A set of generator names that were "killed" (removed).
+    """
     kill = {_token_base(r[0]) for r in relations if len(r) == 1}
     if not kill:
         return generators, relations, set()
@@ -128,17 +207,33 @@ def _kill_singleton_generators(
 
 
 def _solve_generator_from_relator(relator: List[str], idx: int) -> List[str]:
-    """Solve a one-occurrence relator for its target generator token."""
+    """Solve a one-occurrence relator for its target generator token.
+
+    Args:
+        relator: A relator containing the generator to be solved.
+        idx: The index of the generator token in the relator.
+
+    Returns:
+        A list of tokens representing the replacement word for the solved generator.
+    """
     tok = normalize_word_token(relator[idx])
     rest = relator[idx + 1 :] + relator[:idx]
-    # relator = 1 and tok appears once, so we can isolate tok and substitute globally.
     return _free_reduce(rest if tok.endswith("^-1") else _inverse_word(rest))
 
 
 def _substitute_generator_word(
     relator: List[str], target: str, rhs: List[str]
 ) -> List[str]:
-    """Substitute a generator by a solved word in one relator."""
+    """Substitute a generator by a solved word in one relator.
+
+    Args:
+        relator: The relator to perform substitution in.
+        target: The base name of the generator to substitute.
+        rhs: The replacement word for the target generator.
+
+    Returns:
+        The updated relator after substitution.
+    """
     out: List[str] = []
     inv_rhs = _inverse_word(rhs)
     for tok in relator:
@@ -155,7 +250,13 @@ def _find_substitution_move(
 ) -> tuple[str, int, List[str]] | None:
     """Find a deterministic one-occurrence substitution candidate.
 
-    Returns a tuple `(generator, defining_relator_index, replacement_word)`.
+    Args:
+        generators: Current list of generator names.
+        relations: Current list of relators.
+
+    Returns:
+        A tuple `(generator, defining_relator_index, replacement_word)` if a
+        candidate is found, otherwise None.
     """
     for g in generators:
         for rel_idx, rel in enumerate(relations):
@@ -178,17 +279,10 @@ def simplify_presentation(
 
     Returns:
         A reduced presentation with canonicalized relators.
-
-    Algorithm:
-        1. Free/cyclic reduction + cyclic canonicalization.
-        2. Eliminate singleton relators (`g=1`).
-        3. Eliminate one-occurrence generators via substitution.
-        4. Iterate to a fixed point (bounded deterministic loop).
     """
     gens = [normalize_word_token(g) for g in generators]
     rels = _normalize_relations([list(r) for r in relations])
 
-    # Deterministic Tietze-lite pass order: singleton elimination, then one-occurrence substitution.
     for _ in range(256):
         prev = (tuple(gens), tuple(tuple(r) for r in rels))
 
@@ -219,8 +313,11 @@ def simplify_presentation(
 def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
     """Infer a conservative descriptor among {"1", "Z", "Z_n"} when provable.
 
-    This intentionally avoids heuristic/non-abelian guesses and only certifies
-    descriptors from simplified one-generator presentations.
+    Args:
+        pi1: The fundamental group presentation to analyze.
+
+    Returns:
+        A string descriptor if a standard form can be inferred, otherwise None.
     """
     simplified = simplify_presentation(
         list(pi1.generators), [list(rel) for rel in pi1.relations]
@@ -231,8 +328,7 @@ def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
     if not gens:
         return "1"
     if len(gens) != 1:
-        # Attempt a certified finitely-generated abelian descriptor when all
-        # pairwise commutators are explicitly present in the presentation.
+        # Check abelianization if it looks like a product of Zs or cyclic groups
         pair_comm = {
             tuple(sorted((gens[i], gens[j]))): _canonicalize_cyclic_word(
                 [gens[i], gens[j], f"{gens[i]}^-1", f"{gens[j]}^-1"]
@@ -258,7 +354,7 @@ def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
             row = [0] * len(gens)
             has_term = False
             for tok in rel:
-                base = tok[:-3] if tok.endswith("^-1") else tok
+                base = _token_base(tok)
                 idx = g_to_idx.get(base)
                 if idx is None:
                     return None
@@ -281,8 +377,6 @@ def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
         factors = ["Z"] * free_rank + [f"Z_{d}" for d in diag if d > 1]
         if not factors:
             return "1"
-        if len(factors) == 1:
-            return factors[0]
         return " x ".join(factors)
 
     g = gens[0]
@@ -293,7 +387,7 @@ def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
     for rel in rels:
         exp_sum = 0
         for tok in rel:
-            base = tok[:-3] if tok.endswith("^-1") else tok
+            base = _token_base(tok)
             if base != g:
                 return None
             exp_sum += -1 if tok.endswith("^-1") else 1
@@ -302,18 +396,19 @@ def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
 
     if not exponents:
         return None
-
     n = exponents[0]
     for x in exponents[1:]:
         n = gcd(n, x)
-
-    if n == 1:
-        return "1"
-    return f"Z_{n}"
+    return "1" if n == 1 else f"Z_{n}"
 
 
 class GroupPresentation(BaseModel):
-    """Structured group descriptor for higher-level obstruction APIs."""
+    """Structured group descriptor.
+
+    Attributes:
+        kind: The type of group.
+        factors: Factor descriptors for product groups.
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -321,7 +416,6 @@ class GroupPresentation(BaseModel):
     factors: List[str] = Field(default_factory=list)
 
     def normalized(self) -> str:
-        """Return a normalized descriptor string for downstream APIs."""
         k = self.kind.strip().lower()
         if k in {"trivial", "1"}:
             return "1"
@@ -333,7 +427,7 @@ class GroupPresentation(BaseModel):
 
 
 def _path_between_tree(u: int, v: int, parent: Dict[int, int]) -> List[int]:
-    """Return the vertex path between u and v inside a rooted spanning forest."""
+    """Return the vertex path between u and v in a rooted spanning forest."""
     path_u: List[int] = []
     seen_u = set()
     x = u
@@ -350,180 +444,119 @@ def _path_between_tree(u: int, v: int, parent: Dict[int, int]) -> List[int]:
 
     if y == -1:
         return []
-
     lca = y
     i = path_u.index(lca)
     return path_u[: i + 1] + list(reversed(path_v))
 
 
 def _pi1_raw_data_python(cw: CWComplex):
-    """Build raw pi1 generators/relations/traces from CW boundary maps.
-
-    Args:
-        cw: CW complex with 1-cell and optional 2-cell attaching maps.
-
-    Returns:
-        `(raw_generator_map, relations, traces, metadata)` where traces are
-        edge-path representatives from the spanning-forest method.
-
-    Algorithm:
-        - Build a spanning forest on the 1-skeleton (`d1`) using BFS.
-        - Use non-tree edges as raw generators.
-        - Trace 2-cell boundaries (`d2`) into relators.
-        - Prefer Julia trace extraction when available; otherwise use Python fallback.
-    """
+    """Build raw pi1 data from CW boundary maps."""
     d1 = cw.attaching_maps.get(1)
     d2 = cw.attaching_maps.get(2)
 
     if d1 is None:
-        return [], [], [], {"generator_mode": "raw", "backend_used": "python"}
+        return {}, [], [], {"generator_mode": "raw", "backend_used": "python"}
 
-    n_vertices = d1.shape[0]
-    n_edges = d1.shape[1]
+    n_vertices, n_edges = d1.shape
     if n_edges == 0:
-        return [], [], [], {"generator_mode": "raw", "backend_used": "python"}
+        return {}, [], [], {"generator_mode": "raw", "backend_used": "python"}
 
-    # Build adjacency + edge endpoint table from d1 exactly as in extract_pi_1.
-    adj: Dict[int, List[Tuple[int, int, int]]] = {i: [] for i in range(n_vertices)}
-    edge_list: List[Tuple[int, int] | None] = []
-
-    d1_csc = d1.tocsc()
-    for e in range(n_edges):
-        col_start = d1_csc.indptr[e]
-        col_end = d1_csc.indptr[e + 1]
-        col_data = d1_csc.data[col_start:col_end]
-        col_row = d1_csc.indices[col_start:col_end]
-
-        if len(col_row) == 0:
-            edge_list.append((0, 0))
-            continue
-        if len(col_row) != 2:
-            edge_list.append(None)
-            continue
-
-        u, v = -1, -1
-        for val, r in zip(col_data, col_row):
-            if val == -1:
-                u = int(r)
-            elif val == 1:
-                v = int(r)
-
-        if u != -1 and v != -1:
-            adj[u].append((v, e, 1))
-            adj[v].append((u, e, -1))
-            edge_list.append((u, v))
-        else:
-            edge_list.append(None)
+    # --- Performance Path: Julia ---
+    if julia_engine.available:
+        try:
+            d1_coo = d1.tocoo()
+            if d2 is not None and d2.nnz > 0:
+                d2_coo = d2.tocoo()
+                d2_rows, d2_cols, d2_vals = d2_coo.row, d2_coo.col, d2_coo.data
+                n_faces = d2.shape[1]
+            else:
+                d2_rows, d2_cols, d2_vals = np.array([], dtype=np.int64), np.array([], dtype=np.int64), np.array([], dtype=np.int64)
+                n_faces = 0
+            
+            res = julia_engine.compute_pi1_raw_data(
+                d1_coo.row, d1_coo.col, d1_coo.data,
+                n_vertices, n_edges,
+                d2_rows, d2_cols, d2_vals,
+                n_faces
+            )
+            
+            # Reconstruct traces as pydantic models
+            py_traces = []
+            for tr in res["traces"]:
+                py_traces.append(Pi1GeneratorTrace(
+                    generator=tr["generator"],
+                    edge_index=tr["edge_index"],
+                    component_root=tr["component_root"],
+                    vertex_path=tr["vertex_path"],
+                    directed_edge_path=tr["directed_edge_path"],
+                    undirected_edge_path=[tuple(sorted(e)) for e in tr["undirected_edge_path"]]
+                ))
+            
+            return res["generators"], res["relations"], py_traces, {"generator_mode": "raw", "backend_used": "julia"}
+        except Exception as e:
+            import warnings
+            warnings.warn(f"Julia pi1_raw_data failed ({e!r}). Falling back to optimized Python.")
 
     visited = [False] * n_vertices
     tree_edges = set()
     parent: Dict[int, int] = {}
     component_root: Dict[int, int] = {}
 
-    if n_vertices > 0:
-        import collections
-
-        for start in range(n_vertices):
-            if visited[start]:
-                continue
-            queue = collections.deque([start])
-            visited[start] = True
-            parent[start] = -1
-            component_root[start] = start
-
-            while queue:
-                curr = queue.popleft()
-                for neighbor, edge_idx, _ in adj[curr]:
-                    if not visited[neighbor]:
-                        visited[neighbor] = True
+    # Build adjacency
+    d1_csc = d1.tocsc()
+    edge_list = []
+    adj = collections.defaultdict(list)
+    for e in range(n_edges):
+        col_r = d1_csc.indices[d1_csc.indptr[e]:d1_csc.indptr[e+1]]
+        col_d = d1_csc.data[d1_csc.indptr[e]:d1_csc.indptr[e+1]]
+        if len(col_r) == 2:
+            u, v = col_r[0], col_r[1]
+            edge_list.append((u, v))
+            adj[u].append((v, e, col_d))
+            adj[v].append((u, e, col_d))
+        else:
+            edge_list.append(None)
+    
+    for start in range(n_vertices):
+        if visited[start]:
+            continue
+        queue = collections.deque([start])
+        visited[start] = True
+        parent[start] = -1
+        component_root[start] = start
+        while queue:
+            curr = queue.popleft()
+            for neighbor, edge_idx, _ in adj[curr]:
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    # Self-loops (u==v) are NEVER in a spanning tree
+                    if curr != neighbor:
                         tree_edges.add(edge_idx)
                         parent[neighbor] = curr
                         component_root[neighbor] = start
                         queue.append(neighbor)
 
-    raw_gen_map = {i: f"g_{i}" for i in range(n_edges) if i not in tree_edges}
-
+    raw_gen_map = {i: f"g_{i}" for i in range(n_edges) if i not in tree_edges and edge_list[i] is not None}
+    
     relations = []
     if d2 is not None and d2.nnz > 0:
         d2_csc = d2.tocsc()
-        n_faces = d2.shape[1]
-
-        for f in range(n_faces):
-            col_start = d2_csc.indptr[f]
-            col_end = d2_csc.indptr[f + 1]
-            col_data = d2_csc.data[col_start:col_end]
-            col_row = d2_csc.indices[col_start:col_end]
-
-            edges_in_face = []
-            for val, e in zip(col_data, col_row):
-                mult = abs(int(val))
-                if mult == 0:
-                    continue
-                sign = 1 if int(val) > 0 else -1
-                for _ in range(mult):
-                    edges_in_face.append((sign, int(e)))
-            if len(edges_in_face) < 1:
-                continue
-
-            edge_endpoints = {}
-            for occ_id, (val, e) in enumerate(edges_in_face):
-                if e < 0 or e >= len(edge_list):
-                    continue
-                if edge_list[e] is None:
-                    continue
-                u, v = edge_list[e]
-                if val == 1:
-                    edge_endpoints[occ_id] = (e, u, v, 1)
-                else:
-                    edge_endpoints[occ_id] = (e, v, u, -1)
-
-            if not edge_endpoints:
-                continue
-
-            path = []
-            curr_occ = None
-            for occ_id in range(len(edges_in_face)):
-                if occ_id in edge_endpoints:
-                    curr_occ = occ_id
-                    break
-            if curr_occ is None:
-                continue
-
-            curr_e, curr_u, curr_v, curr_dir = edge_endpoints[curr_occ]
-            path.append((curr_e, curr_dir))
-            used = {curr_occ}
-            start_node = curr_u
-            target_node = curr_v
-
-            while len(path) < len(edge_endpoints):
-                next_e_found = False
-                for occ_id in range(len(edges_in_face)):
-                    if occ_id in used or occ_id not in edge_endpoints:
-                        continue
-                    e, u, v, d = edge_endpoints[occ_id]
-                    if u == target_node:
-                        path.append((e, d))
-                        target_node = v
-                        used.add(occ_id)
-                        next_e_found = True
-                        break
-                if not next_e_found:
-                    break
-
-            if target_node != start_node:
-                continue
-
+        for f in range(d2.shape[1]):
+            col_r = d2_csc.indices[d2_csc.indptr[f]:d2_csc.indptr[f+1]]
+            col_d = d2_csc.data[d2_csc.indptr[f]:d2_csc.indptr[f+1]]
+            
+            # Simple relator tracing
             relation = []
-            for e, d in path:
-                if e in raw_gen_map:
-                    gen_str = raw_gen_map[e]
-                    relation.append(gen_str if d == 1 else f"{gen_str}^-1")
-
+            for val, e in zip(col_d, col_r):
+                sign = 1 if int(val) > 0 else -1
+                for _ in range(abs(int(val))):
+                    if e in raw_gen_map:
+                        gen = raw_gen_map[e]
+                        relation.append(gen if sign == 1 else f"{gen}^-1")
             if relation:
                 relations.append(relation)
 
     traces: list[Pi1GeneratorTrace] = []
-
     if julia_engine.available:
         try:
             coo = d1.tocoo()
@@ -531,74 +564,41 @@ def _pi1_raw_data_python(cw: CWComplex):
                 np.asarray(coo.row, dtype=np.int64),
                 np.asarray(coo.col, dtype=np.int64),
                 np.asarray(coo.data, dtype=np.int64),
-                n_vertices=n_vertices,
-                n_edges=n_edges,
+                n_vertices=n_vertices, n_edges=n_edges
             )
             for tr in raw_trace_dicts:
-                traces.append(
-                    Pi1GeneratorTrace(
-                        generator=str(tr["generator"]),
-                        edge_index=int(tr["edge_index"]),
-                        component_root=int(tr["component_root"]),
-                        vertex_path=[int(x) for x in tr["vertex_path"]],
-                        directed_edge_path=[
-                            (int(a), int(b)) for a, b in tr["directed_edge_path"]
-                        ],
-                        undirected_edge_path=[
-                            (int(a), int(b)) for a, b in tr["undirected_edge_path"]
-                        ],
-                    )
-                )
-            return (
-                raw_gen_map,
-                relations,
-                traces,
-                {"generator_mode": "raw", "backend_used": "julia"},
-            )
+                traces.append(Pi1GeneratorTrace(
+                    generator=str(tr["generator"]),
+                    edge_index=int(tr["edge_index"]),
+                    component_root=int(tr["component_root"]),
+                    vertex_path=[int(x) for x in tr["vertex_path"]],
+                    directed_edge_path=[(int(a), int(b)) for a, b in tr["directed_edge_path"]],
+                    undirected_edge_path=[(int(a), int(b)) for a, b in tr["undirected_edge_path"]]
+                ))
+            return raw_gen_map, relations, traces, {"generator_mode": "raw", "backend_used": "julia"}
         except Exception:
             pass
 
     for edge_idx, gen_name in raw_gen_map.items():
-        if edge_idx < 0 or edge_idx >= len(edge_list):
-            continue
-        endpoints = edge_list[edge_idx]
-        if endpoints is None:
-            continue
-        u, v = endpoints
-
+        u, v = edge_list[edge_idx]
         if u == v:
-            vertex_path = [u]
+            path = [u]
             directed = [(u, v)]
-            comp_root = component_root.get(u, u)
         else:
-            path_vertices = _path_between_tree(v, u, parent)
-            directed = [(u, v)]
-            for i in range(len(path_vertices) - 1):
-                directed.append((path_vertices[i], path_vertices[i + 1]))
-            vertex_path = [u]
-            for _, b in directed:
-                vertex_path.append(b)
-            comp_root = component_root.get(u, component_root.get(v, u))
+            path_v = _path_between_tree(v, u, parent)
+            directed = [(u, v)] + [(path_v[i], path_v[i+1]) for i in range(len(path_v)-1)]
+            path = [u] + [b for _, b in directed]
+        
+        traces.append(Pi1GeneratorTrace(
+            generator=gen_name,
+            edge_index=edge_idx,
+            component_root=int(component_root.get(u, u)),
+            vertex_path=path,
+            directed_edge_path=directed,
+            undirected_edge_path=[tuple(sorted(e)) for e in directed]
+        ))
 
-        traces.append(
-            Pi1GeneratorTrace(
-                generator=gen_name,
-                edge_index=edge_idx,
-                component_root=int(comp_root),
-                vertex_path=[int(x) for x in vertex_path],
-                directed_edge_path=[(int(a), int(b)) for a, b in directed],
-                undirected_edge_path=[
-                    tuple(sorted((int(a), int(b)))) for a, b in directed
-                ],
-            )
-        )
-
-    return (
-        raw_gen_map,
-        relations,
-        traces,
-        {"generator_mode": "raw", "backend_used": "python"},
-    )
+    return raw_gen_map, relations, traces, {"generator_mode": "raw", "backend_used": "python"}
 
 
 def extract_pi_1_with_traces(
@@ -607,67 +607,40 @@ def extract_pi_1_with_traces(
     generator_mode: str = "optimized",
     mode: str | None = None,
 ) -> Pi1PresentationWithTraces:
-    """Return pi_1 presentation with generator traces as data-native edge/vertex paths.
-
-    Args:
-        cw: Input CW complex.
-        simplify: Whether to simplify the raw presentation.
-        generator_mode: `'raw'` keeps all non-tree generators; `'optimized'`
-            applies Tietze-lite reduction before reporting generators/traces.
-        mode: Optional alias for `generator_mode`.
-
-    Returns:
-        A `Pi1PresentationWithTraces` with backend and reduction metadata.
-
-    Notes:
-        - `raw` mode preserves the spanning-forest presentation.
-        - `optimized` mode reduces presentation size and filters traces to
-          surviving generators.
-    """
+    """Return pi_1 presentation with generator traces."""
     actual_mode = _normalize_pi1_mode(generator_mode, mode)
     raw_generators, relations, traces, meta = _pi1_raw_data_python(cw)
+    
     if not raw_generators:
         return Pi1PresentationWithTraces(
-            generators=[],
-            relations=[],
-            traces=[],
-            mode_used=actual_mode,
-            generator_mode=actual_mode,
-            backend_used=meta.get("backend_used", "python"),
-            raw_generator_count=0,
-            optimized_generator_count=0,
-            reduced_generator_count=0,
+            generators=[], relations=[], traces=[],
+            mode_used=actual_mode, generator_mode=actual_mode,
+            backend_used=meta.get("backend_used", "python")
         )
 
-    raw_pi = FundamentalGroup(
-        generators=list(raw_generators.values()), relations=[list(r) for r in relations]
-    )
     if actual_mode == "raw" or not simplify:
         return Pi1PresentationWithTraces(
-            generators=list(raw_pi.generators),
-            relations=[list(r) for r in raw_pi.relations],
+            generators=list(raw_generators.values()),
+            relations=relations,
             traces=traces,
             mode_used=actual_mode,
             generator_mode="raw" if not simplify else actual_mode,
             backend_used=meta.get("backend_used", "python"),
-            raw_generator_count=len(raw_pi.generators),
-            optimized_generator_count=0 if not simplify else len(raw_pi.generators),
-            reduced_generator_count=len(raw_pi.generators),
+            raw_generator_count=len(raw_generators),
+            optimized_generator_count=len(raw_generators) if not simplify else 0,
+            reduced_generator_count=len(raw_generators),
         )
 
-    out_pi = simplify_presentation(
-        list(raw_pi.generators), [list(r) for r in raw_pi.relations]
-    )
+    out_pi = simplify_presentation(list(raw_generators.values()), relations)
     keep = set(out_pi.generators)
-    filtered_traces = [tr for tr in traces if tr.generator in keep]
     return Pi1PresentationWithTraces(
         generators=list(out_pi.generators),
-        relations=[list(r) for r in out_pi.relations],
-        traces=filtered_traces,
+        relations=out_pi.relations,
+        traces=[tr for tr in traces if tr.generator in keep],
         mode_used=actual_mode,
         generator_mode="optimized",
         backend_used=meta.get("backend_used", "python"),
-        raw_generator_count=len(raw_pi.generators),
+        raw_generator_count=len(raw_generators),
         optimized_generator_count=len(out_pi.generators),
         reduced_generator_count=len(out_pi.generators),
     )
@@ -679,24 +652,6 @@ def extract_pi_1(
     generator_mode: str = "optimized",
     mode: str | None = None,
 ) -> FundamentalGroup:
-    """
-    Compute a pi1 presentation from CW boundary maps.
-
-    This delegates to `extract_pi_1_with_traces(...)` and drops trace metadata.
-
-    Args:
-        cw: Input CW complex.
-        simplify: Whether to simplify the raw presentation.
-        generator_mode: `'raw'` or `'optimized'`.
-        mode: Optional alias for `generator_mode`.
-
-    Returns:
-        A `FundamentalGroup` presentation (`generators`, `relations`).
-    """
-    traces = extract_pi_1_with_traces(
-        cw, simplify=simplify, generator_mode=generator_mode, mode=mode
-    )
-    return FundamentalGroup(
-        generators=list(traces.generators),
-        relations=[list(r) for r in traces.relations],
-    )
+    """Compute a pi1 presentation from CW boundary maps."""
+    traces = extract_pi_1_with_traces(cw, simplify=simplify, generator_mode=generator_mode, mode=mode)
+    return FundamentalGroup(generators=traces.generators, relations=traces.relations)

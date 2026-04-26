@@ -7,8 +7,15 @@ from .fundamental_group import FundamentalGroup, infer_standard_group_descriptor
 from ..bridge.julia_bridge import julia_engine
 
 
-def euler_totient(n):
-    """Compute Euler's totient function φ(n) by prime-factor stripping."""
+def euler_totient(n: int) -> int:
+    """Compute Euler's totient function φ(n) by prime-factor stripping.
+
+    Args:
+        n (int): The integer to compute the totient for.
+
+    Returns:
+        int: The value of φ(n).
+    """
     result = n
     p = 2
     temp = n
@@ -24,7 +31,14 @@ def euler_totient(n):
 
 
 def _num_divisors(n: int) -> int:
-    """Return the divisor-count function d(n) in O(sqrt(n))."""
+    """Return the divisor-count function d(n) in O(sqrt(n)).
+
+    Args:
+        n (int): The integer to count divisors for.
+
+    Returns:
+        int: The number of divisors of n.
+    """
     if n <= 0:
         return 0
     count = 0
@@ -38,14 +52,28 @@ def _num_divisors(n: int) -> int:
 
 
 def cyclic_whitehead_rank(n: int) -> int:
-    """Rank formula for Wh(C_n) (n > 1): floor(n/2) + 1 - d(n)."""
+    """Rank formula for Wh(C_n) (n > 1): floor(n/2) + 1 - d(n).
+
+    Args:
+        n (int): The order of the cyclic group.
+
+    Returns:
+        int: The rank of the Whitehead group Wh(C_n).
+    """
     if n <= 1:
         return 0
     return max(0, (n // 2) + 1 - _num_divisors(n))
 
 
 def _relation_exponent_matrix(pi1: FundamentalGroup) -> sp.Matrix:
-    """Build the integer relator exponent matrix for abelianization."""
+    """Build the integer relator exponent matrix for abelianization.
+
+    Args:
+        pi1 (FundamentalGroup): The fundamental group.
+
+    Returns:
+        sp.Matrix: The exponent matrix.
+    """
     gens = list(pi1.generators)
     g_to_idx = {g: i for i, g in enumerate(gens)}
     rows = []
@@ -63,8 +91,14 @@ def _relation_exponent_matrix(pi1: FundamentalGroup) -> sp.Matrix:
 
 
 def _abelianization_from_snf(pi1: FundamentalGroup) -> tuple[int, list[int]]:
-    """
-    Exact abelianization G_ab = Z^r ⊕ ⊕ Z_{d_i} from presentation relator exponents.
+    """Exact abelianization G_ab = Z^r ⊕ ⊕ Z_{d_i} from presentation relator exponents.
+
+    Args:
+        pi1 (FundamentalGroup): The fundamental group.
+
+    Returns:
+        tuple[int, list[int]]: A tuple containing the free rank and a list of
+            torsion coefficients.
     """
     m = len(pi1.generators)
     if m == 0:
@@ -82,9 +116,17 @@ def _abelianization_from_snf(pi1: FundamentalGroup) -> tuple[int, list[int]]:
 
 
 class WhiteheadGroup(BaseModel):
-    """
-    Representation of the Whitehead group Wh(pi_1) = K_1(Z[pi_1]) / (+- pi_1).
+    """Representation of the Whitehead group Wh(pi_1) = K_1(Z[pi_1]) / (+- pi_1).
+
     Used as the obstruction to the s-Cobordism theorem.
+
+    Attributes:
+        rank (int): The free rank of the Whitehead group.
+        description (str): A human-readable description of the group.
+        computable (bool): Whether the group was computable. Defaults to True.
+        exact (bool): Whether the computation was exact. Defaults to True.
+        assumptions (List[str]): List of assumptions made during computation.
+        method (str): The method used for computation.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -98,9 +140,15 @@ class WhiteheadGroup(BaseModel):
 
 
 def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
-    """
-    Computes or approximates the Whitehead group for the given fundamental group.
+    """Computes or approximates the Whitehead group for the given fundamental group.
+
     Uses Julia for exact abelianization and rank extractions via Bass-Heller-Swan.
+
+    Args:
+        pi1 (FundamentalGroup): The fundamental group.
+
+    Returns:
+        WhiteheadGroup: The computed Whitehead group representation.
     """
     descriptor = infer_standard_group_descriptor(pi1)
 

@@ -6,7 +6,19 @@ from .exceptions import DimensionError
 
 
 def arf_invariant_gf2(M: np.ndarray, q: np.ndarray) -> int:
-    """Optimized symplectic reduction in O(N^3) by direct Gram matrix updates."""
+    """Optimized symplectic reduction in O(N^3) by direct Gram matrix updates.
+
+    Args:
+        M: A square (n, n) bilinear form matrix over GF(2).
+        q: A (n,) array of quadratic refinements for each basis element.
+
+    Returns:
+        The Arf invariant (0 or 1).
+
+    Raises:
+        DimensionError: If M is not square, or q's length doesn't match M's dimension,
+            or if M is degenerate.
+    """
     M = (np.asarray(M, dtype=np.int64) % 2).copy()
     q_vals = (np.asarray(q, dtype=np.int64).flatten() % 2).copy()
 
@@ -72,7 +84,14 @@ def arf_invariant_gf2(M: np.ndarray, q: np.ndarray) -> int:
 
 
 def _rank_mod_2(M: np.ndarray) -> int:
-    """Compute matrix rank over GF(2)."""
+    """Compute matrix rank over GF(2).
+
+    Args:
+        M: The matrix to compute the rank of.
+
+    Returns:
+        The rank of the matrix over GF(2).
+    """
     A = (np.asarray(M, dtype=np.int64) % 2).copy()
     m, n = A.shape
     row = 0
@@ -98,27 +117,26 @@ def _rank_mod_2(M: np.ndarray) -> int:
 
 
 class QuadraticForm(IntersectionForm):
-    """
-    A quadratic form on an abelian group, which is a refinement of a symmetric bilinear form.
-    Specifically, this models the Z/2Z refinements required for L_{4k+2} surgery obstructions
+    """A quadratic form on an abelian group.
+
+    This models the Z/2Z refinements required for L_{4k+2} surgery obstructions
     and the computation of the Arf invariant.
 
-    Attributes
-    ----------
-    q_refinement : List[int]
-        The quadratic mapping q: H -> Z_2 evaluated on the basis elements.
+    Attributes:
+        q_refinement: The quadratic mapping q: H -> Z_2 evaluated on the basis elements.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
     q_refinement: List[int]
 
     def arf_invariant(self) -> int:
-        """
-        Compute the Arf invariant of the quadratic form.
+        """Compute the Arf invariant of the quadratic form.
+
         For a symplectic basis (e_i, f_i) where q(e_i)=a_i and q(f_i)=b_i,
         Arf(q) = sum(a_i * b_i) mod 2.
 
-        This assumes the underlying intersection form matrix represents a symplectic basis.
+        Returns:
+            The Arf invariant (0 or 1).
         """
         return arf_invariant_gf2(
             self.matrix, np.array(self.q_refinement, dtype=np.int64)

@@ -1,5 +1,7 @@
+"""Homeomorphism witness construction and certificate management."""
+
 from dataclasses import dataclass, field
-from typing import Literal, Tuple
+from typing import Literal, Tuple, List, Dict, Optional, Any, Union
 
 import numpy as np
 
@@ -39,39 +41,71 @@ WitnessKind = Literal[
 
 @dataclass
 class HomeomorphismWitness:
-    """Structured certificate describing how a homeomorphism was obtained."""
+    """Structured certificate describing how a homeomorphism was obtained.
+
+    Attributes:
+        dimension: The dimension of the manifolds.
+        theorem: The name of the theorem used for classification.
+        kind: The specific kind of witness.
+        description: A human-readable description of the result.
+        exact: Whether the result is mathematically exact.
+        evidence: List of evidence strings supporting the result.
+        assumptions: List of assumptions made during analysis.
+        certificates: Dictionary of detailed mathematical certificates.
+        explicit_map: Optional numpy array representing the explicit map.
+        theorem_tag: Optional tag for the theorem used.
+        contract_version: The version of the witness contract.
+    """
 
     dimension: int
     theorem: str
     kind: WitnessKind
     description: str
     exact: bool
-    evidence: list[str] = field(default_factory=list)
-    assumptions: list[str] = field(default_factory=list)
-    certificates: dict[str, object] = field(default_factory=dict)
-    explicit_map: np.ndarray | None = None
-    theorem_tag: str | None = None
+    evidence: List[str] = field(default_factory=list)
+    assumptions: List[str] = field(default_factory=list)
+    certificates: Dict[str, object] = field(default_factory=dict)
+    explicit_map: Optional[np.ndarray] = None
+    theorem_tag: Optional[str] = None
     contract_version: str = CONTRACT_VERSION
 
     def __post_init__(self) -> None:
+        """Post-initialization to infer theorem tag if missing."""
         if self.theorem_tag is None:
             self.theorem_tag = infer_theorem_tag(self.theorem)
 
 
 @dataclass
 class HomeomorphismWitnessResult:
-    """Result object returned by witness builders."""
+    """Result object returned by witness builders.
+
+    Attributes:
+        status: The status of the witness building ("success", "inconclusive", "surgery_required").
+        reasoning: Human-readable reasoning for the status.
+        witness: The built HomeomorphismWitness, if successful.
+        theorem: The theorem used.
+        theorem_tag: Tag for the theorem.
+        contract_version: Version of the contract.
+        source_result: The original HomeomorphismResult.
+        missing_data: List of data that was missing for a successful witness.
+    """
 
     status: Literal["success", "inconclusive", "surgery_required"]
     reasoning: str
-    witness: HomeomorphismWitness | None = None
-    theorem: str | None = None
-    theorem_tag: str | None = None
+    witness: Optional[HomeomorphismWitness] = None
+    theorem: Optional[str] = None
+    theorem_tag: Optional[str] = None
     contract_version: str = CONTRACT_VERSION
-    source_result: HomeomorphismResult | None = None
-    missing_data: list[str] = field(default_factory=list)
+    source_result: Optional[HomeomorphismResult] = None
+    missing_data: List[str] = field(default_factory=list)
 
-    def to_legacy_tuple(self) -> Tuple[bool | None, str]:
+    def to_legacy_tuple(self) -> Tuple[Optional[bool], str]:
+        """Convert the result to a legacy (bool | None, reasoning) tuple.
+
+        Returns:
+            Tuple[Optional[bool], str]: A tuple where the first element is True if a witness exists,
+                None otherwise, and the second element is the reasoning string.
+        """
         if self.witness is not None:
             return True, self.reasoning
         return None, self.reasoning
@@ -83,9 +117,22 @@ def _build_from_result(
     dimension: int,
     kind: WitnessKind,
     theorem: str,
-    explicit_map: np.ndarray | None = None,
-    extra_certificates: dict[str, object] | None = None,
+    explicit_map: Optional[np.ndarray] = None,
+    extra_certificates: Optional[Dict[str, object]] = None,
 ) -> HomeomorphismWitnessResult:
+    """Internal helper to build a witness result from a classification result.
+
+    Args:
+        result: The classification result.
+        dimension: The manifold dimension.
+        kind: The kind of witness to build.
+        theorem: The theorem name.
+        explicit_map: Optional explicit map data.
+        extra_certificates: Optional additional certificates.
+
+    Returns:
+        HomeomorphismWitnessResult: A HomeomorphismWitnessResult instance.
+    """
     if result.status != "success" or result.is_homeomorphic is not True:
         return HomeomorphismWitnessResult(
             status="inconclusive",
@@ -139,8 +186,16 @@ def _build_from_result(
 
 
 def _obstruction_state_payload(
-    obstruction: ObstructionResult | None,
-) -> dict[str, object]:
+    obstruction: Optional[ObstructionResult],
+) -> Dict[str, Any]:
+    """Convert an ObstructionResult to a structured payload dictionary.
+
+    Args:
+        obstruction: The obstruction result, or None.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the obstruction state.
+    """
     if obstruction is None:
         return {
             "available": False,
@@ -171,6 +226,16 @@ def build_1d_homeomorphism_witness(
     c2: ChainComplex,
     allow_approx: bool = False,
 ) -> HomeomorphismWitnessResult:
+    """Build a homeomorphism witness for 1D manifolds.
+
+    Args:
+        c1: First chain complex.
+        c2: Second chain complex.
+        allow_approx: Whether to allow approximate/heuristic analysis.
+
+    Returns:
+        HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
+    """
     result = analyze_homeomorphism_1d_result(
         c1,
         c2,
@@ -189,13 +254,29 @@ def build_surface_homeomorphism_witness(
     c2: ChainComplex,
     allow_approx: bool = False,
     *,
-    cohomology_signature_1: dict | None = None,
-    cohomology_signature_2: dict | None = None,
-    cohomology_ring_signature_1: dict | None = None,
-    cohomology_ring_signature_2: dict | None = None,
-    cup_product_signature_1: dict | None = None,
-    cup_product_signature_2: dict | None = None,
+    cohomology_signature_1: Optional[Dict] = None,
+    cohomology_signature_2: Optional[Dict] = None,
+    cohomology_ring_signature_1: Optional[Dict] = None,
+    cohomology_ring_signature_2: Optional[Dict] = None,
+    cup_product_signature_1: Optional[Dict] = None,
+    cup_product_signature_2: Optional[Dict] = None,
 ) -> HomeomorphismWitnessResult:
+    """Build a homeomorphism witness for closed surfaces.
+
+    Args:
+        c1: First chain complex.
+        c2: Second chain complex.
+        allow_approx: Whether to allow approximate analysis.
+        cohomology_signature_1: Optional H^* signature for M1.
+        cohomology_signature_2: Optional H^* signature for M2.
+        cohomology_ring_signature_1: Optional ring signature for M1.
+        cohomology_ring_signature_2: Optional ring signature for M2.
+        cup_product_signature_1: Optional cup products for M1.
+        cup_product_signature_2: Optional cup products for M2.
+
+    Returns:
+        HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
+    """
     result = analyze_homeomorphism_2d_result(
         c1,
         c2,
@@ -229,16 +310,35 @@ def build_3d_homeomorphism_witness(
     c2: ChainComplex,
     allow_approx: bool = False,
     *,
-    pi1_1: FundamentalGroup | None = None,
-    pi1_2: FundamentalGroup | None = None,
-    cohomology_signature_1: dict | None = None,
-    cohomology_signature_2: dict | None = None,
-    cohomology_ring_signature_1: dict | None = None,
-    cohomology_ring_signature_2: dict | None = None,
-    cup_product_signature_1: dict | None = None,
-    cup_product_signature_2: dict | None = None,
-    recognition_certificate: ThreeManifoldRecognitionCertificate | dict | None = None,
+    pi1_1: Optional[FundamentalGroup] = None,
+    pi1_2: Optional[FundamentalGroup] = None,
+    cohomology_signature_1: Optional[Dict] = None,
+    cohomology_signature_2: Optional[Dict] = None,
+    cohomology_ring_signature_1: Optional[Dict] = None,
+    cohomology_ring_signature_2: Optional[Dict] = None,
+    cup_product_signature_1: Optional[Dict] = None,
+    cup_product_signature_2: Optional[Dict] = None,
+    recognition_certificate: Optional[Union[ThreeManifoldRecognitionCertificate, Dict]] = None,
 ) -> HomeomorphismWitnessResult:
+    """Build a homeomorphism witness for 3D manifolds.
+
+    Args:
+        c1: First chain complex.
+        c2: Second chain complex.
+        allow_approx: Whether to allow approximate analysis.
+        pi1_1: Optional fundamental group for M1.
+        pi1_2: Optional fundamental group for M2.
+        cohomology_signature_1: Optional H^* signature for M1.
+        cohomology_signature_2: Optional H^* signature for M2.
+        cohomology_ring_signature_1: Optional ring signature for M1.
+        cohomology_ring_signature_2: Optional ring signature for M2.
+        cup_product_signature_1: Optional cup products for M1.
+        cup_product_signature_2: Optional cup products for M2.
+        recognition_certificate: Optional 3D recognition certificate.
+
+    Returns:
+        HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
+    """
     result = analyze_homeomorphism_3d_result(
         c1,
         c2,
@@ -276,14 +376,25 @@ def build_3d_homeomorphism_witness(
 def build_4d_homeomorphism_witness(
     m1: IntersectionForm,
     m2: IntersectionForm,
-    ks1: int | None = None,
-    ks2: int | None = None,
+    ks1: Optional[int] = None,
+    ks2: Optional[int] = None,
     *,
-    simply_connected: bool | None = None,
-    definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate
-    | dict
-    | None = None,
+    simply_connected: Optional[bool] = None,
+    definite_lattice_isometry_certificate: Optional[Union[DefiniteLatticeIsometryCertificate, Dict]] = None,
 ) -> HomeomorphismWitnessResult:
+    """Build a homeomorphism witness for 4D manifolds.
+
+    Args:
+        m1: Intersection form of M1.
+        m2: Intersection form of M2.
+        ks1: Optional Kirby-Siebenmann invariant for M1.
+        ks2: Optional Kirby-Siebenmann invariant for M2.
+        simply_connected: Whether the manifolds are simply connected.
+        definite_lattice_isometry_certificate: Optional isometry certificate for definite forms.
+
+    Returns:
+        HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
+    """
     result = analyze_homeomorphism_4d_result(
         m1,
         m2,
@@ -380,25 +491,54 @@ def build_high_dim_homeomorphism_witness(
     dim: int,
     allow_approx: bool = False,
     *,
-    pi1: FundamentalGroup | None = None,
-    pi_group: str | GroupPresentation | None = None,
-    whitehead_group: WhiteheadGroup | None = None,
-    wall_obstruction: ObstructionResult | None = None,
-    wall_form: IntersectionForm | None = None,
-    cohomology_signature_1: dict | None = None,
-    cohomology_signature_2: dict | None = None,
-    cohomology_ring_signature_1: dict | None = None,
-    cohomology_ring_signature_2: dict | None = None,
-    cup_product_signature_1: dict | None = None,
-    cup_product_signature_2: dict | None = None,
-    normal_invariants_1: NormalInvariantsResult | None = None,
-    normal_invariants_2: NormalInvariantsResult | None = None,
-    surgery_sequence: SurgeryExactSequenceResult | None = None,
-    homotopy_equivalence_witness: object | None = None,
-    homotopy_witness_hook: HomotopyEquivalenceWitnessHook | dict | None = None,
-    homotopy_completion_certificate: HomotopyCompletionCertificate | dict | None = None,
-    product_assembly_certificate: ProductAssemblyCertificate | dict | None = None,
+    pi1: Optional[FundamentalGroup] = None,
+    pi_group: Optional[Union[str, GroupPresentation]] = None,
+    whitehead_group: Optional[WhiteheadGroup] = None,
+    wall_obstruction: Optional[ObstructionResult] = None,
+    wall_form: Optional[IntersectionForm] = None,
+    cohomology_signature_1: Optional[Dict] = None,
+    cohomology_signature_2: Optional[Dict] = None,
+    cohomology_ring_signature_1: Optional[Dict] = None,
+    cohomology_ring_signature_2: Optional[Dict] = None,
+    cup_product_signature_1: Optional[Dict] = None,
+    cup_product_signature_2: Optional[Dict] = None,
+    normal_invariants_1: Optional[NormalInvariantsResult] = None,
+    normal_invariants_2: Optional[NormalInvariantsResult] = None,
+    surgery_sequence: Optional[SurgeryExactSequenceResult] = None,
+    homotopy_equivalence_witness: Optional[object] = None,
+    homotopy_witness_hook: Optional[Union[HomotopyEquivalenceWitnessHook, Dict]] = None,
+    homotopy_completion_certificate: Optional[Union[HomotopyCompletionCertificate, Dict]] = None,
+    product_assembly_certificate: Optional[Union[ProductAssemblyCertificate, Dict]] = None,
 ) -> HomeomorphismWitnessResult:
+    """Build a homeomorphism witness for high-dimensional manifolds (n >= 5).
+
+    Args:
+        c1: First chain complex.
+        c2: Second chain complex.
+        dim: Manifold dimension.
+        allow_approx: Whether to allow approximate analysis.
+        pi1: Optional fundamental group.
+        pi_group: Optional pi_1 group presentation or descriptor.
+        whitehead_group: Optional Whitehead group for torsion analysis.
+        wall_obstruction: Optional L-group surgery obstruction result.
+        wall_form: Optional intersection form for L-group evaluation.
+        cohomology_signature_1: Optional H^* signature for M1.
+        cohomology_signature_2: Optional H^* signature for M2.
+        cohomology_ring_signature_1: Optional ring signature for M1.
+        cohomology_ring_signature_2: Optional ring signature for M2.
+        cup_product_signature_1: Optional cup products for M1.
+        cup_product_signature_2: Optional cup products for M2.
+        normal_invariants_1: Optional normal invariants for M1.
+        normal_invariants_2: Optional normal invariants for M2.
+        surgery_sequence: Optional surgery exact sequence results.
+        homotopy_equivalence_witness: Optional witness of homotopy equivalence.
+        homotopy_witness_hook: Optional hook for external homotopy witnesses.
+        homotopy_completion_certificate: Optional completion certificate.
+        product_assembly_certificate: Optional assembly certificate.
+
+    Returns:
+        HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
+    """
     result = analyze_homeomorphism_high_dim_result(
         c1,
         c2,
@@ -510,42 +650,77 @@ def build_high_dim_homeomorphism_witness(
 
 
 def build_homeomorphism_witness(
-    c1: ChainComplex | None = None,
-    c2: ChainComplex | None = None,
+    c1: Optional[ChainComplex] = None,
+    c2: Optional[ChainComplex] = None,
     *,
-    dim: int | None = None,
-    m1: IntersectionForm | None = None,
-    m2: IntersectionForm | None = None,
-    ks1: int | None = None,
-    ks2: int | None = None,
-    simply_connected: bool | None = None,
-    definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate
-    | dict
-    | None = None,
-    pi1_1: FundamentalGroup | None = None,
-    pi1_2: FundamentalGroup | None = None,
-    pi1: FundamentalGroup | None = None,
-    pi_group: str | GroupPresentation | None = None,
-    whitehead_group: WhiteheadGroup | None = None,
-    wall_obstruction: ObstructionResult | None = None,
-    wall_form: IntersectionForm | None = None,
-    cohomology_signature_1: dict | None = None,
-    cohomology_signature_2: dict | None = None,
-    cohomology_ring_signature_1: dict | None = None,
-    cohomology_ring_signature_2: dict | None = None,
-    cup_product_signature_1: dict | None = None,
-    cup_product_signature_2: dict | None = None,
-    normal_invariants_1: NormalInvariantsResult | None = None,
-    normal_invariants_2: NormalInvariantsResult | None = None,
-    surgery_sequence: SurgeryExactSequenceResult | None = None,
-    homotopy_equivalence_witness: object | None = None,
-    homotopy_witness_hook: HomotopyEquivalenceWitnessHook | dict | None = None,
-    homotopy_completion_certificate: HomotopyCompletionCertificate | dict | None = None,
-    recognition_certificate: ThreeManifoldRecognitionCertificate | dict | None = None,
-    product_assembly_certificate: ProductAssemblyCertificate | dict | None = None,
+    dim: Optional[int] = None,
+    m1: Optional[IntersectionForm] = None,
+    m2: Optional[IntersectionForm] = None,
+    ks1: Optional[int] = None,
+    ks2: Optional[int] = None,
+    simply_connected: Optional[bool] = None,
+    definite_lattice_isometry_certificate: Optional[Union[DefiniteLatticeIsometryCertificate, Dict]] = None,
+    pi1_1: Optional[FundamentalGroup] = None,
+    pi1_2: Optional[FundamentalGroup] = None,
+    pi1: Optional[FundamentalGroup] = None,
+    pi_group: Optional[Union[str, GroupPresentation]] = None,
+    whitehead_group: Optional[WhiteheadGroup] = None,
+    wall_obstruction: Optional[ObstructionResult] = None,
+    wall_form: Optional[IntersectionForm] = None,
+    cohomology_signature_1: Optional[Dict] = None,
+    cohomology_signature_2: Optional[Dict] = None,
+    cohomology_ring_signature_1: Optional[Dict] = None,
+    cohomology_ring_signature_2: Optional[Dict] = None,
+    cup_product_signature_1: Optional[Dict] = None,
+    cup_product_signature_2: Optional[Dict] = None,
+    normal_invariants_1: Optional[NormalInvariantsResult] = None,
+    normal_invariants_2: Optional[NormalInvariantsResult] = None,
+    surgery_sequence: Optional[SurgeryExactSequenceResult] = None,
+    homotopy_equivalence_witness: Optional[object] = None,
+    homotopy_witness_hook: Optional[Union[HomotopyEquivalenceWitnessHook, Dict]] = None,
+    homotopy_completion_certificate: Optional[Union[HomotopyCompletionCertificate, Dict]] = None,
+    recognition_certificate: Optional[Union[ThreeManifoldRecognitionCertificate, Dict]] = None,
+    product_assembly_certificate: Optional[Union[ProductAssemblyCertificate, Dict]] = None,
     allow_approx: bool = False,
 ) -> HomeomorphismWitnessResult:
-    """Dispatch to the appropriate witness builder based on the supplied data."""
+    """Dispatch to the appropriate witness builder based on the supplied data.
+
+    Args:
+        c1: First chain complex.
+        c2: Second chain complex.
+        dim: Manifold dimension.
+        m1: Intersection form for M1 (4D).
+        m2: Intersection form for M2 (4D).
+        ks1: Kirby-Siebenmann invariant for M1 (4D).
+        ks2: Kirby-Siebenmann invariant for M2 (4D).
+        simply_connected: Whether manifolds are simply connected.
+        definite_lattice_isometry_certificate: Isometry certificate for 4D.
+        pi1_1: Fundamental group for M1 (3D).
+        pi1_2: Fundamental group for M2 (3D).
+        pi1: Fundamental group (high-D).
+        pi_group: Group descriptor (high-D).
+        whitehead_group: Whitehead group (high-D).
+        wall_obstruction: L-group obstruction (high-D).
+        wall_form: Intersection form for L-group (high-D).
+        cohomology_signature_1: H^* signature for M1.
+        cohomology_signature_2: H^* signature for M2.
+        cohomology_ring_signature_1: Ring signature for M1.
+        cohomology_ring_signature_2: Ring signature for M2.
+        cup_product_signature_1: Cup products for M1.
+        cup_product_signature_2: Cup products for M2.
+        normal_invariants_1: Normal invariants for M1 (high-D).
+        normal_invariants_2: Normal invariants for M2 (high-D).
+        surgery_sequence: Surgery sequence (high-D).
+        homotopy_equivalence_witness: Homotopy witness (high-D).
+        homotopy_witness_hook: Witness hook (high-D).
+        homotopy_completion_certificate: Completion certificate (high-D).
+        recognition_certificate: 3D recognition certificate.
+        product_assembly_certificate: Product assembly certificate (high-D).
+        allow_approx: Whether to allow approximate analysis.
+
+    Returns:
+        HomeomorphismWitnessResult: A HomeomorphismWitnessResult instance.
+    """
     if m1 is not None or m2 is not None:
         if m1 is None or m2 is None:
             return HomeomorphismWitnessResult(

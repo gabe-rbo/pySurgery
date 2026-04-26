@@ -843,8 +843,14 @@ class WallGroupL(BaseModel):
 
 
 def l_group_symbol(n: int, pi: Union[str, GroupPresentation] = "1") -> str:
-    """
-    Returns the mathematical symbol/structure of L_n(pi).
+    """Returns the mathematical symbol/structure of L_n(pi).
+
+    Args:
+        n: The dimension of the L-group.
+        pi: The fundamental group descriptor.
+
+    Returns:
+        A string representing the L-group structure (e.g., 'Z', 'Z_2', '0').
     """
     if isinstance(pi, GroupPresentation):
         pi = pi.normalized()
@@ -871,6 +877,7 @@ def l_group_symbol(n: int, pi: Union[str, GroupPresentation] = "1") -> str:
         nontrivial = [f for f in factors if f != "1"]
         z_count = sum(1 for f in nontrivial if f == "Z")
         if z_count > 0 and all(f == "Z" for f in nontrivial):
+            from math import comb
             rest = [f for f in nontrivial if f != "Z"]
             rest_pi = " x ".join(rest) if rest else "1"
             terms: List[str] = []

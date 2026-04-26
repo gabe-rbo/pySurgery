@@ -6,14 +6,21 @@ from ..bridge.julia_bridge import julia_engine
 
 
 class GroupRingElement:
-    """
-    Element of the group ring Z[G].
+    """Element of the group ring Z[G].
+
     Represented as a mapping from group elements to integer coefficients.
     """
 
     @staticmethod
     def _normalize_key(g: str) -> str:
-        """Normalize group-element labels to a canonical key."""
+        """Normalize group-element labels to a canonical key.
+
+        Args:
+            g (str): The group element label.
+
+        Returns:
+            str: The normalized key.
+        """
         gs = str(g).strip()
         try:
             gs = normalize_word_token(gs)
@@ -25,7 +32,18 @@ class GroupRingElement:
 
     @classmethod
     def _parse_cyclic_power(cls, g: str, group_order: int) -> int:
-        """Parse a cyclic generator label and return exponent modulo group order."""
+        """Parse a cyclic generator label and return exponent modulo group order.
+
+        Args:
+            g (str): The generator label.
+            group_order (int): The order of the cyclic group.
+
+        Returns:
+            int: The exponent modulo group order.
+
+        Raises:
+            GroupRingError: If the generator label is unsupported.
+        """
         gn = cls._normalize_key(g)
         if gn == "1":
             return 0
@@ -43,7 +61,15 @@ class GroupRingElement:
         inverse_law: Optional[Callable[[str], str]] = None,
         mul_table: Optional[Dict[str, Dict[str, str]]] = None,
     ):
-        """Create a sparse group-ring element with normalized coefficients."""
+        """Create a sparse group-ring element with normalized coefficients.
+
+        Args:
+            coeffs (Dict[str, int]): Mapping from group elements to coefficients.
+            group_order (Optional[int]): The order of the group, if cyclic.
+            group_law (Optional[Callable[[str, str], str]]): The group multiplication law.
+            inverse_law (Optional[Callable[[str], str]]): The group inverse law.
+            mul_table (Optional[Dict[str, Dict[str, str]]]): Multiplication table for finite groups.
+        """
         normalized = {}
         for g, c in coeffs.items():
             if c == 0:
@@ -57,7 +83,17 @@ class GroupRingElement:
         self.mul_table = mul_table
 
     def __add__(self, other: "GroupRingElement") -> "GroupRingElement":
-        """Add two elements from the same group ring."""
+        """Add two elements from the same group ring.
+
+        Args:
+            other (GroupRingElement): The other group-ring element.
+
+        Returns:
+            GroupRingElement: The sum of the two elements.
+
+        Raises:
+            GroupRingError: If the elements are from different group rings.
+        """
         if self.group_order != other.group_order:
             raise GroupRingError(
                 f"Cannot add elements from different group rings. Group orders |G|={self.group_order} and |H|={other.group_order} do not match."
@@ -74,7 +110,18 @@ class GroupRingElement:
         )
 
     def __mul__(self, other: "GroupRingElement") -> "GroupRingElement":
-        """Multiply two group-ring elements using exact backend or cyclic fallback."""
+        """Multiply two group-ring elements using exact backend or cyclic fallback.
+
+        Args:
+            other (GroupRingElement): The other group-ring element.
+
+        Returns:
+            GroupRingElement: The product of the two elements.
+
+        Raises:
+            GroupRingError: If the elements are from different group rings or
+                if multiplication is not defined.
+        """
         if self.group_order != other.group_order:
             raise GroupRingError("Cannot multiply elements from different group rings.")
         if self.group_law is not other.group_law:
@@ -153,9 +200,15 @@ class GroupRingElement:
             )
 
     def involution(self) -> "GroupRingElement":
-        """
-        The standard involution bar: Z[G] -> Z[G] mapping g to g^-1.
+        """The standard involution bar: Z[G] -> Z[G] mapping g to g^-1.
+
         Used to define Hermitian forms over group rings.
+
+        Returns:
+            GroupRingElement: The involuted group-ring element.
+
+        Raises:
+            GroupRingError: If the inverse structure is missing.
         """
         if self.inverse_law is None and self.group_order is None:
             raise GroupRingError(

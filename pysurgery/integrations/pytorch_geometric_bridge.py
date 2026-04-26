@@ -7,20 +7,21 @@ HAS_TORCH = importlib.util.find_spec("torch") is not None
 
 
 def pyg_to_cw_complex(data) -> CWComplex:
-    """
-    Converts a PyTorch Geometric (PyG) Graph Data object into a 1-dimensional CW Complex.
+    """Converts a PyTorch Geometric (PyG) Graph Data object into a 1-dimensional CW Complex.
+
     This enables topological surgery analysis on graph data structures, computing
     homology and identifying fundamental cycles for graph simplification.
 
-    Parameters
-    ----------
-    data : torch_geometric.data.Data
-        A PyG Data object.
+    Args:
+        data: A PyG Data object. Should have an 'edge_index' attribute.
 
-    Returns
-    -------
-    CWComplex
+    Returns:
         The 1-dimensional CW complex representation.
+
+    Raises:
+        ImportError: If PyTorch is not installed.
+        TypeError: If input lacks an 'edge_index' attribute.
+        ValueError: If 'edge_index' or 'face' attributes are malformed.
     """
     if not HAS_TORCH:
         raise ImportError("PyTorch is required. Install via 'pip install torch'.")

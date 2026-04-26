@@ -4,7 +4,16 @@ from typing import Tuple, Optional
 from ..bridge.julia_bridge import julia_engine
 
 def orthogonal_procrustes(A: np.ndarray, B: np.ndarray) -> Tuple[np.ndarray, np.ndarray, float]:
-    """Finds orthogonal matrix R aligning B to A, returning (R, B_aligned, disparity)."""
+    """Finds orthogonal matrix R aligning B to A, returning (R, B_aligned, disparity).
+
+    Args:
+        A (np.ndarray): The target point cloud.
+        B (np.ndarray): The point cloud to be aligned.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, float]: A tuple containing the orthogonal
+            matrix R, the aligned point cloud B_aligned, and the disparity (error).
+    """
     if julia_engine.available:
         try:
             return julia_engine.orthogonal_procrustes(A, B)
@@ -29,9 +38,19 @@ def orthogonal_procrustes(A: np.ndarray, B: np.ndarray) -> Tuple[np.ndarray, np.
         return R, B_aligned, float(disparity)
 
 def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean") -> np.ndarray:
-    """
-    Computes pairwise distance matrix using the optimal singular implementation.
+    """Computes pairwise distance matrix using the optimal singular implementation.
+
     Standardizes on JAX if available to ensure hardware acceleration for all scales.
+
+    Args:
+        data (np.ndarray): The input data points.
+        metric (str): The distance metric to use. Defaults to "euclidean".
+
+    Returns:
+        np.ndarray: The pairwise distance matrix.
+
+    Raises:
+        ValueError: If the metric is not supported.
     """
     from ..integrations.jax_bridge import HAS_JAX
     if HAS_JAX and metric == "euclidean":
@@ -54,7 +73,15 @@ def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean") -> np.n
         raise ValueError(f"Unsupported metric: {metric}")
 
 def frechet_distance(curve_a: np.ndarray, curve_b: np.ndarray) -> float:
-    """Computes Discrete Fréchet distance between two ordered sequences of points."""
+    """Computes Discrete Fréchet distance between two ordered sequences of points.
+
+    Args:
+        curve_a (np.ndarray): The first sequence of points.
+        curve_b (np.ndarray): The second sequence of points.
+
+    Returns:
+        float: The discrete Fréchet distance.
+    """
     if julia_engine.available:
         try:
             return julia_engine.frechet_distance(curve_a, curve_b)
@@ -89,9 +116,20 @@ def gromov_wasserstein_distance(
     epsilon: float = 0.01,
     max_iter: int = 100
 ) -> float:
-    """
-    Computes (Entropic) Gromov-Wasserstein distance.
+    """Computes (Entropic) Gromov-Wasserstein distance.
+
     Standardizes on JAX if available for all scales.
+
+    Args:
+        dist_matrix_A (np.ndarray): Distance matrix of the first space.
+        dist_matrix_B (np.ndarray): Distance matrix of the second space.
+        p (Optional[np.ndarray]): Probability distribution on the first space.
+        q (Optional[np.ndarray]): Probability distribution on the second space.
+        epsilon (float): Regularization parameter. Defaults to 0.01.
+        max_iter (int): Maximum number of iterations. Defaults to 100.
+
+    Returns:
+        float: The (entropic) Gromov-Wasserstein distance.
     """
     n = dist_matrix_A.shape[0]
     m = dist_matrix_B.shape[0]
@@ -147,14 +185,17 @@ def gromov_wasserstein_distance(
     return float(np.sqrt(gw_dist))
 
 def farthest_point_sampling(points: np.ndarray, n_samples: int, initial_idx: int = 0) -> np.ndarray:
-    """
-    Subsample a point cloud by greedily picking points that maximize distance to the current set.
+    """Subsample a point cloud by greedily picking points that maximize distance to the current set.
+
     This provides a 'maximal' covering of the underlying manifold.
 
-    Returns
-    -------
-    indices : np.ndarray
-        The indices of the selected landmark points.
+    Args:
+        points (np.ndarray): The input point cloud.
+        n_samples (int): The number of landmark points to sample.
+        initial_idx (int): The index of the first point to pick. Defaults to 0.
+
+    Returns:
+        np.ndarray: The indices of the selected landmark points.
     """
     pts = np.asarray(points, dtype=np.float64)
     n = pts.shape[0]

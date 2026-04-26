@@ -1,6 +1,9 @@
-import itertools
 import hashlib
+import itertools
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
+import numba
 import warnings
 import sympy as sp
 from scipy.sparse import csr_matrix
@@ -11,7 +14,14 @@ from ..bridge.julia_bridge import julia_engine
 
 
 def _parse_coefficient_ring(ring: str) -> tuple[str, int | None]:
-    """Parse user ring labels into internal `(kind, modulus)` form."""
+    """Parse user ring labels into internal `(kind, modulus)` form.
+
+    Args:
+        ring: User ring label (e.g., 'Z', 'Q', 'Z/2Z').
+
+    Returns:
+        A tuple (kind, modulus) where kind is one of 'Z', 'Q', or 'ZMOD'.
+    """
     rs = ring.strip().upper()
     if rs == "Z":
         return "Z", None
@@ -27,14 +37,28 @@ def _parse_coefficient_ring(ring: str) -> tuple[str, int | None]:
 
 
 def _coerce_csr_matrix(matrix: csr_matrix | np.ndarray | list | tuple) -> csr_matrix:
-    """Coerce sparse/dense matrix-like data to CSR with integer entries."""
+    """Coerce sparse/dense matrix-like data to CSR with integer entries.
+
+    Args:
+        matrix: Matrix-like data to coerce.
+
+    Returns:
+        The matrix in CSR format with int64 entries.
+    """
     if isinstance(matrix, csr_matrix):
         return matrix.copy().astype(np.int64)
     return csr_matrix(np.asarray(matrix, dtype=np.int64), dtype=np.int64)
 
 
 def _normalize_simplex(simplex: Iterable[int]) -> tuple[int, ...]:
-    """Return a canonical, sorted simplex tuple with distinct integer vertices."""
+    """Return a canonical, sorted simplex tuple with distinct integer vertices.
+
+    Args:
+        simplex: Iterable of vertex indices.
+
+    Returns:
+        A sorted tuple of unique vertex indices.
+    """
     vertices = tuple(sorted(set(int(v) for v in simplex)))
     if len(vertices) == 0:
         raise ValueError("Simplices must be non-empty.")
@@ -44,57 +68,120 @@ def _normalize_simplex(simplex: Iterable[int]) -> tuple[int, ...]:
 def _canonicalize_simplices_by_dim(
     raw_grouped: dict[int, list[tuple[int, ...]]]
 ) -> dict[int, list[tuple[int, ...]]]:
-    """Sort and deduplicate simplex lists across dimensions."""
+    """Sort and deduplicate simplex lists across dimensions.
+
+    Args:
+        raw_grouped: Dictionary mapping dimension to list of simplices.
+
+    Returns:
+        A dictionary with sorted and deduplicated simplex lists.
+    """
     out = {}
     for d, simplices in raw_grouped.items():
         out[d] = sorted(list(dict.fromkeys(simplices)))
     return out
 
 
+def _close_single_generator(simplex_raw):
+    t = _normalize_simplex(simplex_raw)
+    local_faces = defaultdict(set)
+    for r in range(1, len(t) + 1):
+        for face in itertools.combinations(t, r):
+            local_faces[r-1].add(tuple(face))
+    return local_faces
+
 def _simplicial_closure_from_generators(
     simplices: Iterable[Iterable[int]],
 ) -> dict[int, list[tuple[int, ...]]]:
-    """Generate all faces of the given simplices and group by dimension."""
-    grouped: dict[int, set[tuple[int, ...]]] = {}
-    for simplex in simplices:
-        t = _normalize_simplex(simplex)
-        for r in range(1, len(t) + 1):
-            dim = r - 1
-            if dim not in grouped:
-                grouped[dim] = set()
-            for face in itertools.combinations(t, r):
-                grouped[dim].add(tuple(face))
-    return {d: sorted(list(s)) for d, s in grouped.items()}
+    """Generate all faces of the given simplices and group by dimension.
+
+    Args:
+        simplices: Iterable of simplices (generators).
+
+    Returns:
+        A dictionary mapping dimension to sorted lists of unique simplices.
+    """
+    final_grouped = defaultdict(set)
+    # Avoid nested threading overhead for small complexes (like vertex links)
+    # by only using ThreadPool if input size is significant.
+    simplex_list_for_closure = list(simplices)
+    if len(simplex_list_for_closure) > 5000:
+        with ThreadPoolExecutor() as executor:
+            results = executor.map(_close_single_generator, simplex_list_for_closure)
+            for local_faces in results:
+                for dim, faces in local_faces.items():
+                    final_grouped[dim].update(faces)
+    else:
+        for s in simplex_list_for_closure:
+            local_faces = _close_single_generator(s)
+            for dim, faces in local_faces.items():
+                final_grouped[dim].update(faces)
+                
+    return {d: sorted(list(s)) for d, s in final_grouped.items()}
 
 
-def _boundary_matrix_from_simplices(
+def _boundary_matrix_from_simplices_with_maps(
     simplices_n: List[Tuple[int, ...]],
-    simplices_nm1: List[Tuple[int, ...]],
+    nm1_map: Dict[Tuple[int, ...], int],
 ) -> csr_matrix:
-    """Construct an oriented boundary matrix from dimension n to n-1."""
-    if not simplices_n or not simplices_nm1:
-        return csr_matrix((len(simplices_nm1), len(simplices_n)), dtype=np.int64)
+    """Construct an oriented boundary matrix using a pre-computed face map.
 
-    nm1_map = {simplex: i for i, simplex in enumerate(simplices_nm1)}
+    Args:
+        simplices_n: List of n-simplices.
+        nm1_map: Pre-computed mapping from (n-1)-simplex to its index.
+
+    Returns:
+        The sparse boundary matrix d_n in CSR format.
+    """
+    if not simplices_n:
+        return csr_matrix((len(nm1_map), 0), dtype=np.int64)
+
     rows, cols, data = [], [], []
 
-    for j, simplex in enumerate(simplices_n):
-        for i in range(len(simplex)):
-            face = simplex[:i] + simplex[i + 1 :]
-            if face in nm1_map:
-                rows.append(nm1_map[face])
-                cols.append(j)
-                data.append((-1) ** i)
+    def _compute_cols_for_chunk(chunk_data):
+        chunk_simplices, start_j = chunk_data
+        l_rows, l_cols, l_data = [], [], []
+        for offset, simplex in enumerate(chunk_simplices):
+            j = start_j + offset
+            for i in range(len(simplex)):
+                face = simplex[:i] + simplex[i + 1 :]
+                if face in nm1_map:
+                    l_rows.append(nm1_map[face])
+                    l_cols.append(j)
+                    l_data.append((-1) ** i)
+        return l_rows, l_cols, l_data
+
+    # Avoid nested threading overhead for small complexes
+    if len(simplices_n) > 5000:
+        n_workers = 8
+        chunk_size = max(1, len(simplices_n) // (n_workers * 4))
+        chunks = [(simplices_n[i : i + chunk_size], i) for i in range(0, len(simplices_n), chunk_size)]
+
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            for l_rows, l_cols, l_data in executor.map(_compute_cols_for_chunk, chunks):
+                rows.extend(l_rows)
+                cols.extend(l_cols)
+                data.extend(l_data)
+    else:
+        l_rows, l_cols, l_data = _compute_cols_for_chunk((simplices_n, 0))
+        rows, cols, data = l_rows, l_cols, l_data
 
     return csr_matrix(
         (data, (rows, cols)),
-        shape=(len(simplices_nm1), len(simplices_n)),
+        shape=(len(nm1_map), len(simplices_n)),
         dtype=np.int64,
     )
 
 
 def _csr_matrix_signature(m: csr_matrix) -> tuple[int, int, int, str]:
-    """Return a content-based signature for a sparse matrix to detect changes."""
+    """Return a content-based signature for a sparse matrix to detect changes.
+
+    Args:
+        m: The sparse matrix.
+
+    Returns:
+        A tuple containing (rows, cols, non-zeros, hash).
+    """
     rows, cols = m.nonzero()
     data = m.data
     h = hashlib.sha256()
@@ -106,22 +193,35 @@ def _csr_matrix_signature(m: csr_matrix) -> tuple[int, int, int, str]:
 
 
 def _clone_cache_value(v: Any) -> Any:
-    """Return a deep copy of a value to prevent accidental cache mutation."""
+    """Return a shallow copy of large objects to prevent accidental cache mutation
+    without the full overhead of deepcopy.
+
+    Args:
+        v: The value to clone.
+
+    Returns:
+        A copy of the value.
+    """
     if isinstance(v, (int, float, str, bool, tuple)) or v is None:
         return v
     if isinstance(v, list):
-        return [list(x) if isinstance(x, np.ndarray) else x for x in v]
+        return [x.copy() if hasattr(x, "copy") else x for x in v]
     if isinstance(v, dict):
         return {k: _clone_cache_value(val) for k, val in v.items()}
-    if isinstance(v, np.ndarray):
-        return v.copy()
-    if isinstance(v, csr_matrix):
+    if hasattr(v, "copy"):
         return v.copy()
     return v
 
 
 def _is_prime(n: int) -> bool:
-    """Check if n is prime (heuristic for small moduli)."""
+    """Check if n is prime (heuristic for small moduli).
+
+    Args:
+        n: The integer to check.
+
+    Returns:
+        True if n is prime, False otherwise.
+    """
     if n < 2:
         return False
     if n == 2:
@@ -136,55 +236,66 @@ def _is_prime(n: int) -> bool:
     return True
 
 
+@numba.njit(cache=True)
+def _gcd_extended_numba(a: int, b: int):
+    x0, x1, y0, y1 = 1, 0, 0, 1
+    while b != 0:
+        q = a // b
+        a, b = b, a % b
+        x0, x1 = x1, x0 - q * x1
+        y0, y1 = y1, y0 - q * y1
+    return a, x0, y0
+
 def _gcd_extended(a: int, b: int) -> tuple[int, int, int]:
-    """Extended Euclidean algorithm: returns (gcd, x, y) such that ax + by = gcd."""
-    if a == 0:
-        return b, 0, 1
-    gcd, x1, y1 = _gcd_extended(b % a, a)
-    x = y1 - (b // a) * x1
-    y = x1
-    return gcd, x, y
+    """Extended Euclidean algorithm."""
+    return _gcd_extended_numba(a, b)
 
-
-def _rank_mod_p(A: np.ndarray, p: int) -> int:
-    """Compute matrix rank over `Z/pZ` via Euclidean row reduction (handles composite p)."""
-    M = (A.astype(np.int64) % p).copy()
+@numba.njit(cache=True)
+def _rank_mod_p_numba(M: np.ndarray, p: int) -> int:
     m, n = M.shape
     row = 0
     rank = 0
     for col in range(n):
-        pivot = None
+        pivot = -1
         for r in range(row, m):
             if M[r, col] % p != 0:
                 pivot = r
                 break
-        if pivot is None:
+        if pivot == -1:
             continue
         if pivot != row:
-            M[[row, pivot]] = M[[pivot, row]]
+            for j in range(col, n):
+                M[row, j], M[pivot, j] = M[pivot, j], M[row, j]
 
         # Euclidean reduction
         for r in range(row + 1, m):
             while M[r, col] % p != 0:
                 q = M[row, col] // M[r, col]
-                M[row, :] = (M[row, :] - q * M[r, :]) % p
-                M[[row, r]] = M[[r, row]]
+                for j in range(col, n):
+                    M[row, j] = (M[row, j] - q * M[r, j]) % p
+                    M[row, j], M[r, j] = M[r, j], M[row, j]
 
-        try:
-            inv = pow(int(M[row, col]), -1, p)
-            M[row, :] = (M[row, :] * inv) % p
+        # Check invertibility
+        g, x, y = _gcd_extended_numba(M[row, col], p)
+        if g == 1:
+            inv = x % p
+            for j in range(col, n):
+                M[row, j] = (M[row, j] * inv) % p
             for r in range(m):
                 if r != row and M[r, col] % p != 0:
-                    M[r, :] = (M[r, :] - M[r, col] * M[row, :]) % p
-        except ValueError:
+                    factor = M[r, col]
+                    for j in range(col, n):
+                        M[r, j] = (M[r, j] - factor * M[row, j]) % p
+        else:
             for r in range(m):
                 if r != row and M[r, col] % p != 0:
-                    g, x, y = _gcd_extended(int(M[row, col]), int(M[r, col]))
-                    a, b = int(M[row, col]), int(M[r, col])
-                    row_i = (x * M[row, :] + y * M[r, :]) % p
-                    row_j = ((-b // g) * M[row, :] + (a // g) * M[r, :]) % p
-                    M[row, :] = row_i
-                    M[r, :] = row_j
+                    g2, x2, y2 = _gcd_extended_numba(M[row, col], M[r, col])
+                    a, b = M[row, col], M[r, col]
+                    for j in range(col, n):
+                        row_i = (x2 * M[row, j] + y2 * M[r, j]) % p
+                        row_j = ((-b // g2) * M[row, j] + (a // g2) * M[r, j]) % p
+                        M[row, j] = row_i
+                        M[r, j] = row_j
 
         row += 1
         rank += 1
@@ -192,56 +303,83 @@ def _rank_mod_p(A: np.ndarray, p: int) -> int:
             break
     return rank
 
-
-def _rref_mod_p(A: np.ndarray, p: int) -> tuple[np.ndarray, list[int]]:
-    """Compute row-reduced echelon form over `Z/pZ` via Euclidean reduction."""
+def _rank_mod_p(A: np.ndarray, p: int) -> int:
+    """Compute matrix rank over `Z/pZ` via Euclidean row reduction (handles composite p)."""
     M = (A.astype(np.int64) % p).copy()
+    return _rank_mod_p_numba(M, p)
+
+@numba.njit(cache=True)
+def _rref_mod_p_numba(M: np.ndarray, p: int):
     m, n = M.shape
     row = 0
-    pivots: list[int] = []
+    pivots = []
     for col in range(n):
-        pivot = None
+        pivot = -1
         for r in range(row, m):
             if M[r, col] % p != 0:
                 pivot = r
                 break
-        if pivot is None:
+        if pivot == -1:
             continue
         if pivot != row:
-            M[[row, pivot]] = M[[pivot, row]]
+            for j in range(col, n):
+                M[row, j], M[pivot, j] = M[pivot, j], M[row, j]
 
         # Euclidean reduction
         for r in range(row + 1, m):
             while M[r, col] % p != 0:
                 q = M[row, col] // M[r, col]
-                M[row, :] = (M[row, :] - q * M[r, :]) % p
-                M[[row, r]] = M[[r, row]]
+                for j in range(col, n):
+                    M[row, j] = (M[row, j] - q * M[r, j]) % p
+                    M[row, j], M[r, j] = M[r, j], M[row, j]
 
-        try:
-            inv = pow(int(M[row, col]), -1, p)
-            M[row, :] = (M[row, :] * inv) % p
+        g, x, y = _gcd_extended_numba(M[row, col], p)
+        if g == 1:
+            inv = x % p
+            for j in range(col, n):
+                M[row, j] = (M[row, j] * inv) % p
             for r in range(m):
                 if r != row and M[r, col] % p != 0:
-                    M[r, :] = (M[r, :] - M[r, col] * M[row, :]) % p
-        except ValueError:
+                    factor = M[r, col]
+                    for j in range(col, n):
+                        M[r, j] = (M[r, j] - factor * M[row, j]) % p
+        else:
             for r in range(m):
                 if r != row and M[r, col] % p != 0:
-                    g, x, y = _gcd_extended(int(M[row, col]), int(M[r, col]))
-                    a, b = int(M[row, col]), int(M[r, col])
-                    row_i = (x * M[row, :] + y * M[r, :]) % p
-                    row_j = ((-b // g) * M[row, :] + (a // g) * M[r, :]) % p
-                    M[row, :] = row_i
-                    M[r, :] = row_j
+                    g2, x2, y2 = _gcd_extended_numba(M[row, col], M[r, col])
+                    a, b = M[row, col], M[r, col]
+                    for j in range(col, n):
+                        row_i = (x2 * M[row, j] + y2 * M[r, j]) % p
+                        row_j = ((-b // g2) * M[row, j] + (a // g2) * M[r, j]) % p
+                        M[row, j] = row_i
+                        M[r, j] = row_j
 
         pivots.append(col)
         row += 1
         if row == m:
             break
+    
+    # Numba handles returning lists, but typed lists are better. We just convert to array.
     return M, pivots
+
+def _rref_mod_p(A: np.ndarray, p: int) -> tuple[np.ndarray, list[int]]:
+    """Compute row-reduced echelon form over `Z/pZ` via Euclidean reduction."""
+    M = (A.astype(np.int64) % p).copy()
+    M_out, pivots = _rref_mod_p_numba(M, p)
+    return M_out, list(pivots)
+
 
 
 def _nullspace_basis_mod_p(A: np.ndarray, p: int) -> list[np.ndarray]:
-    """Return a basis of `ker(A)` over `Z/pZ`."""
+    """Return a basis of `ker(A)` over `Z/pZ`.
+
+    Args:
+        A: The input matrix.
+        p: The modulus.
+
+    Returns:
+        A list of basis vectors for the nullspace.
+    """
     m, n = A.shape
     rref, pivots = _rref_mod_p(A, p)
     pivot_set = set(pivots)
@@ -258,53 +396,156 @@ def _nullspace_basis_mod_p(A: np.ndarray, p: int) -> list[np.ndarray]:
     return basis
 
 
-def _is_independent_wrt(
-    v: np.ndarray, pivots: dict[int, np.ndarray], p: Optional[int] = None
-) -> bool:
-    """Check independence using Euclidean reduction for ring support (Z/mZ)."""
-    work = v.copy()
-    if p is not None:
-        work %= p
-
+@numba.njit(cache=True)
+def _is_independent_wrt_mod_p_kernel(work, pivot_indices, pivot_rows, n_pivots, p):
     for i in range(len(work)):
         if work[i] == 0:
             continue
-        if i not in pivots:
-            # Found a new pivot! Normalize if possible, else just store.
-            if p is not None:
+        
+        found_pivot = -1
+        for idx in range(n_pivots):
+            if pivot_indices[idx] == i:
+                found_pivot = idx
+                break
+        
+        if found_pivot == -1:
+            # Found a new pivot dimension
+            return i, work
+        
+        # Euclidean reduction step
+        pivot_vec = pivot_rows[found_pivot]
+        while work[i] != 0:
+            q = work[i] // pivot_vec[i]
+            if q != 0:
+                for j in range(i, len(work)):
+                    work[j] = (work[j] - q * pivot_vec[j]) % p
+            
+            if work[i] != 0:
+                # Swap and continue Euclidean step
+                for j in range(i, len(work)):
+                    tmp = work[j]
+                    work[j] = pivot_vec[j]
+                    pivot_vec[j] = tmp
+    return -1, work
+
+def _is_independent_wrt_optimized(
+    v: np.ndarray, 
+    pivot_matrix: np.ndarray, 
+    pivot_indices: np.ndarray, 
+    n_pivots: int, 
+    p: Optional[int] = None
+) -> tuple[bool, int]:
+    """Check independence using a pre-allocated pivot matrix for zero allocation.
+
+    Returns:
+        tuple (is_independent, updated_n_pivots)
+    """
+    work = np.asarray(v, dtype=np.int64).copy()
+    if p is not None:
+        p = int(p)
+        work %= p
+        
+        new_pivot_idx, final_work = _is_independent_wrt_mod_p_kernel(
+            work, pivot_indices, pivot_matrix, n_pivots, p
+        )
+            
+        if new_pivot_idx != -1:
+            # Normalize if possible
+            try:
+                inv = pow(int(final_work[new_pivot_idx]), -1, p)
+                final_work = (final_work * inv) % p
+            except ValueError:
+                pass
+            pivot_matrix[n_pivots] = final_work
+            pivot_indices[n_pivots] = new_pivot_idx
+            return True, n_pivots + 1
+        return False, n_pivots
+    else:
+        # Field reduction over Q/R (Float)
+        work = work.astype(float)
+        # For float field, we use a simpler loop or similar logic
+        for i in range(n_pivots):
+            idx = int(pivot_indices[i])
+            factor = work[idx] / pivot_matrix[i, idx]
+            work -= factor * pivot_matrix[i]
+            
+        first_nz = np.where(np.abs(work) > 1e-14)[0]
+        if len(first_nz) > 0:
+            idx = int(first_nz[0])
+            work /= work[idx]
+            pivot_matrix[n_pivots] = work
+            pivot_indices[n_pivots] = idx
+            return True, n_pivots + 1
+        return False, n_pivots
+
+def _is_independent_wrt(
+    v: np.ndarray, pivots: dict[int, np.ndarray], p: Optional[int] = None
+) -> bool:
+    """Legacy wrapper for _is_independent_wrt (avoid re-packing if possible in callers)."""
+    # This remains for backward compatibility but callers should migrate to _is_independent_wrt_optimized
+    work = np.asarray(v, dtype=np.int64).copy()
+    if p is not None:
+        p = int(p)
+        work %= p
+        
+        if not pivots:
+            first_nz = np.where(work != 0)[0]
+            if len(first_nz) > 0:
+                idx = int(first_nz[0])
                 try:
-                    inv = pow(int(work[i]), -1, p)
+                    inv = pow(int(work[idx]), -1, p)
                     work = (work * inv) % p
                 except ValueError:
                     pass
-            else:
-                work = work / work[i]
-            pivots[i] = work
+                pivots[idx] = work
+                return True
+            return False
+
+        indices = np.array(sorted(pivots.keys()), dtype=np.int64)
+        rows = np.array([pivots[i] for i in indices], dtype=np.int64)
+        
+        new_pivot_idx, final_work = _is_independent_wrt_mod_p_kernel(work, indices, rows, len(indices), p)
+        
+        for i, idx in enumerate(indices):
+            pivots[int(idx)] = rows[i]
+            
+        if new_pivot_idx != -1:
+            try:
+                inv = pow(int(final_work[new_pivot_idx]), -1, p)
+                final_work = (final_work * inv) % p
+            except ValueError:
+                pass
+            pivots[int(new_pivot_idx)] = final_work
             return True
-
-        if p is not None:
-            # Euclidean reduction mod p to handle non-invertible elements
-            target, pivot_val = int(work[i]), int(pivots[i][i])
-            while target != 0:
-                q = target // pivot_val
-                work = (work - q * pivots[i]) % p
-                target = int(work[i])
-                if target != 0:
-                    # Swap rows to continue reduction
-                    work, pivots[i] = pivots[i], work
-                    pivot_val = int(pivots[i][i])
-        else:
-            # Standard field reduction
+        return False
+    else:
+        # Field reduction
+        work = work.astype(float)
+        for i in range(len(work)):
+            if abs(work[i]) < 1e-14:
+                continue
+            if i not in pivots:
+                work /= work[i]
+                pivots[i] = work
+                return True
             factor = work[i] / pivots[i][i]
-            work = work - factor * pivots[i]
-
-    return False
+            work -= factor * pivots[i]
+        return False
 
 
 def _matrix_rank_for_ring(
     matrix: csr_matrix, ring_kind: str, p: int | None = None
 ) -> int:
-    """Compute matrix rank in the requested coefficient field, preferring Julia when available."""
+    """Compute matrix rank in the requested coefficient field, preferring Julia when available.
+
+    Args:
+        matrix: The sparse matrix.
+        ring_kind: One of 'Q' or 'ZMOD'.
+        p: Modulus for 'ZMOD'.
+
+    Returns:
+        The rank of the matrix.
+    """
     if matrix is None or matrix.nnz == 0:
         return 0
 
@@ -317,6 +558,9 @@ def _matrix_rank_for_ring(
                     "Topological Hint: Julia rank over Q failed in `ChainComplex.homology`; "
                     f"falling back to NumPy dense rank ({exc!r})."
                 )
+        
+        if matrix.shape[0] * matrix.shape[1] > 1000000:
+             warnings.warn(f"Topological Warning: Dense rank computation over Q for matrix {matrix.shape}. Enable Julia for sparse support.")
         return int(np.linalg.matrix_rank(matrix.toarray().astype(float)))
 
     if ring_kind == "ZMOD":
@@ -330,6 +574,9 @@ def _matrix_rank_for_ring(
                     "Topological Hint: Julia rank over Z/pZ failed in `ChainComplex.homology`; "
                     f"falling back to Python elimination ({exc!r})."
                 )
+        
+        if matrix.shape[0] * matrix.shape[1] > 1000000:
+             warnings.warn(f"Topological Warning: Dense rank computation over Z/{p}Z for matrix {matrix.shape}. Enable Julia for sparse support.")
         return _rank_mod_p(matrix.toarray(), int(p))
 
     raise ValueError(f"Unsupported rank ring kind '{ring_kind}'.")
@@ -341,7 +588,17 @@ def _composite_mod_uct_decomposition(
     torsion_nm1: List[int],
     modulus: int,
 ) -> Tuple[int, List[int]]:
-    """Compute Z/n decomposition from integral data via UCT tensor/Tor terms."""
+    """Compute Z/n decomposition from integral data via UCT tensor/Tor terms.
+
+    Args:
+        free_rank: Free rank of H_n(Z).
+        torsion_n: Torsion coefficients of H_n(Z).
+        torsion_nm1: Torsion coefficients of H_{n-1}(Z).
+        modulus: The modulus n for Z/nZ coefficients.
+
+    Returns:
+        A tuple (rank_mod, torsion_mod) for H_n(Z/nZ).
+    """
     rank_mod = int(free_rank)
     torsion_mod: List[int] = []
 
@@ -388,6 +645,7 @@ class ChainComplex(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_model(self):
+        """Validate and normalize the chain complex model data."""
         object.__setattr__(
             self,
             "boundaries",
@@ -403,6 +661,11 @@ class ChainComplex(BaseModel):
         return self
 
     def _structure_signature(self) -> tuple[object, ...]:
+        """Return a signature representing the structural state of the complex.
+
+        Returns:
+            A tuple of structural signatures.
+        """
         boundary_sig = tuple(
             (int(dim), _csr_matrix_signature(mat))
             for dim, mat in sorted(self.boundaries.items())
@@ -418,12 +681,21 @@ class ChainComplex(BaseModel):
         )
 
     def _ensure_cache_valid(self) -> None:
+        """Clear the cache if the complex structure has changed."""
         current = self._structure_signature()
         if self._cache_signature != current:
             self._cache.clear()
             self._cache_signature = current
 
     def _cache_get(self, key: tuple[object, ...]) -> object | None:
+        """Retrieve a value from the cache.
+
+        Args:
+            key: The cache key.
+
+        Returns:
+            The cached value or None if not found.
+        """
         self._ensure_cache_valid()
         if not self._cache_enabled:
             return None
@@ -434,12 +706,23 @@ class ChainComplex(BaseModel):
         return None
 
     def _cache_set(self, key: tuple[object, ...], value: object) -> None:
+        """Store a value in the cache.
+
+        Args:
+            key: The cache key.
+            value: The value to store.
+        """
         self._ensure_cache_valid()
         if not self._cache_enabled:
             return
         self._cache[key] = _clone_cache_value(value)
 
     def clear_cache(self, namespace: str | None = None) -> None:
+        """Clear the cache, optionally filtered by namespace.
+
+        Args:
+            namespace: Optional namespace prefix to clear.
+        """
         if namespace is None:
             self._cache.clear()
             return
@@ -449,6 +732,11 @@ class ChainComplex(BaseModel):
             self._cache.pop(key, None)
 
     def cache_info(self) -> dict[str, object]:
+        """Return information about the cache state.
+
+        Returns:
+            A dictionary containing cache statistics.
+        """
         self._ensure_cache_valid()
         return {
             "enabled": bool(self._cache_enabled),
@@ -463,12 +751,22 @@ class ChainComplex(BaseModel):
     def set_cache_enabled(
         self, enabled: bool, *, clear_when_disabled: bool = True
     ) -> None:
+        """Enable or disable caching.
+
+        Args:
+            enabled: Whether to enable caching.
+            clear_when_disabled: Whether to clear the cache when disabling.
+        """
         self._cache_enabled = bool(enabled)
         if not self._cache_enabled and clear_when_disabled:
             self._cache.clear()
 
     def _homological_dimensions(self) -> List[int]:
-        """Return sorted degrees that have meaningful chain data."""
+        """Return sorted degrees that have meaningful chain data.
+
+        Returns:
+            Sorted list of homological dimensions.
+        """
         key = ("chain", "homological_dimensions")
         cached = self._cache_get(key)
         if cached is not None:
@@ -489,7 +787,14 @@ class ChainComplex(BaseModel):
         return out
 
     def _homology_over_z(self, n: int) -> Tuple[int, List[int]]:
-        """Exact integral homology helper used by coefficient-change formulas."""
+        """Exact integral homology helper used by coefficient-change formulas.
+
+        Args:
+            n: Homological degree.
+
+        Returns:
+            A tuple (rank, torsion) for H_n(C; Z).
+        """
         n = int(n)
         key = ("chain", "homology_over_z", n)
         cached = self._cache_get(key)
@@ -547,18 +852,17 @@ class ChainComplex(BaseModel):
     def homology(
         self, n: int | None = None
     ) -> Tuple[int, List[int]] | Dict[int, Tuple[int, List[int]]]:
-        """
-        Compute the n-th homology group H_n(C) = ker(d_n) / im(d_{n+1}).
+        """Compute the n-th homology group H_n(C) = ker(d_n) / im(d_{n+1}).
 
         If `n` is omitted, computes homology for all known nonnegative degrees
         and returns a dictionary `{degree: (rank, torsion)}`.
 
-        Returns
-        -------
-        rank : int
-            The free rank of the homology group (Betti number).
-        torsion : List[int]
-            The torsion coefficients (invariant factors > 1).
+        Args:
+            n: Optional homological degree to compute.
+
+        Returns:
+            If n is provided: A tuple (rank, torsion).
+            If n is None: A dictionary mapping degree to (rank, torsion).
         """
         if n is None:
             key_all = ("chain", "homology", "all", str(self.coefficient_ring))
@@ -657,6 +961,15 @@ class ChainComplex(BaseModel):
     def cohomology(
         self, n: int | None = None
     ) -> Tuple[int, List[int]] | Dict[int, Tuple[int, List[int]]]:
+        """Compute the n-th cohomology group H^n(C).
+
+        Args:
+            n: Optional homological degree to compute.
+
+        Returns:
+            If n is provided: A tuple (rank, torsion).
+            If n is None: A dictionary mapping degree to (rank, torsion).
+        """
         if n is None:
             key_all = ("chain", "cohomology", "all", str(self.coefficient_ring))
             cached_all = self._cache_get(key_all)
@@ -698,6 +1011,14 @@ class ChainComplex(BaseModel):
         return out
 
     def _chain_group_rank_for_degree(self, n: int) -> int:
+        """Return the rank of the chain group C_n.
+
+        Args:
+            n: Homological degree.
+
+        Returns:
+            Rank of C_n.
+        """
         n = int(n)
         if n in self.cells:
             return int(self.cells[n])
@@ -713,6 +1034,14 @@ class ChainComplex(BaseModel):
         return 0
 
     def rank(self, n: int | None = None) -> int | Dict[int, int]:
+        """Return the rank of the n-th chain group C_n.
+
+        Args:
+            n: Optional degree.
+
+        Returns:
+            Rank or dictionary of ranks.
+        """
         if n is None:
             key_all = ("chain", "rank", "all", str(self.coefficient_ring))
             cached_all = self._cache_get(key_all)
@@ -735,6 +1064,14 @@ class ChainComplex(BaseModel):
         return out
 
     def betti_number(self, n: int | None = None) -> int | Dict[int, int]:
+        """Return the n-th Betti number (rank of H_n).
+
+        Args:
+            n: Optional degree.
+
+        Returns:
+            Betti number or dictionary of Betti numbers.
+        """
         if n is None:
             key_all = ("chain", "betti_number", "all", str(self.coefficient_ring))
             cached_all = self._cache_get(key_all)
@@ -756,17 +1093,22 @@ class ChainComplex(BaseModel):
         return out
 
     def betti_numbers(self) -> Dict[int, int]:
+        """Return all Betti numbers.
+
+        Returns:
+            Dictionary mapping degree to Betti number.
+        """
         out = self.betti_number()
         return out
 
     def cohomology_basis(self, n: int) -> list[np.ndarray]:
-        """
-        Computes a basis for the free part of the n-th cohomology group H^n(C; Z).
-        Returns a list of n-cochains (vectors in C^n).
+        """Computes a basis for the free part of the n-th cohomology group H^n(C).
 
-        This finds generators of the free part via a rational complement:
-        (ker d_{n+1}^T / im d_n^T) tensor Q.
-        Exact torsion-sensitive quotients require the Julia backend.
+        Args:
+            n: Degree.
+
+        Returns:
+            List of cochain vectors forming a basis.
         """
         n = int(n)
         key = ("chain", "cohomology_basis", n, str(self.coefficient_ring))
@@ -829,34 +1171,51 @@ class ChainComplex(BaseModel):
                     return out
                 except Exception as exc:
                     warnings.warn(
-                        f"Topological Hint: Julia field cohomology basis backend failed in "
-                        f"`ChainComplex.cohomology_basis`; falling back to Python implementation ({exc!r})."
+                        f"Topological Hint: Julia field cohomology basis backend failed; "
+                        f"falling back to Python dense implementation ({exc!r})."
                     )
+
+            if cn_size > 10000:
+                warnings.warn(
+                    f"Topological Warning: Performing dense cohomology reduction for size {cn_size}. "
+                    "This may exceed memory limits. Enable Julia for sparse support."
+                )
 
             if dn_plus_1 is None or dn_plus_1.nnz == 0:
                 z_basis = [np.eye(cn_size, dtype=np.int64)[j] for j in range(cn_size)]
             else:
                 if ring_kind == "Q":
                     from scipy.linalg import null_space
-
-                    ns = null_space(dn_plus_1.T.toarray())
+                    # Use SVD-based nullspace for stability over Q
+                    ns = null_space(dn_plus_1.T.toarray().astype(float))
                     z_basis = [ns[:, j] for j in range(ns.shape[1])]
                 else:
                     z_basis = _nullspace_basis_mod_p(dn_plus_1.T.toarray(), int(p))
 
-            pivots: dict[int, np.ndarray] = {}
             mod_p = int(p) if ring_kind == "ZMOD" else None
+            target_rank, _ = self.cohomology(n)
+            
+            # Optimized incremental reduction using pre-allocated matrix
+            max_pivots = cn_size
+            pivot_matrix = np.zeros((max_pivots, cn_size), dtype=np.int64 if mod_p else float)
+            pivot_indices = np.zeros(max_pivots, dtype=np.int64)
+            n_pivots = 0
+            
             if dn is not None:
                 dn_T_arr = dn.T.toarray()
                 for j in range(dn_T_arr.shape[1]):
-                    _is_independent_wrt(dn_T_arr[:, j], pivots, p=mod_p)
+                    _, n_pivots = _is_independent_wrt_optimized(
+                        dn_T_arr[:, j], pivot_matrix, pivot_indices, n_pivots, p=mod_p
+                    )
 
-            target_rank, _ = self.cohomology(n)
             reps = []
             for z in z_basis:
                 if len(reps) >= target_rank:
                     break
-                if _is_independent_wrt(z, pivots, p=mod_p):
+                is_indep, n_pivots = _is_independent_wrt_optimized(
+                    z, pivot_matrix, pivot_indices, n_pivots, p=mod_p
+                )
+                if is_indep:
                     reps.append(z)
 
             out = []
@@ -876,70 +1235,55 @@ class ChainComplex(BaseModel):
                 self._cache_set(key, out)
                 return out
             except Exception as e:
-                msg = (
-                    f"Topological Hint: Julia bridge failed ({e!r}). Falling back to pure Python computation. "
-                    "For massive datasets, this might cause memory overflow or loss of exact integer torsion tracking."
-                )
-                warnings.warn(msg)
+                warnings.warn(f"Topological Hint: Julia bridge failed ({e!r}). Falling back to pure Python.")
 
-        if dn is None or dn.nnz == 0:
-            if dn_plus_1 is None or dn_plus_1.nnz == 0:
-                int_basis = [np.eye(cn_size, dtype=np.int64)[j] for j in range(cn_size)]
-            else:
-                if dn_plus_1.shape[0] * dn_plus_1.shape[1] > 1000000:
-                    warnings.warn(
-                        f"Matrix {dn_plus_1.shape} is large for Python/SymPy reduction. "
-                        "Expect significant RAM consumption and slow execution without Julia."
-                    )
+        if cn_size > 5000:
+            warnings.warn(f"Topological Warning: Large integral SNF reduction for C^{n} (size {cn_size}). Expect slowdowns.")
 
-                mat = sp.SparseMatrix(
-                    dn_plus_1.shape[1],
-                    dn_plus_1.shape[0],
-                    dict(dn_plus_1.T.todok().items()),
-                )
-                # Use nullspace() to get a basis for the kernel
-                int_basis = [
-                    np.array(v, dtype=np.int64).flatten() for v in mat.nullspace()
-                ]
-            self._cache_set(key, int_basis)
-            return int_basis
+        # Robust integral fallback using Smith Normal Form on dn_plus_1^T to get Z^n
+        # then independent check against im(dn^T)
+        if dn_plus_1 is not None and dn_plus_1.nnz > 0:
+            from .math_core import smith_normal_decomp
+            dnp1_T = sp.SparseMatrix(dn_plus_1.shape[1], dn_plus_1.shape[0], dict(dn_plus_1.T.todok().items()))
+            S, U, V = smith_normal_decomp(dnp1_T)
+            # Z^n = ker(dn_plus_1^T). Columns of V corresponding to zero diagonal in S.
+            z_basis = []
+            for j in range(V.cols):
+                if j >= S.rows or S[j, j] == 0:
+                    z_basis.append(np.array(V[:, j], dtype=np.int64).flatten())
+        else:
+            z_basis = [np.eye(cn_size, dtype=np.int64)[j] for j in range(cn_size)]
 
-        if dn.shape[0] * dn.shape[1] > 1000000:
-            warnings.warn(
-                f"Matrix {dn.shape} is large for Smith Normal Form in Python. "
-                "Expect significant RAM consumption without Julia backend."
-            )
+        # Optimized integral incremental reduction
+        max_pivots = cn_size
+        pivot_matrix = np.zeros((max_pivots, cn_size), dtype=np.int64)
+        pivot_indices = np.zeros(max_pivots, dtype=np.int64)
+        n_pivots = 0
 
-        dn_T = sp.SparseMatrix(dn.shape[1], dn.shape[0], dict(dn.T.todok().items()))
+        if dn is not None and dn.nnz > 0:
+            dn_T_arr = dn.T.toarray()
+            for j in range(dn_T_arr.shape[1]):
+                _is_independent_wrt_optimized(dn_T_arr[:, j], pivot_matrix, pivot_indices, n_pivots)
 
-        from .math_core import smith_normal_decomp
-
-        S, U, V = smith_normal_decomp(dn_T)
-        # S = U * dn_T * V
-        # ker(dn_T) is spanned by the columns of V corresponding to zero rows of S?
-        # No, dn_T = U^-1 S V^-1. 
-        # Actually, let's use a simpler relation.
-        # ker(dn_T) is given by columns of V corresponding to zero diagonal elements in S.
-        
-        int_basis = []
         target_rank, _ = self.cohomology(n)
-
-        for j in range(S.cols):
-            if j >= S.rows or S[j, j] == 0:
-                v = np.array(V[:, j], dtype=np.int64).flatten()
-                # Verify it is a cocycle (in Z^n)
-                if dn_plus_1 is None or dn_plus_1.nnz == 0 or not np.any(dn_plus_1.T.toarray() @ v):
-                    int_basis.append(v)
-                if len(int_basis) == target_rank:
-                    break
-
-        self._cache_set(key, int_basis)
-        return int_basis
+        reps = []
+        for z in z_basis:
+            if len(reps) >= target_rank:
+                break
+            is_indep, n_pivots = _is_independent_wrt_optimized(z, pivot_matrix, pivot_indices, n_pivots)
+            if is_indep:
+                reps.append(z)
+        
+        self._cache_set(key, reps)
+        return reps
 
     def euler_characteristic(self) -> int:
-        """
-        Compute the Euler characteristic of the chain complex.
+        """Compute the Euler characteristic of the chain complex.
+
         chi(C) = sum_{n} (-1)^n * rank(C_n).
+
+        Returns:
+            Euler characteristic.
         """
         key = ("chain", "euler_characteristic")
         cached = self._cache_get(key)
@@ -958,10 +1302,11 @@ class ChainComplex(BaseModel):
         return int(chi)
 
     def topological_invariants(self) -> Dict[str, Any]:
-        """
-        Compute all key topological invariants at once.
-        Returns a dictionary containing homology, cohomology, Betti numbers,
-        and the Euler characteristic.
+        """Compute all key topological invariants at once.
+
+        Returns:
+            A dictionary containing homology, cohomology, Betti numbers,
+            and the Euler characteristic.
         """
         key = ("chain", "topological_invariants", str(self.coefficient_ring))
         cached = self._cache_get(key)
@@ -1004,6 +1349,7 @@ class CWComplex(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_cw(self):
+        """Validate and normalize CW complex model data."""
         if not self.dimensions:
              dims = set(self.cells.keys())
              dims.update(self.attaching_maps.keys())
@@ -1016,9 +1362,15 @@ class CWComplex(BaseModel):
 
     @classmethod
     def from_simplicial_complex(cls, sc: "SimplicialComplex") -> "CWComplex":
-        """
-        Converts a SimplicialComplex to a CWComplex.
+        """Converts a SimplicialComplex to a CWComplex.
+
         Each n-simplex is treated as an n-cell.
+
+        Args:
+            sc: The input simplicial complex.
+
+        Returns:
+            A CWComplex representation.
         """
         # Check if Julia pre-calculated the boundary operators
         if hasattr(sc, "_boundaries_cache") and hasattr(sc, "_cells_cache") and sc._boundaries_cache and sc._cells_cache:
@@ -1036,6 +1388,11 @@ class CWComplex(BaseModel):
         )
 
     def _structure_signature(self) -> tuple[object, ...]:
+        """Return a signature for the structural state of the CW complex.
+
+        Returns:
+            A structural signature tuple.
+        """
         map_sig = tuple(
             (int(dim), _csr_matrix_signature(mat))
             for dim, mat in sorted(self.attaching_maps.items())
@@ -1043,12 +1400,21 @@ class CWComplex(BaseModel):
         return map_sig, tuple(self.dimensions), str(self.coefficient_ring)
 
     def _ensure_cache_valid(self) -> None:
+        """Clear the cache if the CW complex structure has changed."""
         current = self._structure_signature()
         if self._cache_signature != current:
             self._cache.clear()
             self._cache_signature = current
 
     def _cache_get(self, key: tuple[object, ...]) -> object | None:
+        """Retrieve a value from the cache.
+
+        Args:
+            key: The cache key.
+
+        Returns:
+            The cached value or None.
+        """
         self._ensure_cache_valid()
         if key in self._cache:
             self._cache_hits += 1
@@ -1057,10 +1423,21 @@ class CWComplex(BaseModel):
         return None
 
     def _cache_set(self, key: tuple[object, ...], value: object) -> None:
+        """Store a value in the cache.
+
+        Args:
+            key: The cache key.
+            value: The value to store.
+        """
         self._ensure_cache_valid()
         self._cache[key] = _clone_cache_value(value)
 
     def cache_info(self) -> dict[str, object]:
+        """Return information about the cache state.
+
+        Returns:
+            Dictionary with cache stats.
+        """
         self._ensure_cache_valid()
         return {
             "size": int(len(self._cache)),
@@ -1069,39 +1446,107 @@ class CWComplex(BaseModel):
         }
 
     def boundary_matrix(self, d: int) -> csr_matrix:
+        """Return the attaching matrix for dimension d.
+
+        Args:
+            d: Dimension.
+
+        Returns:
+            Attaching matrix in CSR format.
+        """
         return self.attaching_maps.get(int(d), csr_matrix((self.cells.get(d-1, 0), self.cells.get(d, 0)), dtype=np.int64))
 
     def boundary_matrices(self) -> Dict[int, csr_matrix]:
+        """Return all attaching matrices.
+
+        Returns:
+            Dictionary mapping dimension to attaching matrix.
+        """
         return self.attaching_maps
 
     def homology(
         self, n: int | None = None
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
+        """Compute the n-th cellular homology.
+
+        Args:
+            n: Optional degree.
+
+        Returns:
+            Rank/torsion or dictionary of results.
+        """
         return self.cellular_chain_complex().homology(n)
 
     def cohomology(
         self, n: int | None = None
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
+        """Compute the n-th cellular cohomology.
+
+        Args:
+            n: Optional degree.
+
+        Returns:
+            Rank/torsion or dictionary of results.
+        """
         return self.cellular_chain_complex().cohomology(n)
 
     def cohomology_basis(self, n: int) -> list[np.ndarray]:
+        """Compute a basis for cellular cohomology.
+
+        Args:
+            n: Degree.
+
+        Returns:
+            List of basis vectors.
+        """
         return self.cellular_chain_complex().cohomology_basis(n)
 
     def euler_characteristic(self) -> int:
+        """Compute the Euler characteristic.
+
+        Returns:
+            Euler characteristic.
+        """
         return self.cellular_chain_complex().euler_characteristic()
 
     def betti_number(self, n: int | None = None) -> int | Dict[int, int]:
+        """Return the n-th Betti number.
+
+        Args:
+            n: Optional degree.
+
+        Returns:
+            Betti number or dictionary of Betti numbers.
+        """
         return self.cellular_chain_complex().betti_number(n)
 
     def betti_numbers(self) -> Dict[int, int]:
+        """Return all Betti numbers.
+
+        Returns:
+            Dictionary mapping degree to Betti number.
+        """
         return self.cellular_chain_complex().betti_numbers()
 
     def topological_invariants(self) -> Dict[str, Any]:
+        """Compute all key topological invariants.
+
+        Returns:
+            Dictionary of invariants.
+        """
         return self.cellular_chain_complex().topological_invariants()
 
     def cellular_chain_complex(
         self, *, coefficient_ring: str | None = None
     ) -> ChainComplex:
+        """Return the cellular chain complex.
+
+        Args:
+            coefficient_ring: Optional coefficient ring override.
+
+        Returns:
+            A ChainComplex instance.
+        """
         ring = coefficient_ring if coefficient_ring is not None else self.coefficient_ring
         key = ("cellular", "chain_complex", ring)
         cached = self._cache_get(key)
@@ -1137,6 +1582,11 @@ class SimplicialComplex(BaseModel):
     _cells_cache: Dict[int, int] = PrivateAttr(default_factory=dict)
 
     def __init__(self, **data):
+        """Initialize the simplicial complex.
+
+        Args:
+            **data: Pydantic model data, including 'simplices' (optional).
+        """
         if "simplices" in data and not isinstance(data["simplices"], dict):
             # Handle possible list-of-lists input if any legacy code did that
             pass
@@ -1145,6 +1595,11 @@ class SimplicialComplex(BaseModel):
             self._simplices_table = data["simplices"]
 
     def _structure_signature(self) -> tuple[object, ...]:
+        """Return a signature for the structural state of the simplicial complex.
+
+        Returns:
+            A structural signature tuple.
+        """
         simplex_sig = tuple(
             (int(d), len(s)) for d, s in sorted(self._simplices_table.items())
         )
@@ -1154,12 +1609,21 @@ class SimplicialComplex(BaseModel):
         return simplex_sig, str(self.coefficient_ring), filtration_sig
 
     def _ensure_cache_valid(self) -> None:
+        """Clear the cache if the complex structure has changed."""
         current = self._structure_signature()
         if self._cache_signature != current:
             self._cache.clear()
             self._cache_signature = current
 
     def _cache_get(self, key: tuple[object, ...]) -> object | None:
+        """Retrieve a value from the cache.
+
+        Args:
+            key: The cache key.
+
+        Returns:
+            The cached value or None.
+        """
         self._ensure_cache_valid()
         if not self._cache_enabled:
             return None
@@ -1170,12 +1634,23 @@ class SimplicialComplex(BaseModel):
         return None
 
     def _cache_set(self, key: tuple[object, ...], value: object) -> None:
+        """Store a value in the cache.
+
+        Args:
+            key: The cache key.
+            value: The value to store.
+        """
         self._ensure_cache_valid()
         if not self._cache_enabled:
             return
         self._cache[key] = _clone_cache_value(value)
 
     def cache_info(self) -> dict[str, object]:
+        """Return information about the cache state.
+
+        Returns:
+            Dictionary with cache stats.
+        """
         self._ensure_cache_valid()
         return {
             "size": int(len(self._cache)),
@@ -1184,6 +1659,11 @@ class SimplicialComplex(BaseModel):
         }
 
     def clear_cache(self, namespace: str | None = None) -> None:
+        """Clear the cache, optionally filtered by namespace.
+
+        Args:
+            namespace: Optional namespace prefix to clear.
+        """
         if namespace is None:
             self._cache.clear()
             return
@@ -1193,6 +1673,61 @@ class SimplicialComplex(BaseModel):
             self._cache.pop(key, None)
 
     @classmethod
+    def from_vietoris_rips(
+        cls,
+        points: np.ndarray,
+        epsilon: float,
+        max_dimension: int,
+        coefficient_ring: str = "Z",
+    ) -> "SimplicialComplex":
+        """Generate a Vietoris-Rips complex from a point cloud.
+
+        Uses a bottom-up Flag Complex (Clique Complex) construction.
+        The 1-skeleton is built using a distance threshold, and higher-dimensional
+        simplices are found by identifying cliques in the edge graph.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            epsilon: Distance threshold for edges.
+            max_dimension: Maximum simplex dimension to include (e.g., 2 for triangles).
+            coefficient_ring: Coefficient ring for the complex.
+
+        Returns:
+            A SimplicialComplex instance with geometric coordinates attached.
+        """
+        from ..bridge.julia_bridge import julia_engine
+
+        points = np.asarray(points, dtype=np.float64)
+        n_pts = points.shape[0]
+
+        if julia_engine.available:
+            try:
+                simplices = julia_engine.compute_vietoris_rips(points, epsilon, max_dimension)
+                sc = cls.from_simplices(
+                    simplices, coefficient_ring=coefficient_ring, close_under_faces=True
+                )
+                sc._coordinates = points
+                return sc
+            except Exception as e:
+                warnings.warn(f"Julia Vietoris-Rips failed: {e!r}. Falling back to Python.")
+
+        # --- Optimized Python Fallback ---
+        from scipy.spatial import cKDTree
+        tree = cKDTree(points)
+        pairs = tree.query_pairs(epsilon)
+        valid_simplices = [(i,) for i in range(n_pts)] + list(pairs)
+
+        sc = cls.from_simplices(
+            valid_simplices, coefficient_ring=coefficient_ring, close_under_faces=True
+        )
+        sc._coordinates = points
+        
+        if max_dimension > 1:
+            sc = sc.expand(max_dimension)
+        
+        return sc
+
+    @classmethod
     def from_simplices(
         cls,
         simplices: Iterable[Iterable[int]],
@@ -1200,7 +1735,16 @@ class SimplicialComplex(BaseModel):
         *,
         close_under_faces: bool = True,
     ) -> "SimplicialComplex":
-        """Create a simplicial complex from generators, optionally taking the full closure."""
+        """Create a simplicial complex from generators, optionally taking the full closure.
+
+        Args:
+            simplices: Iterable of simplices (generators).
+            coefficient_ring: Coefficient ring label.
+            close_under_faces: Whether to automatically add all faces.
+
+        Returns:
+            A SimplicialComplex instance.
+        """
         from ..bridge.julia_bridge import julia_engine
 
         # Ensure we can iterate multiple times if it's a generator
@@ -1263,7 +1807,15 @@ class SimplicialComplex(BaseModel):
         maximal_simplices: Iterable[Iterable[int]],
         coefficient_ring: str = "Z",
     ) -> "SimplicialComplex":
-        """Build the full simplicial closure from a list of maximal simplices."""
+        """Build the full simplicial closure from a list of maximal simplices.
+
+        Args:
+            maximal_simplices: Iterable of maximal simplices.
+            coefficient_ring: Coefficient ring label.
+
+        Returns:
+            A SimplicialComplex instance.
+        """
         # This now benefits directly from the Julia acceleration in from_simplices
         return cls.from_simplices(
             maximal_simplices,
@@ -1281,9 +1833,19 @@ class SimplicialComplex(BaseModel):
         *,
         coefficient_ring: str = "Z",
     ) -> "SimplicialComplex":
-        """
-        Construct a Continuous k-Nearest Neighbors (CkNN) complex.
+        """Construct a Continuous k-Nearest Neighbors (CkNN) complex.
+
         CkNN is more robust to varying density than epsilon-graphs.
+
+        Args:
+            points: Array of point coordinates.
+            k: Number of neighbors.
+            delta: Scaling parameter.
+            max_dimension: Maximum dimension of simplices.
+            coefficient_ring: Coefficient ring label.
+
+        Returns:
+            A SimplicialComplex instance.
         """
         from ..bridge.julia_bridge import julia_engine
         pts = np.asarray(points, dtype=np.float64)
@@ -1317,15 +1879,22 @@ class SimplicialComplex(BaseModel):
                 warnings.warn(f"Julia CkNN failed ({e!r}). Falling back to SciPy query_pairs.")
 
         if not julia_success:
-            # The absolute maximum possible search radius for the CkNN condition
+            # Vectorized density check
             max_search_radius = delta * np.max(rho)
-
-            # query_pairs limits the search space mathematically perfectly, avoiding O(N^2)
-            for i, j in tree.query_pairs(max_search_radius):
-                dist_sq = np.sum((pts[i] - pts[j]) ** 2)
-                threshold_sq = (delta ** 2) * rho[i] * rho[j]
-                if dist_sq < threshold_sq:
-                    simplices.append((i, j))
+            pairs_arr = np.array(list(tree.query_pairs(max_search_radius)), dtype=np.int64)
+            if len(pairs_arr) > 0:
+                i_idx = pairs_arr[:, 0]
+                j_idx = pairs_arr[:, 1]
+                
+                # Check CkNN condition: dist(i,j)^2 < delta^2 * rho[i] * rho[j]
+                dists_sq = np.sum((pts[i_idx] - pts[j_idx])**2, axis=1)
+                thresholds_sq = (delta ** 2) * rho[i_idx] * rho[j_idx]
+                
+                valid_mask = dists_sq < thresholds_sq
+                valid_pairs = pairs_arr[valid_mask]
+                
+                for p_idx in range(len(valid_pairs)):
+                    simplices.append((int(valid_pairs[p_idx, 0]), int(valid_pairs[p_idx, 1])))
 
         sc = cls.from_simplices(simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
         if max_dimension > 1:
@@ -1340,9 +1909,18 @@ class SimplicialComplex(BaseModel):
         max_alpha_square: Optional[float] = None,
         coefficient_ring: str = "Z",
     ) -> "SimplicialComplex":
-        """
-        Compute an Alpha complex for the given points and distance threshold.
+        """Compute an Alpha complex for the given points and distance threshold.
+
         Utilizes high-performance Delaunay filtration.
+
+        Args:
+            points: Array of point coordinates.
+            alpha: Distance threshold (circumradius).
+            max_alpha_square: Squared distance threshold override.
+            coefficient_ring: Coefficient ring label.
+
+        Returns:
+            A SimplicialComplex instance.
         """
         from scipy.spatial import Delaunay
 
@@ -1353,15 +1931,48 @@ class SimplicialComplex(BaseModel):
         if n_pts < dim + 1:
             return cls.from_simplices([[i] for i in range(n_pts)], coefficient_ring=coefficient_ring)
 
-        dt = Delaunay(pts)
+        dt = Delaunay(pts, qhull_options="QJ")
         simplices_d = dt.simplices
         
-        if max_alpha_square is not None:
+        # Handle lack of alpha (EMST Heuristic)
+        if alpha is None and max_alpha_square is None:
+            import warnings
+            warnings.warn("No alpha provided. Defaulting to EMST maximum edge length to ensure connectivity.")
+            
+            alpha2 = None
+            from ..bridge.julia_bridge import julia_engine
+            if julia_engine.available:
+                try:
+                    alpha2 = julia_engine.compute_alpha_threshold_emst(pts, simplices_d)
+                    warnings.warn(f"[Alpha Complex] Alpha value found throgh EMST Heuristic {alpha2}")
+                except Exception:
+                    pass
+            
+            if alpha2 is None:
+                # Python fallback - Vectorized edge extraction
+                if len(simplices_d) > 0:
+                    # simplices_d is (N, dim+1)
+                    # All unique edges can be found by extracting combinations and sorting
+                    all_edges = []
+                    import itertools
+                    for i, j in itertools.combinations(range(simplices_d.shape[1]), 2):
+                        all_edges.append(np.sort(simplices_d[:, [i, j]], axis=1))
+                    
+                    edges_arr = np.unique(np.concatenate(all_edges, axis=0), axis=0)
+                    u_idx, v_idx = edges_arr[:, 0], edges_arr[:, 1]
+                    
+                    from scipy.sparse import csr_matrix
+                    from scipy.sparse.csgraph import minimum_spanning_tree
+                    dists = np.sqrt(np.sum((pts[u_idx] - pts[v_idx])**2, axis=1))
+                    adj = csr_matrix((dists, (u_idx, v_idx)), shape=(n_pts, n_pts))
+                    mst = minimum_spanning_tree(adj)
+                    alpha2 = (mst.data.max() / 2.0)**2 if mst.nnz > 0 else 0.0
+                else:
+                    alpha2 = 0.0
+        elif max_alpha_square is not None:
             alpha2 = float(max_alpha_square)
-        elif alpha is not None:
-            alpha2 = float(alpha**2)
         else:
-            raise ValueError("Either alpha or max_alpha_square must be provided.")
+            alpha2 = float(alpha**2)
 
         from pysurgery.bridge.julia_bridge import julia_engine
         if julia_engine.available:
@@ -1384,7 +1995,7 @@ class SimplicialComplex(BaseModel):
             c2 = np.sum((p0 - p1)**2, axis=1)
             
             with np.errstate(divide='ignore', invalid='ignore'):
-                r2_tri = (a2 * b2 * c2) / (16.0 * area**2)
+                r2_tri = (a2 * b2 * c2) / (16.0 * area**2 + 1e-30)
             
             # Obtuse check for triangles (diametral sphere logic)
             longest_edge_sq = np.maximum(np.maximum(a2, b2), c2)
@@ -1393,95 +2004,182 @@ class SimplicialComplex(BaseModel):
             
             for i, s in enumerate(simplices_d):
                 if r2_tri[i] <= alpha2:
-                    valid_simplices.add(tuple(sorted(s)))
+                    valid_simplices.add(tuple(sorted(int(v) for v in s)))
             
-            # 2. Check edges for Gabriel condition and alpha filter
-            # A Delaunay edge is in Alpha complex if its length/2 <= alpha AND it's Gabriel.
-            edges = set()
-            for s in simplices_d:
-                for u, v in itertools.combinations(s, 2):
-                    edges.add(tuple(sorted((u, v))))
+            # 2. Check edges - Vectorized
+            all_edges = []
+            for combo in itertools.combinations(range(3), 2):
+                all_edges.append(np.sort(simplices_d[:, list(combo)], axis=1))
+            edges_arr = np.unique(np.concatenate(all_edges, axis=0), axis=0)
             
-            for u, v in edges:
-                e_len2 = np.sum((pts[u] - pts[v])**2)
-                r2_e = e_len2 / 4.0
-                if r2_e <= alpha2:
-                    # Check Gabriel condition: is there a point in the diametral ball?
-                    # For Delaunay triangulation, we only need to check the two adjacent triangles.
-                    # Or more simply, if any adjacent triangle has r2_tri <= r2_e, then it's NOT Gabriel 
-                    # but it will be added by the triangle check anyway.
-                    # Standard Alpha complex logic: add if Gabriel and r2 <= alpha2.
-                    valid_simplices.add((u, v))
+            e_len2 = np.sum((pts[edges_arr[:, 0]] - pts[edges_arr[:, 1]])**2, axis=1)
+            valid_mask_edge = (e_len2 / 4.0) <= alpha2
+            for s in edges_arr[valid_mask_edge]:
+                valid_simplices.add(tuple(int(v) for v in s))
         
         elif dim == 3:
-            # 1. Check Tetrahedra (3-simplices)
-            for i, s in enumerate(simplices_d):
-                p0, p1, p2, p3 = pts[s]
-                A = np.array([p1-p0, p2-p0, p3-p0])
-                b = 0.5 * np.array([np.sum((p1-p0)**2), np.sum((p2-p0)**2), np.sum((p3-p0)**2)])
-                try:
-                    center_offset = np.linalg.solve(A, b)
-                    r2_val = np.sum(center_offset**2)
-                    if r2_val <= alpha2:
-                        valid_simplices.add(tuple(sorted(s)))
-                except np.linalg.LinAlgError:
-                    pass
+            # 1. Check Tetrahedra (3-simplices) - Vectorized
+            p0 = pts[simplices_d[:, 0]]
+            p1 = pts[simplices_d[:, 1]]
+            p2 = pts[simplices_d[:, 2]]
+            p3 = pts[simplices_d[:, 3]]
             
-            # 2. Extract and check unique Triangles (2-simplices)
-            triangles = set()
-            for s in simplices_d:
-                for face in itertools.combinations(s, 3):
-                    triangles.add(tuple(sorted(face)))
+            v1 = p1 - p0
+            v2 = p2 - p0
+            v3 = p3 - p0
             
-            for tri in triangles:
-                p0, p1, p2 = pts[list(tri)]
-                # Circumradius squared of triangle in 3D
-                a2 = np.sum((p1 - p2)**2)
-                b2 = np.sum((p0 - p2)**2)
-                c2 = np.sum((p0 - p1)**2)
-                
-                # Area via cross product (more robust in 3D)
-                area = 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0))
-                if area > 1e-12:
-                    r2_tri = (a2 * b2 * c2) / (16.0 * area**2)
-                    # Obtuse check (diametral sphere)
-                    longest_edge_sq = max(a2, b2, c2)
-                    if (a2 + b2 < c2) or (a2 + c2 < b2) or (b2 + c2 < a2):
-                        r2_tri = longest_edge_sq / 4.0
-                    
-                    if r2_tri <= alpha2:
-                        valid_simplices.add(tri)
+            # Using the formula R = |v1|^2 (v2 x v3) + |v2|^2 (v3 x v1) + |v3|^2 (v1 x v2) / (2 * det(v1, v2, v3))
+            cp23 = np.cross(v2, v3)
+            cp31 = np.cross(v3, v1)
+            cp12 = np.cross(v1, v2)
             
-            # 3. Extract and check unique Edges (1-simplices)
-            edges = set()
-            for s in simplices_d:
-                for e in itertools.combinations(s, 2):
-                    edges.add(tuple(sorted(e)))
+            det_val = np.sum(v1 * cp23, axis=1)
             
-            for u, v in edges:
-                e_len2 = np.sum((pts[u] - pts[v])**2)
-                if e_len2 / 4.0 <= alpha2:
-                    valid_simplices.add((u, v))
+            num = (np.sum(v1**2, axis=1)[:, None] * cp23 + 
+                   np.sum(v2**2, axis=1)[:, None] * cp31 + 
+                   np.sum(v3**2, axis=1)[:, None] * cp12)
+            
+            r2_tet = np.sum(num**2, axis=1) / (4.0 * det_val**2 + 1e-30)
+            
+            # Filter valid tetrahedra
+            valid_mask = (r2_tet <= alpha2) & (np.abs(det_val) > 1e-15)
+            for s in simplices_d[valid_mask]:
+                valid_simplices.add(tuple(sorted(int(v) for v in s)))
+            
+            # 2. Extract and check unique Triangles (2-simplices) - Vectorized
+            all_tris = []
+            for combo in itertools.combinations(range(4), 3):
+                all_tris.append(np.sort(simplices_d[:, list(combo)], axis=1))
+            tris_arr = np.unique(np.concatenate(all_tris, axis=0), axis=0)
+            
+            tp0 = pts[tris_arr[:, 0]]
+            tp1 = pts[tris_arr[:, 1]]
+            tp2 = pts[tris_arr[:, 2]]
+            
+            tv1 = tp1 - tp0
+            tv2 = tp2 - tp0
+            
+            # Formula for triangle circumradius in 3D: R = |a||b||c| / 4*Area
+            a2 = np.sum((tp1 - tp2)**2, axis=1)
+            b2 = np.sum(tv2**2, axis=1)
+            c2 = np.sum(tv1**2, axis=1)
+            
+            areas = 0.5 * np.linalg.norm(np.cross(tv1, tv2), axis=1)
+            
+            with np.errstate(divide='ignore', invalid='ignore'):
+                r2_tri = (a2 * b2 * c2) / (16.0 * areas**2 + 1e-30)
+            
+            # Obtuse check for triangles
+            longest_e2 = np.maximum(np.maximum(a2, b2), c2)
+            is_obtuse = (a2 + b2 < c2) | (a2 + c2 < b2) | (b2 + c2 < a2)
+            r2_tri = np.where(is_obtuse, longest_e2 / 4.0, r2_tri)
+            
+            valid_mask_tri = (r2_tri <= alpha2) & (areas > 1e-15)
+            for s in tris_arr[valid_mask_tri]:
+                valid_simplices.add(tuple(int(v) for v in s))
+
+            # 3. Extract and check unique Edges (1-simplices) - Vectorized
+            all_edges = []
+            for combo in itertools.combinations(range(4), 2):
+                all_edges.append(np.sort(simplices_d[:, list(combo)], axis=1))
+            edges_arr = np.unique(np.concatenate(all_edges, axis=0), axis=0)
+            
+            e_len2 = np.sum((pts[edges_arr[:, 0]] - pts[edges_arr[:, 1]])**2, axis=1)
+            valid_mask_edge = (e_len2 / 4.0) <= alpha2
+            for s in edges_arr[valid_mask_edge]:
+                valid_simplices.add(tuple(int(v) for v in s))
 
         else:
-            # Generalized N-dimensional fallback
-            r2 = np.zeros(len(simplices_d))
-            for i, s in enumerate(simplices_d):
-                p0 = pts[s[0]]
-                A = pts[s[1:]] - p0
-                b = 0.5 * np.sum((pts[s[1:]] - p0)**2, axis=1)
-                try:
-                    c = np.linalg.solve(A, b)
-                    r2[i] = np.sum(c**2)
-                except Exception:
-                    r2[i] = float('inf')
+            # Generalized N-dimensional fallback (with sub-face evaluation and caching)
+            _r2_cache: Dict[Tuple[int, ...], float] = {}
 
-            for i, s in enumerate(simplices_d):
-                if r2[i] <= alpha2:
-                    valid_simplices.add(tuple(sorted(s)))
+            def get_r2(simplex_indices):
+                sorted_idx = tuple(sorted(simplex_indices))
+                if sorted_idx in _r2_cache:
+                    return _r2_cache[sorted_idx]
+                
+                pts_s = pts[list(sorted_idx)]
+                k = len(sorted_idx)
+                if k == 1:
+                    return 0.0
+                p0 = pts_s[0]
+                A = pts_s[1:] - p0
+                b = 0.5 * np.sum((pts_s[1:] - p0)**2, axis=1)
+                try:
+                    c, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+                    val = np.sum(c**2)
+                    _r2_cache[sorted_idx] = val
+                    return val
+                except Exception:
+                    _r2_cache[sorted_idx] = float('inf')
+                    return float('inf')
+
+            for s in simplices_d:
+                sorted_s = tuple(sorted(s))
+                if get_r2(sorted_s) <= alpha2:
+                    valid_simplices.add(sorted_s)
+                else:
+                    # Maximal simplex failed, check sub-faces recursively or by dimension
+                    for r in range(dim, 1, -1):
+                        for face in itertools.combinations(sorted_s, r):
+                            if face in valid_simplices:
+                                continue
+                            if get_r2(face) <= alpha2:
+                                valid_simplices.add(tuple(sorted(face)))
 
         # Final closure logic
-        # For vertices, always add them (r=0 <= alpha)
+        for i in range(n_pts):
+            valid_simplices.add((i,))
+            
+        return cls.from_simplices(valid_simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
+
+    @classmethod
+    def from_crust_algorithm(
+        cls,
+        points: np.ndarray,
+        coefficient_ring: str = "Z",
+    ) -> "SimplicialComplex":
+        """Reconstruct a surface from a point cloud using the Crust algorithm (Amenta et al., 1998).
+
+        This is a parameter-free algorithm that uses Voronoi poles to adapt to variable 
+        sampling density.
+
+        Args:
+            points: An (N, D) array of point coordinates.
+            coefficient_ring: Coefficient ring label.
+
+        Returns:
+            A SimplicialComplex representing the reconstructed manifold.
+        """
+        from scipy.spatial import Delaunay, Voronoi
+        
+        pts = np.asarray(points, dtype=np.float64)
+        if pts.ndim != 2:
+            raise ValueError("points must be a 2D array of coordinates.")
+        n_pts, dim = pts.shape
+        if n_pts < dim + 1:
+            return cls.from_simplices([[i] for i in range(n_pts)], coefficient_ring=coefficient_ring)
+        
+        # 1. Compute Voronoi diagram to get poles (Voronoi vertices)
+        vor = Voronoi(pts, qhull_options="QJ")
+        vor_vertices = vor.vertices
+        
+        # 2. Combine original points and Voronoi vertices
+        combined_pts = np.vstack([pts, vor_vertices])
+        
+        # 3. Compute Delaunay triangulation of combined set
+        dt_combined = Delaunay(combined_pts, qhull_options="QJ")
+        
+        # 4. Extract simplices of dimension (dim-1) where all vertices are from the original point set
+        # This is the "Crust".
+        target_dim = dim - 1
+        valid_simplices = set()
+        for s in dt_combined.simplices:
+            for face in itertools.combinations(s, target_dim + 1):
+                if np.all(np.array(face) < n_pts):
+                    valid_simplices.add(tuple(sorted(int(v) for v in face)))
+        
+        # Ensure vertices are included
         for i in range(n_pts):
             valid_simplices.add((i,))
             
@@ -1497,30 +2195,44 @@ class SimplicialComplex(BaseModel):
         max_dimension: int = 2,
         coefficient_ring: str = "Z",
     ) -> "SimplicialComplex":
-        """
-        Construct a Witness complex from a point cloud.
+        """Construct a Witness complex from a point cloud.
+
         Used as a sparse approximation for large-scale TDA.
+
+        Args:
+            points: Array of point coordinates.
+            n_landmarks: Number of landmark points to choose.
+            alpha: Relaxation parameter.
+            max_dimension: Maximum dimension.
+            coefficient_ring: Coefficient ring label.
+
+        Returns:
+            A SimplicialComplex instance.
         """
         from scipy.spatial.distance import cdist
 
         n_pts = len(points)
         landmarks_idx = np.random.choice(n_pts, n_landmarks, replace=False)
-        distances = cdist(points, points[landmarks_idx])  # Shape: (N, L)
-        
-        simplices = [(i,) for i in range(n_landmarks)]
-        
-        # True Witness Complex relaxed 1-skeleton
-        m_dist = np.min(distances, axis=1) # Closest landmark distance for each point
-        alpha_val = float(alpha) if alpha is not None else 0.0
-        
-        # Boolean mask of valid witness associations
-        valid_witnesses = distances <= (m_dist[:, None] + alpha_val)
-        
-        for i in range(n_landmarks):
-            for j in range(i + 1, n_landmarks):
-                # Edge (i,j) exists if any point witnesses both L_i and L_j
-                if np.any(valid_witnesses[:, i] & valid_witnesses[:, j]):
-                    simplices.append((i, j))
+        from ..bridge.julia_bridge import julia_engine
+        simplices = None
+        if julia_engine.available:
+            try:
+                alpha_val = float(alpha) if alpha is not None else 0.0
+                simplices = julia_engine.compute_witness_complex_simplices(points, landmarks_idx, alpha_val, max_dimension)
+            except Exception:
+                pass
+                
+        if simplices is None:
+            # Python Fallback
+            distances = cdist(points, points[landmarks_idx])
+            m_dist = np.min(distances, axis=1)
+            alpha_val = float(alpha) if alpha is not None else 0.0
+            valid_witnesses = (distances <= (m_dist[:, None] + alpha_val)).astype(np.int8)
+            shared = valid_witnesses.T @ valid_witnesses
+            rows, cols = np.nonzero(np.triu(shared, k=1))
+            simplices = [(i,) for i in range(n_landmarks)] + [
+                (int(r), int(c)) for r, c in zip(rows, cols)
+            ]
 
         sc = cls.from_simplices(simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
         if max_dimension > 1:
@@ -1529,66 +2241,158 @@ class SimplicialComplex(BaseModel):
 
     @property
     def simplices_field(self) -> Dict[int, List[Tuple[int, ...]]]:
+        """Return the dictionary of simplices grouped by dimension.
+
+        Returns:
+            Dictionary mapping dimension to list of simplices.
+        """
         return self._simplices_table
 
     @property
     def simplices_dict(self) -> Dict[int, List[Tuple[int, ...]]]:
-        """Alias for simplices_field used in some legacy tests."""
+        """Alias for simplices_field used in some legacy tests.
+
+        Returns:
+            Dictionary mapping dimension to list of simplices.
+        """
         return self._simplices_table
 
     @property
     def dimensions(self) -> List[int]:
+        """Return the list of dimensions present in the complex.
+
+        Returns:
+            Sorted list of dimensions.
+        """
         return sorted(list(self._simplices_table.keys()))
 
     @property
     def dimension(self) -> int:
+        """Return the maximum dimension of the complex.
+
+        Returns:
+            Maximum dimension or -1 if empty.
+        """
         return max(self.dimensions) if self.dimensions else -1
 
     def count_simplices(self, d: int) -> int:
+        """Return the number of simplices in dimension d.
+
+        Args:
+            d: Dimension.
+
+        Returns:
+            Number of d-simplices.
+        """
         return len(self._simplices_table.get(int(d), []))
 
     @property
     def cells(self) -> Dict[int, int]:
+        """Return a dictionary mapping dimension to simplex count.
+
+        Returns:
+            Dictionary of simplex counts.
+        """
         return {d: self.count_simplices(d) for d in self.dimensions}
 
     @property
     def attaching_maps(self) -> Dict[int, csr_matrix]:
+        """Return all boundary matrices for the complex.
+
+        Returns:
+            Dictionary mapping dimension to boundary matrix.
+        """
         return self.boundary_matrices()
 
     def n_simplices(self, d: int) -> List[Tuple[int, ...]]:
+        """Return the list of simplices in dimension d.
+
+        Args:
+            d: Dimension.
+
+        Returns:
+            List of d-simplices.
+        """
         return self._simplices_table.get(int(d), [])
 
-    def star(self, simplex: Iterable[int]) -> Set[Tuple[int, ...]]:
+    def _get_coface_map(self) -> Dict[int, Set[Tuple[int, ...]]]:
+        """Return a mapping from vertex to all simplices containing it.
+
+        Returns:
+            Dict[int, Set[Tuple[int, ...]]]: Vertex-to-simplices map.
         """
-        Compute the star of a simplex: all simplices in the complex that contain it.
+        key = ("simplicial", "coface_map")
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
         
+        coface_map = defaultdict(set)
+        for d in self.dimensions:
+            for simplex in self.n_simplices(d):
+                for v in simplex:
+                    coface_map[v].add(simplex)
+        
+        self._cache_set(key, dict(coface_map))
+        return dict(coface_map)
+
+    def star(self, simplex: Iterable[int]) -> Set[Tuple[int, ...]]:
+        """Compute the star of a simplex: all simplices in the complex that contain it.
+
         The star St(σ) is the set of all simplices τ such that σ ⊆ τ.
-        Note that St(σ) is generally NOT a subcomplex (it is not closed under faces).
+        Uses an optimized coface map for O(Local Star) complexity.
+
+        Args:
+            simplex: The simplex σ as an iterable of vertices.
+
+        Returns:
+            A set of simplices τ in the star.
         """
         sigma = _normalize_simplex(simplex)
         sigma_set = set(sigma)
-        star = set()
-        for d in self.dimensions:
-            if d < len(sigma) - 1:
-                continue
-            for tau in self.n_simplices(d):
-                if sigma_set.issubset(tau):
-                    star.add(tau)
+        if not sigma:
+            return set()
+            
+        coface_map = self._get_coface_map()
+        # The star of sigma must be a subset of the intersection of cofaces of its vertices
+        potential_tau = None
+        for v in sigma:
+            v_cofaces = coface_map.get(v, set())
+            if potential_tau is None:
+                potential_tau = v_cofaces.copy()
+            else:
+                potential_tau &= v_cofaces
+            if not potential_tau:
+                break
+                
+        if not potential_tau:
+            return set()
+            
+        star = {tau for tau in potential_tau if sigma_set.issubset(tau)}
         return star
 
     def closed_star(self, simplex: Iterable[int]) -> "SimplicialComplex":
-        """
-        Compute the closed star of a simplex: the smallest subcomplex containing its star.
+        """Compute the closed star of a simplex: the smallest subcomplex containing its star.
+
+        Args:
+            simplex: The simplex as an iterable of vertices.
+
+        Returns:
+            A SimplicialComplex representing the closed star.
         """
         star_simplices = self.star(simplex)
         return SimplicialComplex.from_simplices(star_simplices, coefficient_ring=self.coefficient_ring, close_under_faces=True)
 
     def link(self, simplex: Iterable[int]) -> "SimplicialComplex":
-        """
-        Compute the link of a simplex: Lk(σ) = {τ ∈ Cl(St(σ)) : τ ∩ σ = ∅}.
-        
-        The link is the "boundary" of the star, consisting of all faces of simplices 
+        """Compute the link of a simplex: Lk(σ) = {τ ∈ Cl(St(σ)) : τ ∩ σ = ∅}.
+
+        The link is the "boundary" of the star, consisting of all faces of simplices
         in the star that do not intersect the given simplex.
+
+        Args:
+            simplex: The simplex σ as an iterable of vertices.
+
+        Returns:
+            A SimplicialComplex representing the link.
         """
         sigma = _normalize_simplex(simplex)
         sigma_set = set(sigma)
@@ -1606,24 +2410,42 @@ class SimplicialComplex(BaseModel):
                 link_simplices.add(face_candidates)
         
         # link_simplices contains the maximal simplices of the link. 
-        # SimplicialComplex.from_simplices with close_under_faces=True will complete it.
+        # Since the parent complex is already closed, the link is also closed
+        # if we include all faces. from_simplices will organize them.
         return SimplicialComplex.from_simplices(link_simplices, coefficient_ring=self.coefficient_ring, close_under_faces=True)
 
     def simplex_to_index(self, d: int) -> Dict[Tuple[int, ...], int]:
+        """Map each d-simplex to its index in the ordered simplex list.
+
+        Args:
+            d: Simplex dimension.
+
+        Returns:
+            Dictionary mapping simplex tuple to its integer index.
+        """
         key = ("simplicial", "simplex_to_index", int(d))
         cached = self._cache_get(key)
         if cached is not None:
             return cached
-        out = {simplex: idx for idx, simplex in enumerate(self.n_simplices(d))}
-        self._cache_set(key, out)
-        return out
+            
+        mapping = {s: i for i, s in enumerate(self.n_simplices(d))}
+        self._cache_set(key, mapping)
+        return mapping
 
     def f_vector(self) -> dict[int, int]:
-        """Return the f-vector as a dimension-to-simplex-count dictionary."""
+        """Return the f-vector of the complex.
+
+        Returns:
+            dict[int, int]: Dictionary mapping dimension to simplex count.
+        """
         return {d: self.count_simplices(d) for d in self.dimensions}
 
     def euler_characteristic(self) -> int:
-        """Return the Euler characteristic chi = sum (-1)^i f_i."""
+        """Return the Euler characteristic of the complex.
+
+        Returns:
+            int: Euler characteristic chi = sum (-1)^i f_i.
+        """
         chi = 0
         for d in self.dimensions:
             count = self.count_simplices(d)
@@ -1634,7 +2456,11 @@ class SimplicialComplex(BaseModel):
         return chi
 
     def is_closed_under_faces(self) -> bool:
-        """Check whether all codimension-1 faces are present in the table."""
+        """Check whether the complex is closed under taking faces.
+
+        Returns:
+            bool: True if all codimension-1 faces of every simplex are present, False otherwise.
+        """
         key = ("simplicial", "is_closed_under_faces")
         cached = self._cache_get(key)
         if cached is not None:
@@ -1652,15 +2478,19 @@ class SimplicialComplex(BaseModel):
         return True
 
     def verify_structure(self) -> Dict[str, Any]:
-        """
-        Comprehensive mathematical validity check for the simplicial complex.
+        """Comprehensive mathematical validity check for the simplicial complex.
         
         Verifies:
         1. Downward Closure: Every face of every simplex is in the complex.
         2. Orientation Consistency: All simplices are stored in canonical (sorted) order.
         3. Boundary of Boundary: Composition of consecutive boundary operators is zero (d^2 = 0).
+        4. No Gap Dimensions: No intermediate dimensions are missing (e.g., has 0 and 2 but no 1).
+
+        Returns:
+            Dict[str, Any]: A dictionary containing validity status and detailed issues.
         """
         issues = []
+        dims = sorted(self.dimensions)
         
         # 1. & 2. Closure and Orientation
         is_closed = self.is_closed_under_faces()
@@ -1669,36 +2499,43 @@ class SimplicialComplex(BaseModel):
             
         for dim, simplices in self.simplices_field.items():
             for s in simplices:
-                if list(s) != sorted(s):
-                    issues.append(f"Orientation inconsistency: simplex {s} is not in canonical sorted order.")
+                if list(s) != sorted(set(s)):
+                    issues.append(f"Orientation inconsistency: simplex {s} is not in canonical sorted order or has duplicates.")
                     break
         
         # 3. d^2 = 0
-        dims = sorted(self.dimensions)
         for d in dims:
             if d <= 1:
                 continue
-            # d_d : C_d -> C_{d-1}
-            # d_{d-1} : C_{d-1} -> C_{d-2}
             mat_d = self.boundary_matrix(d)
             mat_dm1 = self.boundary_matrix(d - 1)
             
             if mat_d.nnz > 0 and mat_dm1.nnz > 0:
                 prod = mat_dm1 @ mat_d
                 if prod.nnz > 0:
-                    # Check if actually non-zero (avoid float noise, though these are ints)
                     if np.any(prod.data != 0):
                         issues.append(f"Boundary consistency failure: d_{d-1} * d_{d} != 0 at dimension {d}.")
+
+        # 4. Gap Dimensions
+        if dims:
+            for d in range(dims[0], dims[-1] + 1):
+                if d not in self.simplices_field:
+                    issues.append(f"Gap dimension failure: dimension {d} is missing.")
 
         return {
             "valid": len(issues) == 0,
             "issues": issues,
             "is_closed": is_closed,
-            "is_canonical": all(list(s) == sorted(s) for simps in self.simplices_field.values() for s in simps),
+            "is_canonical": all(list(s) == sorted(set(s)) for simps in self.simplices_field.values() for s in simps),
+            "has_gaps": any("Gap dimension" in issue for issue in issues)
         }
 
     def hasse_edges(self) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
-        """Return the codimension-one relations of the Hasse diagram."""
+        """Return the codimension-one relations of the Hasse diagram.
+
+        Returns:
+            list[tuple[tuple[int, ...], tuple[int, ...]]]: List of (face, simplex) tuples representing Hasse edges.
+        """
         key = ("simplicial", "hasse_edges")
         cached = self._cache_get(key)
         if cached is not None:
@@ -1716,7 +2553,14 @@ class SimplicialComplex(BaseModel):
         return edges
 
     def boundary_matrix(self, d: int) -> csr_matrix:
-        """Return the boundary matrix d_d."""
+        """Return the boundary matrix d_d.
+
+        Args:
+            d: Dimension of the simplices to compute boundaries for.
+
+        Returns:
+            csr_matrix: The sparse boundary matrix in CSR format.
+        """
         key = ("simplicial", "boundary_matrix", int(d))
         cached = self._cache_get(key)
         if cached is not None:
@@ -1726,43 +2570,70 @@ class SimplicialComplex(BaseModel):
         if hasattr(self, "_boundaries_cache") and d in self._boundaries_cache:
             return self._boundaries_cache[d]
 
-        mat = _boundary_matrix_from_simplices(self.n_simplices(d), self.n_simplices(d - 1))
+        mat = _boundary_matrix_from_simplices_with_maps(self.n_simplices(d), self.simplex_to_index(d - 1))
         self._cache_set(key, mat)
         return mat
 
     def homology(
         self, n: int | None = None
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
-        """Compute the homology of the simplicial complex."""
+        """Compute the homology of the simplicial complex.
+
+        Args:
+            n: Optional homological degree to compute. If None, computes for all degrees.
+
+        Returns:
+            If n is provided: A tuple (rank, torsion).
+            If n is None: A dictionary mapping degree to (rank, torsion).
+        """
         return self.cellular_chain_complex().homology(n)
 
     def cohomology(
         self, n: int | None = None
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
-        """Compute the cohomology of the simplicial complex."""
+        """Compute the cohomology of the simplicial complex.
+
+        Args:
+            n: Optional homological degree to compute. If None, computes for all degrees.
+
+        Returns:
+            If n is provided: A tuple (rank, torsion).
+            If n is None: A dictionary mapping degree to (rank, torsion).
+        """
         return self.cellular_chain_complex().cohomology(n)
 
     def cohomology_basis(self, n: int) -> list[np.ndarray]:
-        """Compute a basis for the n-th cohomology group."""
+        """Compute a basis for the n-th cohomology group.
+
+        Args:
+            n: Degree.
+
+        Returns:
+            list[np.ndarray]: List of cochain vectors forming a basis.
+        """
         return self.cellular_chain_complex().cohomology_basis(n)
 
     def reduced_homology(
         self, n: int | None = None
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
-        """
-        Compute the reduced homology groups \tilde{H}_n(K).
+        r"""Compute the reduced homology groups \tilde{H}_n(K).
         
         \tilde{H}_n(K) is isomorphic to H_n(K) for n > 0.
         For n = 0, \tilde{H}_0(K) is the free group of rank (Betti_0 - 1).
         If the complex is empty, \tilde{H}_{-1}(\emptyset) = Z.
+
+        Args:
+            n: Optional homological degree to compute. If None, returns all degrees.
+
+        Returns:
+            If n is provided: A tuple (rank, torsion).
+            If n is None: A dictionary mapping degree to (rank, torsion).
         """
         h = self.homology()
         if not isinstance(h, dict):
-            # This should not happen with homology() call, but for safety:
-            h = {i: self.homology(i) for i in range(self.dimension + 1)}
+            h = {i: self.homology(i) for i in self._homological_dimensions()}
             
         rh = {}
-        # H_k = \tilde{H}_k for k > 0
         for k, (rank, torsion) in h.items():
             if k > 0:
                 rh[k] = (rank, torsion)
@@ -1770,27 +2641,32 @@ class SimplicialComplex(BaseModel):
                 rh[0] = (max(0, rank - 1), torsion)
         
         if n is not None:
+            n = int(n)
             if n < -1:
                 return (0, [])
             if n == -1:
-                # \tilde{H}_{-1} is Z only if the complex is empty
+                # Standard convention: reduced homology of empty complex is Z at degree -1
                 return (1, []) if not self.dimensions else (0, [])
             return rh.get(n, (0, []))
         
+        # If the complex is empty, explicitly include H_{-1} = Z
+        if not self.dimensions:
+            rh[-1] = (1, [])
+            
         return rh
 
     def is_homology_manifold(self) -> tuple[bool, int | None, dict[int, str]]:
-        """
-        Check if the simplicial complex is a homology manifold (potentially with boundary).
+        r"""Check if the simplicial complex is a homology manifold (potentially with boundary).
         
         A complex is a d-dimensional homology manifold if for every vertex v:
         - \tilde{H}_*(Lk(v)) \cong \tilde{H}_*(S^{d-1}) (interior vertex)
         - \tilde{H}_*(Lk(v)) \cong \tilde{H}_*(D^{d-1}) \cong 0 (boundary vertex)
         
         Returns:
-            is_manifold: bool
-            dimension: int | None (the detected intrinsic dimension)
-            diagnostics: dict[int, str] mapping vertex ID to failure reason
+            tuple: A tuple containing:
+                - is_manifold (bool): True if it's a homology manifold.
+                - dimension (int | None): The detected intrinsic dimension.
+                - diagnostics (dict[int, str]): Mapping vertex ID to failure reason.
         """
         if julia_engine.available:
             try:
@@ -1799,6 +2675,8 @@ class SimplicialComplex(BaseModel):
                 for d in self.dimensions:
                     all_simplices.extend(self.n_simplices(d))
                 return julia_engine.is_homology_manifold_jl(all_simplices, self.dimension)
+            except (MemoryError, KeyboardInterrupt):
+                raise
             except Exception as e:
                 import warnings
                 warnings.warn(f"Julia is_homology_manifold failed ({e!r}). Falling back to pure Python.")
@@ -1810,33 +2688,29 @@ class SimplicialComplex(BaseModel):
         local_dims = {}
         diagnostics = {}
         
-        for v in vertices:
+        def _check_vertex(v):
             lk = self.link((v,))
             rh = lk.reduced_homology()
-            
             # Filter non-zero reduced homology groups
-            non_zero = {k: v for k, v in rh.items() if v[0] > 0 or v[1]}
+            non_zero = {k: val for k, val in rh.items() if val[0] > 0 or val[1]}
             
             if not non_zero:
-                # Potentially a boundary vertex of a d-manifold, or a vertex of a 0-manifold (link is empty)
-                if not lk.dimensions:
-                    # Link of a vertex in a 0-manifold is empty. \tilde{H}_{-1} is Z.
-                    # But our reduced_homology() doesn't return -1 in the dict.
-                    local_dims[v] = 0
-                else:
-                    # Acyclic link. This happens for boundary vertices. 
-                    # We can't determine d from an acyclic link alone, it must be consistent with others.
-                    local_dims[v] = None 
+                return v, None, None
             elif len(non_zero) == 1:
                 k = list(non_zero.keys())[0]
                 rank, torsion = non_zero[k]
                 if rank == 1 and not torsion:
-                    # Link has homology of S^k, so it's a local (k+1)-manifold
-                    local_dims[v] = k + 1
+                    return v, k + 1, None
                 else:
-                    diagnostics[v] = f"Link has non-sphere homology at degree {k}: rank={rank}, torsion={torsion}"
+                    return v, None, f"Link has non-sphere homology at degree {k}: rank={rank}, torsion={torsion}"
             else:
-                diagnostics[v] = f"Link has multiple non-zero homology groups: {list(non_zero.keys())}"
+                return v, None, f"Link has multiple non-zero homology groups: {list(non_zero.keys())}"
+
+        with ThreadPoolExecutor() as executor:
+            for v, dim_val, diag in executor.map(_check_vertex, vertices):
+                if diag:
+                    diagnostics[v] = diag
+                local_dims[v] = dim_val
                 
         # Determine global dimension from non-None local estimates
         detected_dims = {d for d in local_dims.values() if d is not None}
@@ -1869,11 +2743,22 @@ class SimplicialComplex(BaseModel):
         return True, d, {}
 
     def boundary_matrices(self) -> Dict[int, csr_matrix]:
-        """Return all boundary matrices for the complex."""
+        """Return all boundary matrices for the complex.
+
+        Returns:
+            Dict[int, csr_matrix]: Dictionary mapping dimension to boundary matrix.
+        """
         return {d: self.boundary_matrix(d) for d in range(1, self.dimension + 1)}
 
     def chain_complex(self, coefficient_ring: str | None = None) -> ChainComplex:
-        """Return the chain complex C_*(X) over the specified ring."""
+        """Return the chain complex C_*(X) over the specified ring.
+
+        Args:
+            coefficient_ring: Optional coefficient ring label.
+
+        Returns:
+            ChainComplex: The resulting chain complex instance.
+        """
         ring = coefficient_ring if coefficient_ring is not None else self.coefficient_ring
         _parse_coefficient_ring(ring)
         key = ("simplicial", "chain_complex", ring)
@@ -1899,17 +2784,26 @@ class SimplicialComplex(BaseModel):
         return out
 
     def cellular_chain_complex(self, *, coefficient_ring: str | None = None) -> ChainComplex:
-        """Alias for `chain_complex` for compatibility with cellular workflows."""
+        """Alias for `chain_complex` for compatibility with cellular workflows.
+
+        Args:
+            coefficient_ring: Optional coefficient ring label.
+
+        Returns:
+            ChainComplex: The resulting chain complex instance.
+        """
         return self.chain_complex(coefficient_ring=coefficient_ring)
 
     def to_cw_complex(self) -> "CWComplex":
-        """Converts the simplicial complex to a CWComplex."""
+        """Converts the simplicial complex to a CWComplex.
+
+        Returns:
+            CWComplex: The resulting CW complex.
+        """
         return CWComplex.from_simplicial_complex(self)
 
     def expand(self, max_dim: int | None = None) -> "SimplicialComplex":
-        """
-        Expands the simplicial complex into a Flag Complex (Clique Complex)
-        up to the given maximum dimension.
+        """Expands the simplicial complex into a Flag Complex (Clique Complex).
         
         This adds all cliques of size up to max_dim + 1 as simplices.
         Commonly used after skeleton-only algorithms like quick_mapper.
@@ -1918,6 +2812,9 @@ class SimplicialComplex(BaseModel):
             max_dim: The maximum dimension of simplices to include.
                      If None, defaults to the maximum dimension of the space 
                      (number of vertices - 1).
+
+        Returns:
+            SimplicialComplex: The expanded flag complex.
         """
         from ..bridge.julia_bridge import julia_engine
         import scipy.sparse as sp
@@ -1972,7 +2869,7 @@ class SimplicialComplex(BaseModel):
             except Exception as e:
                 warnings.warn(f"Julia clique expansion failed: {e}. Falling back to Python.")
 
-        # 3. Python Fallback (Recursive clique expansion)
+        # 3. Python Fallback (Bron-Kerbosch with pivoting)
         adj_dict = {v: set() for v in vertices}
         for u, v in edges:
             adj_dict[u].add(v)
@@ -1980,19 +2877,26 @@ class SimplicialComplex(BaseModel):
             
         all_cliques = []
         
-        def find_cliques(current_clique, candidates):
-            all_cliques.append(tuple(sorted(current_clique)))
-            if len(current_clique) > max_dim:
+        def bron_kerbosch_pivot(r, p, x):
+            if not p and not x:
+                if r:
+                    all_cliques.append(tuple(sorted(r)))
+                return
+            if not p:
                 return
             
-            for i, v in enumerate(candidates):
-                new_candidates = [w for w in candidates[i+1:] if w in adj_dict[v]]
-                find_cliques(current_clique + [v], new_candidates)
-                
-        find_cliques([], sorted(vertices))
-        # Remove empty clique
-        if all_cliques and not all_cliques[0]:
-            all_cliques.pop(0)
+            # Choose pivot as vertex in P U X with max degree in P
+            u = max(p | x, key=lambda v: len(adj_dict[v] & p))
+            for v in list(p - adj_dict[u]):
+                if len(r) < max_dim:
+                    bron_kerbosch_pivot(r | {v}, p & adj_dict[v], x & adj_dict[v])
+                else:
+                    # If we reached max_dim, r|{v} is a maximal-allowed clique
+                    all_cliques.append(tuple(sorted(r | {v})))
+                p.remove(v)
+                x.add(v)
+
+        bron_kerbosch_pivot(set(), set(vertices), set())
             
         return self.__class__.from_simplices(
             all_cliques,
@@ -2000,239 +2904,310 @@ class SimplicialComplex(BaseModel):
             close_under_faces=True
         )
 
+    def simplify(self) -> tuple["SimplicialComplex", dict[tuple, list[tuple]]]:
+        """Simplify the simplicial complex into a smaller homotopy equivalent one.
+        
+        This method performs a rigorous topological reduction using iterative edge 
+        contractions gated by the Link Condition: Lk(u) ∩ Lk(v) == Lk(uv). 
+        It is guaranteed to reduce the complex size while strictly preserving 
+        the homotopy type, Betti numbers, and fundamental group.
+
+        Returns:
+            tuple: (simplified_complex, simplex_map)
+        """
+        from collections import defaultdict
+        import numpy as np
+        from ..bridge.julia_bridge import julia_engine
+
+        if julia_engine.available:
+            try:
+                # 1. Pass raw simplices to Julia and let it handle skeletal closure efficiently
+                raw_simplices = []
+                for d in self.dimensions:
+                    raw_simplices.extend(self.n_simplices(d))
+                    
+                out_simplices, v_map_orig, s_map_raw = julia_engine.simplify_jl(raw_simplices)
+                
+                new_complex = SimplicialComplex.from_simplices(
+                    out_simplices, 
+                    close_under_faces=True,
+                    coefficient_ring=self.coefficient_ring
+                )
+                
+                if hasattr(self, "_coordinates") and self._coordinates is not None:
+                     old_coords = self._coordinates
+                     n_v_new = len(v_map_orig)
+                     new_coords = np.zeros((n_v_new, old_coords.shape[1]))
+                     for new_v, old_vs in v_map_orig.items():
+                         new_coords[new_v] = np.mean(old_coords[old_vs], axis=0)
+                     new_complex._coordinates = new_coords
+                     
+                return new_complex, s_map_raw
+            except Exception as e:
+                import warnings
+                warnings.warn(f"Julia Simplify failed ({e!r}). Falling back to pure Python.")
+        
+        # --- Python Fallback (Link Condition Contraction) ---
+        # 1. Prepare skeletal closure in Python
+        all_simplices_set = set()
+        for d in self.dimensions:
+            for simp in self.n_simplices(d):
+                s = tuple(sorted(simp))
+                for i in range(1, 1 << len(s)):
+                    subface = tuple(sorted(s[j] for j in range(len(s)) if (i >> j) & 1))
+                    all_simplices_set.add(subface)
+        
+        all_simplices = list(all_simplices_set)
+
+        V_orig = sorted([s[0] for s in all_simplices if len(s) == 1])
+        parent = {v: v for v in V_orig}
+
+        def find(i):
+            if parent[i] == i:
+                return i
+            parent[i] = find(parent[i])
+            return parent[i]
+
+        def union(i, j):
+            root_i, root_j = find(i), find(j)
+            if root_i != root_j:
+                parent[root_j] = root_i
+                return True
+            return False
+
+        current_simplices = set(all_simplices)
+
+        any_change = True
+        while any_change:
+            any_change = False
+
+            # Build coface map for fast link lookups
+            coface_map = defaultdict(list)
+            for s in current_simplices:
+                for v in s:
+                    coface_map[v].append(s)
+
+            def get_link_fast(sigma):
+                sigma_set = set(sigma)
+                candidate_simplices = None
+                for v in sigma:
+                    if v not in coface_map:
+                        return set()
+                    if candidate_simplices is None:
+                        candidate_simplices = set(coface_map[v])
+                    else:
+                        candidate_simplices.intersection_update(coface_map[v])
+                        if not candidate_simplices:
+                            return set()
+
+                link = set()
+                for s in candidate_simplices:
+                    s_set = set(s)
+                    if not (sigma_set & s_set) and tuple(sorted(sigma_set | s_set)) in current_simplices:
+                        link.add(s)
+                return link
+
+            edges = [s for s in current_simplices if len(s) == 2]
+            edges.sort()
+
+            for u, v in edges:
+                # Check Link Condition for homotopy equivalence
+                lk_u = get_link_fast((u,))
+                lk_v = get_link_fast((v,))
+                lk_uv = get_link_fast((u, v))
+
+                if (lk_u & lk_v) == lk_uv:
+                    union(u, v)
+                    new_simplices = set()
+                    for s in current_simplices:
+                        new_s = tuple(sorted(set(u if x == v else x for x in s)))
+                        if new_s:
+                            new_simplices.add(new_s)
+                    current_simplices = new_simplices
+                    any_change = True
+                    break
+
+        final_roots = sorted(list(set(find(v) for v in V_orig)))
+        root_to_new = {root: i for i, root in enumerate(final_roots)}
+        def map_vertex(v):
+            return root_to_new[find(v)]
+
+        final_simplices, final_s_map = set(), defaultdict(list)
+        for orig_s in all_simplices:
+            mapped_s = tuple(sorted(set(map_vertex(v) for v in orig_s)))
+            final_simplices.add(mapped_s)
+            final_s_map[mapped_s].append(orig_s)
+
+        sc_qm = self.__class__.from_simplices(
+            list(final_simplices), 
+            close_under_faces=True, 
+            coefficient_ring=self.coefficient_ring
+        )
+
+        if hasattr(self, "_coordinates") and self._coordinates is not None:
+            old_coords = self._coordinates
+            new_coords = np.zeros((len(final_roots), old_coords.shape[1]))
+            new_v_to_orig_vs = defaultdict(list)
+            for v_orig in V_orig:
+                new_v_to_orig_vs[map_vertex(v_orig)].append(v_orig)
+            for new_v, orig_vs in new_v_to_orig_vs.items():
+                new_coords[new_v] = np.mean(old_coords[orig_vs], axis=0)
+            sc_qm._coordinates = new_coords
+
+        return sc_qm, dict(final_s_map)
+
     def quick_mapper(
         self,
         max_loops: int = 1,
         min_modularity_gain: float = 1e-6,
-        preserve_topology: bool = True,
-        ) -> tuple["SimplicialComplex", dict[int, int]]:
-        """
-        Simplify the simplicial complex while reducing simplices, using modularity-based vertex merging.
+    ) -> tuple["SimplicialComplex", dict[tuple, list[tuple]]]:
+        """Simplify the complex using modularity-based vertex merging (Liu-Xie-Yi 2012).
+        
+        This method uses a fast label propagation algorithm to group vertices into 
+        communities and merge them. Note that this process does NOT preserve topology 
+        and is intended for high-performance structural summarization of large data.
 
-        If `preserve_topology=True`, the algorithm performs iterative edge contractions strictly 
-        gated by the Link Condition: `Lk(u) ∩ Lk(v) ⊆ Lk(uv)`.
-
-        Topological Guarantees (`preserve_topology=True`):
-            1. Homotopy Equivalence: The resulting simplified complex is guaranteed to be 
-               homotopy equivalent (specifically, a simple homotopy equivalence via strong 
-               deformation retraction; Whitehead, 1939) to the original complex.
-            2. Non-Homeomorphic in General: The algorithm does NOT guarantee homeomorphism or 
-               isotopy for general simplicial complexes. Because edge contractions can alter the 
-               intrinsic dimension, the underlying space might not be locally homeomorphic to the original.
-            3. PL-Homeomorphism for Manifolds: An exception exists for closed combinatorial 
-               manifolds (e.g., triangulated closed surfaces without boundaries). In this specific 
-               regime, an edge contraction satisfying the Link Condition is a valid stellar exchange, 
-               thus preserving Piecewise Linear (PL) homeomorphism.
-
-        Preserved Invariants:
-            - Homotopy type
-            - Homology and Cohomology groups (Betti numbers H_k, torsion coefficients)
-            - Cohomology ring structure (Cup products)
-            - Fundamental group (pi_1)
-            - Euler characteristic (chi)
-            - K-theory groups
-
-        Not Generally Preserved Invariants (unless a closed manifold):
-            - Homeomorphism and Diffeomorphism classes
-            - Isotopy class / Ambient embeddings
-            - Intrinsic local/global dimension
-            - Intersection forms (which rely on rigid dimensional transversality)
+        Args:
+            max_loops: Maximum number of label propagation iterations.
+            min_modularity_gain: Minimum gain required to continue iterations.
 
         Returns:
-            A tuple (simplified_complex, vertex_map) where:
-            - simplified_complex: A SimplicialComplex with contiguous vertex indices [0, N-1].
-            - vertex_map: A dictionary mapping the new vertex indices to their original IDs.
+            tuple: (simplified_complex, simplex_map)
         """
-        import random
         from collections import defaultdict
-        
+        import random
+        import numpy as np
+        from ..bridge.julia_bridge import julia_engine
+
         V = [v[0] for v in self.n_simplices(0)]
         E = self.n_simplices(1)
         
-        from ..bridge.julia_bridge import julia_engine
-        
-        if preserve_topology:
-            mapped_simplices = set()
-            for d in self.dimensions:
-                for simp in self.n_simplices(d):
-                    mapped_simplices.add(tuple(sorted(simp)))
-                    
-            if julia_engine.available:
-                try:
-                    simplices_list = [list(s) for s in mapped_simplices]
-                    out_simplices, L_map = julia_engine.quick_mapper_topology_jl(
-                        simplices_list, max_loops, min_modularity_gain
-                    )
-                    
-                    unique_nodes = sorted(list(set(L_map.values())))
-                    new_to_old = {new: old for new, old in enumerate(unique_nodes)}
-                    old_to_new = {old: new for new, old in enumerate(unique_nodes)}
-                    
-                    renormalized_simplices = {
-                        tuple(sorted(old_to_new[v] for v in s)) for s in out_simplices
-                    }
-                    
-                    new_complex = SimplicialComplex.from_simplices(renormalized_simplices, close_under_faces=True,
-                                                                   coefficient_ring=self.coefficient_ring)
-                    return new_complex, new_to_old
-                except Exception as e:
-                    import warnings
-                    warnings.warn(f"Julia QuickMapper (Topology) failed ({e!r}). Falling back to pure Python.")
-                    
-            # Mathematically accurate edge contraction preserving topology (Link Condition)
-            L = {v: v for v in V}
-            any_change = True
-            loops = 0
+        if not V:
+            return self, {}
             
-            while any_change and loops < max_loops:
-                any_change = False
-                loops += 1
-                
-                v_simps = defaultdict(list)
-                for simp in mapped_simplices:
-                    for v in simp:
-                        v_simps[v].append(simp)
-                        
-                current_edges = [simp for simp in mapped_simplices if len(simp) == 2]
-                if not current_edges:
-                    break
-                    
-                degrees = defaultdict(int)
-                for u, v in current_edges:
-                    degrees[u] += 1
-                    degrees[v] += 1
-                m = len(current_edges)
-                two_m_sq = (2.0 * m) ** 2
-                
-                edge_gains = []
-                for u, v in current_edges:
-                    gain = (1.0 / m) - (degrees[u] * degrees[v]) / two_m_sq
-                    edge_gains.append((gain, (u, v)))
-                    
-                edge_gains.sort(key=lambda x: (x[0], random.random()), reverse=True)
-                
-                for gain, (u, v) in edge_gains:
-                    if gain <= min_modularity_gain:
-                        continue
-                        
-                    # Check Link Condition for edge (u, v)
-                    lk_u = set()
-                    lk_v = set()
-                    lk_uv = set()
-                    
-                    for simp in v_simps[u]:
-                        if v in simp:
-                            lk_uv.add(tuple(x for x in simp if x != u and x != v))
-                        else:
-                            lk_u.add(tuple(x for x in simp if x != u))
-                            
-                    for simp in v_simps[v]:
-                        if u not in simp:
-                            lk_v.add(tuple(x for x in simp if x != v))
-                            
-                    if lk_u.intersection(lk_v).issubset(lk_uv):
-                        # Link Condition satisfied! We can contract v into u
-                        new_mapped = set()
-                        for simp in mapped_simplices:
-                            new_simp = tuple(sorted(set(x if x != v else u for x in simp)))
-                            if len(new_simp) > 0:
-                                new_mapped.add(new_simp)
-                        mapped_simplices = new_mapped
-                        
-                        for orig_v, curr_v in L.items():
-                            if curr_v == v:
-                                L[orig_v] = u
-                                
-                        any_change = True
-                        break # Rebuild index and try again
-                        
-            unique_nodes = sorted(list(set(L.values())))
-            new_to_old = {new: old for new, old in enumerate(unique_nodes)}
-            old_to_new = {old: new for new, old in enumerate(unique_nodes)}
-            
-            renormalized_simplices = {
-                tuple(sorted(old_to_new[v] for v in s)) for s in mapped_simplices
-            }
-            
-            new_complex = SimplicialComplex.from_simplices(renormalized_simplices, close_under_faces=True,
-                                                           coefficient_ring=self.coefficient_ring)
-            return new_complex, new_to_old
-        
-        # --- Modularity-based approach (preserve_topology=False) ---
-        G_raw = {"V": V, "E": E}
-        
         if julia_engine.available:
             try:
-                G_simple, L_map = julia_engine.quick_mapper_jl(
-                    G_raw, max_loops, min_modularity_gain
+                G_raw = {"V": V, "E": E}
+                G_simple, L_dict = julia_engine.quick_mapper_jl(G_raw, max_loops, min_modularity_gain)
+                
+                # Julia already returned normalized L_dict (old_v -> 0..N-1)
+                L_remapped = L_dict
+                n_v_new = len(set(L_dict.values()))
+                
+                s_map = defaultdict(list)
+                new_simplices = set()
+                
+                for d in self.dimensions:
+                    for simp in self.n_simplices(d):
+                        new_simp = tuple(sorted(set(L_remapped[v] for v in simp)))
+                        if new_simp:
+                            new_simplices.add(new_simp)
+                            s_map[new_simp].append(simp)
+                            
+                new_complex = SimplicialComplex.from_simplices(
+                    list(new_simplices), 
+                    close_under_faces=True,
+                    coefficient_ring=self.coefficient_ring
                 )
                 
-                raw_mapped_simplices = set()
-                for s in G_simple["E"]:
-                    raw_mapped_simplices.add(tuple(sorted(s)))
-                    
-                unique_representatives = sorted(list(set(node for s in raw_mapped_simplices for node in s)))
-                new_to_old = {new: old for new, old in enumerate(unique_representatives)}
-                old_to_new = {old: new for new, old in enumerate(unique_representatives)}
-                
-                renormalized_simplices = {
-                    tuple(sorted(old_to_new[v] for v in s)) for s in raw_mapped_simplices
-                }
-                
-                new_complex = SimplicialComplex.from_simplices(renormalized_simplices, close_under_faces=True,
-                                                               coefficient_ring=self.coefficient_ring)
-                return new_complex, new_to_old
+                if hasattr(self, "_coordinates") and self._coordinates is not None:
+                     old_coords = self._coordinates
+                     new_coords = np.zeros((n_v_new, old_coords.shape[1]))
+                     v_groups = defaultdict(list)
+                     for old_v, new_v in L_remapped.items():
+                         v_groups[new_v].append(old_v)
+                     for new_v, old_vs in v_groups.items():
+                         new_coords[new_v] = np.mean(old_coords[old_vs], axis=0)
+                     new_complex._coordinates = new_coords
+                     
+                return new_complex, dict(s_map)
             except Exception as e:
                 import warnings
                 warnings.warn(f"Julia QuickMapper failed ({e!r}). Falling back to pure Python.")
-                
-        # Python implementation fallback for preserve_topology=False
-        adj = defaultdict(set)
+
+        # --- Python Fallback (Liu-Xie-Yi 2012) ---
+        adj = {v: [] for v in V}
         for u, v in E:
-            adj[u].add(v)
-            adj[v].add(u)
+            adj[u].append(v)
+            adj[v].append(u)
             
-        L_map = {v: v for v in V}
+        m = len(E)
+        L = {v: v for v in V}
+        if m == 0:
+            return self, {tuple([v]): [tuple([v])] for v in V}
+             
+        degree = {v: len(adj[v]) for v in V}
+        num_of_loops = 0
+        modularity_gain = 1000.0
+        two_m = 2.0 * m
         
-        for _ in range(max_loops):
-            nodes = list(V)
-            random.shuffle(nodes)
-            any_change = False
-            for u in nodes:
-                if not adj[u]:
+        while modularity_gain > min_modularity_gain and num_of_loops < max_loops:
+            vertex_order = list(V)
+            random.shuffle(vertex_order)
+            
+            for vertex in vertex_order:
+                neighbors = adj[vertex]
+                if not neighbors:
                     continue
-                neighbor_communities = defaultdict(int)
-                for v in adj[u]:
-                    neighbor_communities[L_map[v]] += 1
-                if not neighbor_communities:
-                    continue
-                best_comm = max(neighbor_communities, key=neighbor_communities.get)
-                if best_comm != L_map[u]:
-                    L_map[u] = best_comm
-                    any_change = True
-            if not any_change:
-                break
+                    
+                nbr_labels = set([L[vertex]])
+                for nbr in neighbors:
+                    nbr_labels.add(L[nbr])
+                    
+                best_labels = []
+                max_contribution = -float('inf')
+                deg_v = degree[vertex]
                 
-        mapped_simplices = set()
-        for u, v in E:
-            cu, cv = L_map[u], L_map[v]
-            if cu != cv:
-                mapped_simplices.add(tuple(sorted((cu, cv))))
-                
-        unique_nodes = sorted(list(set(L_map.values())))
-        new_to_old = {new: old for new, old in enumerate(unique_nodes)}
-        old_to_new = {old: new for new, old in enumerate(unique_nodes)}
+                for label in nbr_labels:
+                    contribution = 0.0
+                    for j in neighbors:
+                        if L[j] == label:
+                            contribution += (1.0 - (deg_v * degree[j]) / two_m)
+                            
+                    if contribution > max_contribution:
+                        max_contribution = contribution
+                        best_labels = [label]
+                    elif contribution == max_contribution:
+                        best_labels.append(label)
+                L[vertex] = random.choice(best_labels)
+            modularity_gain = 0.0 
+            num_of_loops += 1
+
+        unique_labels = sorted(list(set(L.values())))
+        label_to_new = {old: new for new, old in enumerate(unique_labels)}
         
-        renormalized_simplices = {
-            tuple(sorted(old_to_new[v] for v in s)) for s in mapped_simplices
-        }
+        final_s_map = defaultdict(list)
+        final_simplices = set()
         
-        new_complex = SimplicialComplex.from_simplices(renormalized_simplices, close_under_faces=True,
-                                                       coefficient_ring=self.coefficient_ring)
-        return new_complex, new_to_old
+        for d in self.dimensions:
+            for simp in self.n_simplices(d):
+                new_simp = tuple(sorted(set(label_to_new[L[v]] for v in simp)))
+                if new_simp:
+                    final_simplices.add(new_simp)
+                    final_s_map[new_simp].append(simp)
+        
+        sc_qm = self.__class__.from_simplices(list(final_simplices), close_under_faces=True, coefficient_ring=self.coefficient_ring)
+        if hasattr(self, "_coordinates") and self._coordinates is not None:
+             old_coords = self._coordinates
+             new_coords = np.zeros((len(unique_labels), old_coords.shape[1]))
+             v_groups = defaultdict(list)
+             for old_v, label in L.items():
+                 v_groups[label_to_new[label]].append(old_v)
+             for new_v, old_vs in v_groups.items():
+                 new_coords[new_v] = np.mean(old_coords[old_vs], axis=0)
+             sc_qm._coordinates = new_coords
+             
+        return sc_qm, dict(final_s_map)
 
     def to_gudhi_simplex_tree(self, *, use_filtration: bool = True):
-        """Convert to a GUDHI SimplexTree for advanced TDA operations."""
+        """Convert to a GUDHI SimplexTree for advanced TDA operations.
+
+        Args:
+            use_filtration: Whether to include filtration values.
+
+        Returns:
+            gudhi.SimplexTree: The GUDHI simplex tree object.
+        """
         try:
             import gudhi
         except ImportError:
@@ -2248,7 +3223,15 @@ class SimplicialComplex(BaseModel):
 
     @classmethod
     def from_gudhi_simplex_tree(cls, st, *, include_filtration: bool = True) -> "SimplicialComplex":
-        """Convert a GUDHI SimplexTree to a SimplicialComplex."""
+        """Convert a GUDHI SimplexTree to a SimplicialComplex.
+
+        Args:
+            st: The GUDHI simplex tree object.
+            include_filtration: Whether to extract and include filtration values.
+
+        Returns:
+            SimplicialComplex: The resulting simplicial complex.
+        """
         simplices = {d: [] for d in range(st.dimension() + 1)}
         filtration = {}
         for simplex, filt in st.get_filtration():
@@ -2260,23 +3243,37 @@ class SimplicialComplex(BaseModel):
         return cls(simplices=simplices, filtration=filtration)
 
     def to_trimesh(self):
-        """Convert to a trimesh object."""
+        """Convert to a trimesh object.
+
+        Returns:
+            trimesh.Trimesh: The resulting trimesh object.
+        """
         try:
             import trimesh
         except ImportError:
             raise ImportError("trimesh is required for to_trimesh()")
         
         faces = self.n_simplices(2)
-        # This assumes vertices are indexed 0..N-1
         return trimesh.Trimesh(faces=faces)
 
     @classmethod
     def from_trimesh(cls, mesh) -> "SimplicialComplex":
-        """Convert a trimesh object to a SimplicialComplex."""
+        """Convert a trimesh object to a SimplicialComplex.
+
+        Args:
+            mesh: The trimesh object.
+
+        Returns:
+            SimplicialComplex: The resulting simplicial complex.
+        """
         return cls.from_maximal_simplices(mesh.faces.tolist())
 
     def to_pyg_data(self):
-        """Convert to a PyTorch Geometric Data object."""
+        """Convert to a PyTorch Geometric Data object.
+
+        Returns:
+            torch_geometric.data.Data: The resulting PyG Data object.
+        """
         try:
             import torch
             from torch_geometric.data import Data
@@ -2289,13 +3286,24 @@ class SimplicialComplex(BaseModel):
 
     @classmethod
     def from_pyg_data(cls, data) -> "SimplicialComplex":
-        """Convert a PyTorch Geometric Data object to a SimplicialComplex."""
+        """Convert a PyTorch Geometric Data object to a SimplicialComplex.
+
+        Args:
+            data: The PyG Data object.
+
+        Returns:
+            SimplicialComplex: The resulting simplicial complex.
+        """
         edges = data.edge_index.t().tolist()
         return cls.from_simplices(edges)
 
     @property
     def cells_count(self) -> Dict[int, int]:
-        """Return a dictionary mapping dimension to the count of simplices."""
+        """Return a dictionary mapping dimension to the count of simplices.
+
+        Returns:
+            Dict[int, int]: Dictionary mapping dimension to simplex count.
+        """
         return {d: len(list(self.n_simplices(d))) for d in self.dimensions}
 
     def compute_homology_basis(
@@ -2308,7 +3316,19 @@ class SimplicialComplex(BaseModel):
         root_stride: int = 1,
         max_cycles: Optional[int] = None,
     ):
-        """Compute H_k generators directly from this complex."""
+        """Compute H_k generators directly from this complex.
+
+        Args:
+            dimension: Degree k of homology to compute.
+            point_cloud: Optional coordinate data for geometric optimization.
+            mode: Either "valid" (standard) or "optimal" (shortest-cycle heuristic).
+            max_roots: Optional cap on the number of root simplices to probe.
+            root_stride: Sampling stride for root simplices.
+            max_cycles: Optional cap on the total number of cycles to return.
+
+        Returns:
+            The homology basis result.
+        """
         from ..core.homology_generators import compute_homology_basis_from_complex
 
         return compute_homology_basis_from_complex(
@@ -2329,7 +3349,17 @@ class SimplicialComplex(BaseModel):
         root_stride: int = 1,
         max_cycles: Optional[int] = None,
     ):
-        """Compute an optimal H1 basis directly from this complex."""
+        """Compute an optimal H1 basis directly from this complex.
+
+        Args:
+            point_cloud: Optional coordinate data for geometric optimization.
+            max_roots: Optional cap on the number of root simplices to probe.
+            root_stride: Sampling stride for root simplices.
+            max_cycles: Optional cap on the total number of cycles to return.
+
+        Returns:
+            The optimal H1 basis result.
+        """
         from ..core.homology_generators import compute_optimal_h1_basis_from_complex
 
         return compute_optimal_h1_basis_from_complex(

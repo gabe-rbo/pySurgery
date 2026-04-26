@@ -13,15 +13,11 @@ from .exceptions import (
 
 
 class IntersectionForm(BaseModel):
-    """
-    Representation of a symmetric bilinear form Q on H_{2k}(M, Z).
+    """Representation of a symmetric bilinear form Q on H_{2k}(M, Z).
 
-    Attributes
-    ----------
-    matrix : np.ndarray
-        The symmetric matrix of the intersection form.
-    dimension : int
-        The dimension of the manifold (n = 4k).
+    Attributes:
+        matrix (np.ndarray): The symmetric matrix of the intersection form.
+        dimension (int): The dimension of the manifold (n = 4k).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -30,7 +26,15 @@ class IntersectionForm(BaseModel):
     dimension: int
 
     def __init__(self, **data):
-        """Validate matrix shape/symmetry and manifold parity constraints."""
+        """Validate matrix shape/symmetry and manifold parity constraints.
+
+        Args:
+            **data: Field values for the model.
+
+        Raises:
+            DimensionError: If matrix is not square or dimension is not even.
+            NonSymmetricError: If matrix is not symmetric.
+        """
         super().__init__(**data)
         if self.matrix.ndim != 2 or self.matrix.shape[0] != self.matrix.shape[1]:
             raise DimensionError("Intersection form matrix must be square.")
@@ -42,21 +46,26 @@ class IntersectionForm(BaseModel):
             )
 
     def _eigen_tol(self, eigenvalues: np.ndarray) -> float:
-        """Return a scale-aware tolerance for eigenvalue sign/rank decisions."""
+        """Return a scale-aware tolerance for eigenvalue sign/rank decisions.
+
+        Args:
+            eigenvalues (np.ndarray): The eigenvalues of the matrix.
+
+        Returns:
+            float: The computed tolerance.
+        """
         if len(eigenvalues) == 0:
             return 1e-10
         scale = float(max(1.0, np.max(np.abs(eigenvalues))))
         return max(self.matrix.shape) * np.finfo(float).eps * scale
 
     def signature(self) -> int:
-        """
-        Compute the signature of the intersection form (rank+ - rank-).
+        """Compute the signature of the intersection form (rank+ - rank-).
+
         Uses exact rational arithmetic via Sylvester's Law of Inertia to ensure correctness.
 
-        Returns
-        -------
-        sig : int
-            The signature of the bilinear form.
+        Returns:
+            int: The signature of the bilinear form.
         """
         if self.matrix.size == 0:
             return 0
@@ -81,9 +90,15 @@ class IntersectionForm(BaseModel):
             return int(pos - neg)
 
     def approx_signature(self, temp: float = 10.0) -> float:
-        """
-        Compute a differentiable soft-approximation of the signature using JAX.
+        """Compute a differentiable soft-approximation of the signature using JAX.
+
         Useful for optimization tasks and very large matrices.
+
+        Args:
+            temp (float): Temperature parameter for approximation. Defaults to 10.0.
+
+        Returns:
+            float: The approximated signature.
         """
         from ..integrations.jax_bridge import HAS_JAX
         if not HAS_JAX:
@@ -94,41 +109,49 @@ class IntersectionForm(BaseModel):
         return float(_approximate_signature(self.matrix, temp=temp))
 
     def is_even(self) -> bool:
-        """
-        Check if the form is even (Q(x, x) is even for all x).
+        """Check if the form is even (Q(x, x) is even for all x).
+
         For an integral symmetric matrix, this is true if the diagonal elements are even.
 
-        Returns
-        -------
-        even : bool
-            True if the form is even, False if it is odd.
+        Returns:
+            bool: True if the form is even, False if it is odd.
         """
         return all(int(self.matrix[i, i]) % 2 == 0 for i in range(self.matrix.shape[0]))
 
     def type(self) -> str:
-        """
-        Return the type of the form (I or II).
-        Type II if even, Type I if odd.
+        """Return the type of the form (I or II).
+
+        Returns:
+            str: "II" if even, "I" if odd.
         """
         return "II" if self.is_even() else "I"
 
     def rank(self) -> int:
-        """Linear rank of the bilinear form (number of non-zero eigenvalues)."""
+        """Linear rank of the bilinear form (number of non-zero eigenvalues).
+
+        Returns:
+            int: The rank of the matrix.
+        """
         eigenvalues = eigvalsh(self.matrix)
         tol = self._eigen_tol(eigenvalues)
         return int(np.sum(np.abs(eigenvalues) > tol))
 
     def is_indefinite(self) -> bool:
-        """
+        """Check if the form is indefinite.
+
         A form is indefinite if it has both positive and negative eigenvalues.
         For unimodular forms, this is equivalent to |signature| < rank.
+
+        Returns:
+            bool: True if indefinite, False otherwise.
         """
         return abs(self.signature()) < self.rank()
 
     def classify_z_form(self) -> dict:
-        """
-        Perform a basic classification of the unimodular form over Z.
-        (Rank, Signature, Type).
+        """Perform a basic classification of the unimodular form over Z.
+
+        Returns:
+            dict: A dictionary containing "rank", "signature", "type", and "even".
         """
         return {
             "rank": self.rank(),
@@ -138,17 +161,30 @@ class IntersectionForm(BaseModel):
         }
 
     def determinant(self) -> int:
-        """
-        Compute the determinant using exact arithmetic via SymPy if the matrix is integral.
+        """Compute the determinant using exact arithmetic via SymPy if the matrix is integral.
+
+        Returns:
+            int: The determinant of the matrix.
         """
         sym_matrix = sp.Matrix(self.matrix.astype(int))
         return int(sym_matrix.det())
 
     def perform_algebraic_surgery(self, x: np.ndarray) -> "IntersectionForm":
-        """
-        Perform algebraic surgery on the manifold by surgering out the isotropic class x.
+        """Perform algebraic surgery on the manifold by surgering out the isotropic class x.
+
         This corresponds to finding a class y with Q(x, y) = 1, and restricting the form to {x, y}^perp.
-        Returns the new IntersectionForm of the surgered manifold.
+
+        Args:
+            x (np.ndarray): The isotropic class to surger out.
+
+        Returns:
+            IntersectionForm: The new IntersectionForm of the surgered manifold.
+
+        Raises:
+            DimensionError: If x has the wrong size.
+            IsotropicError: If x is not isotropic.
+            NonPrimitiveError: If x is zero or not primitive.
+            UnimodularityError: If the dual class y cannot be found.
         """
         x = np.asarray(x, dtype=int).flatten()
         if x.shape[0] != self.matrix.shape[0]:

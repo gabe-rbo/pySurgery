@@ -36,7 +36,21 @@ _TWO_PI = 2.0 * math.pi
 
 @dataclass
 class SurfaceMesh:
-    """Triangulated surface with a sparse combinatorial and metric representation."""
+    """Triangulated surface with a sparse combinatorial and metric representation.
+
+    Attributes:
+        faces: (m, 3) array of vertex indices for each triangle.
+        n_vertices: Total number of vertices.
+        base_edge_lengths: Initial lengths for each edge.
+        edges: (e, 2) array of vertex pairs for each edge.
+        edge_to_index: Mapping from sorted vertex pair to edge index.
+        edge_faces: List of face indices incident to each edge.
+        vertex_faces: List of face indices incident to each vertex.
+        vertex_neighbors: List of sets of neighbor vertices for each vertex.
+        boundary_vertices: Indices of vertices on the boundary.
+        coordinates: Optional (n, d) array of vertex coordinates.
+        simplicial_complex: Optional SimplicialComplex representation.
+    """
 
     faces: np.ndarray
     n_vertices: int
@@ -58,6 +72,19 @@ class SurfaceMesh:
         *,
         validate: bool = True,
     ) -> "SurfaceMesh":
+        """Create a SurfaceMesh from vertex coordinates and face indices.
+
+        Args:
+            vertices: (n, d) array of vertex coordinates.
+            faces: Sequence of 3-tuples of vertex indices.
+            validate: Whether to perform manifold validation.
+
+        Returns:
+            A new SurfaceMesh instance.
+
+        Raises:
+            ValueError: If inputs are malformed or invalid.
+        """
         vertices_arr = np.asarray(vertices, dtype=np.float64)
         faces_arr = np.asarray(faces, dtype=np.int64)
         if faces_arr.ndim != 2 or faces_arr.shape[1] != 3:
@@ -99,6 +126,19 @@ class SurfaceMesh:
         *,
         validate: bool = True,
     ) -> "SurfaceMesh":
+        """Create a SurfaceMesh from a SimplicialComplex.
+
+        Args:
+            complex_: The input simplicial complex.
+            coordinates: Optional vertex coordinates.
+            validate: Whether to perform manifold validation.
+
+        Returns:
+            A new SurfaceMesh instance.
+
+        Raises:
+            ValueError: If the complex is not a surface or coordinates are mismatched.
+        """
         faces = np.asarray(complex_.n_simplices(2), dtype=np.int64)
         if faces.size == 0:
             raise ValueError("A surface triangulation requires at least one 2-simplex.")
@@ -130,6 +170,17 @@ class SurfaceMesh:
         validate: bool = True,
         complex_: Optional[SimplicialComplex] = None,
     ) -> "SurfaceMesh":
+        """Create a SurfaceMesh from faces only (unit metric).
+
+        Args:
+            faces: (m, 3) array of vertex indices.
+            n_vertices: Total number of vertices.
+            validate: Whether to perform manifold validation.
+            complex_: Optional SimplicialComplex.
+
+        Returns:
+            A new SurfaceMesh instance with unit edge lengths.
+        """
         faces_arr = np.asarray(faces, dtype=np.int64)
         edges, edge_to_index, face_edges = _build_edges_from_faces(faces_arr)
         edge_faces, vertex_faces, vertex_neighbors, boundary_vertices = _build_incidence(
@@ -154,21 +205,30 @@ class SurfaceMesh:
 
     @property
     def num_faces(self) -> int:
+        """Total number of faces."""
         return int(self.faces.shape[0])
 
     @property
     def num_edges(self) -> int:
+        """Total number of edges."""
         return int(self.edges.shape[0])
 
     @property
     def euler_characteristic(self) -> int:
+        """Euler characteristic of the surface (V - E + F)."""
         return int(self.n_vertices - self.num_edges + self.num_faces)
 
     @property
     def is_closed(self) -> bool:
+        """True if the surface has no boundary."""
         return int(len(self.boundary_vertices)) == 0
 
     def target_geometry(self) -> str:
+        """Determine the target geometry based on Euler characteristic.
+
+        Returns:
+            One of 'spherical', 'euclidean', or 'hyperbolic'.
+        """
         chi = self.euler_characteristic
         if chi > 0:
             return "spherical"
@@ -177,6 +237,18 @@ class SurfaceMesh:
         return "hyperbolic"
 
     def conformal_edge_lengths(self, u: np.ndarray, method: str = "ricci") -> np.ndarray:
+        """Compute edge lengths after a conformal scaling.
+
+        Args:
+            u: (n_vertices,) array of log-conformal factors.
+            method: Method for scaling ('ricci' or 'circle_packing').
+
+        Returns:
+            Array of scaled edge lengths.
+
+        Raises:
+            ValueError: If u has wrong shape or method is unknown.
+        """
         u = np.asarray(u, dtype=np.float64)
         if u.shape != (self.n_vertices,):
             raise ValueError("u must have shape (n_vertices,)")
@@ -193,6 +265,15 @@ class SurfaceMesh:
     def triangle_edge_lengths(
         self, u: Optional[np.ndarray] = None, method: str = "ricci"
     ) -> np.ndarray:
+        """Get the edge lengths for each triangle in the mesh.
+
+        Args:
+            u: Optional log-conformal factors.
+            method: Conformal scaling method.
+
+        Returns:
+            (num_faces, 3) array of edge lengths.
+        """
         if u is None:
             u = np.zeros(self.n_vertices, dtype=np.float64)
         lengths = self.conformal_edge_lengths(u, method=method)
@@ -206,6 +287,15 @@ class SurfaceMesh:
     def triangle_angles(
         self, u: Optional[np.ndarray] = None, method: str = "ricci"
     ) -> np.ndarray:
+        """Get the internal angles for each triangle in the mesh.
+
+        Args:
+            u: Optional log-conformal factors.
+            method: Conformal scaling method.
+
+        Returns:
+            (num_faces, 3) array of triangle angles.
+        """
         tri_lengths = self.triangle_edge_lengths(u=u, method=method)
         angles = np.empty((self.num_faces, 3), dtype=np.float64)
         for f_idx, (a, b, c) in enumerate(tri_lengths):
@@ -217,6 +307,15 @@ class SurfaceMesh:
         u: Optional[np.ndarray] = None,
         method: str = "ricci",
     ) -> np.ndarray:
+        """Compute the Gaussian curvature at each vertex.
+
+        Args:
+            u: Optional log-conformal factors.
+            method: Conformal scaling method.
+
+        Returns:
+            (n_vertices,) array of vertex curvatures.
+        """
         angles = self.triangle_angles(u=u, method=method)
         curvature = np.full(self.n_vertices, _TWO_PI, dtype=np.float64)
         if len(self.boundary_vertices) > 0:
@@ -232,22 +331,26 @@ class SurfaceMesh:
         u: Optional[np.ndarray] = None,
         method: str = "ricci",
     ) -> csr_matrix:
-        """
-        Computes the cotangent Laplacian matrix for the current metric state.
+        """Computes the cotangent Laplacian matrix for the current metric state.
+
         Uses vectorized COO triplet assembly for high performance.
+
+        Args:
+            u: Optional log-conformal factors.
+            method: Conformal scaling method.
+
+        Returns:
+            A sparse CSR matrix representing the cotangent Laplacian.
         """
         angles = self.triangle_angles(u=u, method=method)
         n_faces = len(self.faces)
         
         # Precompute all cotangents for all faces (vectorized)
-        # _cotangents_from_angles is already called in a loop, but we can do it better.
         cots = np.zeros((n_faces, 3), dtype=np.float64)
         for f_idx in range(n_faces):
             cots[f_idx] = _cotangents_from_angles(angles[f_idx])
         
         # Assemble COO triplets for edges
-        # Each face (i, j, k) contributes to edges (i,j), (j,k), (k,i)
-        # with weights 0.5 * cot_k, 0.5 * cot_i, 0.5 * cot_j
         i_idx = self.faces[:, 0]
         j_idx = self.faces[:, 1]
         k_idx = self.faces[:, 2]
@@ -273,7 +376,6 @@ class SurfaceMesh:
         L_off = csr_matrix((data, (rows, cols)), shape=(self.n_vertices, self.n_vertices))
         
         # Diagonal part (sum of row off-diagonals)
-        # Since L is symmetric and zero-row-sum, L_ii = -sum_{j!=i} L_ij
         diag_data = -np.array(L_off.sum(axis=1)).flatten()
         L_diag = csr_matrix((diag_data, (np.arange(self.n_vertices), np.arange(self.n_vertices))), 
                            shape=(self.n_vertices, self.n_vertices))
@@ -283,7 +385,22 @@ class SurfaceMesh:
 
 @dataclass
 class SurfaceUniformizationResult:
-    """Result object for a numerical uniformization solve."""
+    """Result object for a numerical uniformization solve.
+
+    Attributes:
+        method: Method used ('ricci' or 'circle_packing').
+        target_geometry: Type of target geometry ('spherical', etc.).
+        converged: Whether the solver reached the target tolerance.
+        iterations: Number of iterations performed.
+        residual_norm: Final norm of the curvature residual.
+        conformal_factors: Final log-conformal factors.
+        curvature: Final vertex Gaussian curvature.
+        target_curvature: Prescribed target curvature.
+        edge_lengths: Final edge lengths.
+        mesh: The SurfaceMesh object.
+        history: Residual norm history.
+        notes: Diagnostic messages.
+    """
 
     method: str
     target_geometry: str
@@ -299,10 +416,24 @@ class SurfaceUniformizationResult:
     notes: list[str] = field(default_factory=list)
 
     def decision_ready(self) -> bool:
+        """Check if the result is conclusive and high-accuracy.
+
+        Returns:
+            True if converged and residual is below a threshold.
+        """
         return self.converged and self.residual_norm < 1e-8
 
 
 def _sorted_edge(i: int, j: int) -> tuple[int, int]:
+    """Return a canonical sorted tuple for an edge.
+
+    Args:
+        i: First vertex index.
+        j: Second vertex index.
+
+    Returns:
+        Sorted tuple (min(i, j), max(i, j)).
+    """
     a = int(i)
     b = int(j)
     if a <= b:
@@ -312,7 +443,15 @@ def _sorted_edge(i: int, j: int) -> tuple[int, int]:
 
 def _build_edges_from_faces(
     faces: np.ndarray,
-) -> tuple[np.ndarray, dict[tuple[int, int], int], list[tuple[int, int, int]]]:
+) -> tuple[np.ndarray, dict[tuple[int, int], int], list[tuple[tuple[int, int], tuple[int, int], tuple[int, int]]]]:
+    """Build edge list and mapping from face indices.
+
+    Args:
+        faces: (m, 3) array of faces.
+
+    Returns:
+        A tuple (edges, edge_to_index, face_edges).
+    """
     edge_set = set()
     face_edges = []
     for face in faces:
@@ -334,6 +473,18 @@ def _build_incidence(
     edge_to_index: dict[tuple[int, int], int],
     face_edges: list[tuple[tuple[int, int], tuple[int, int], tuple[int, int]]],
 ) -> tuple[list[list[int]], list[list[int]], list[set[int]], np.ndarray]:
+    """Build incidence structures for the mesh.
+
+    Args:
+        n_vertices: Total number of vertices.
+        faces: (m, 3) array of faces.
+        edges: (e, 2) array of edges.
+        edge_to_index: Edge index mapping.
+        face_edges: List of edges per face.
+
+    Returns:
+        A tuple (edge_faces, vertex_faces, vertex_neighbors, boundary_vertices).
+    """
     edge_faces: list[list[int]] = [[] for _ in range(len(edges))]
     vertex_faces: list[list[int]] = [[] for _ in range(int(n_vertices))]
     vertex_neighbors: list[set[int]] = [set() for _ in range(int(n_vertices))]
@@ -364,6 +515,17 @@ def _validate_surface(
     edges: np.ndarray,
     edge_faces: list[list[int]],
 ) -> None:
+    """Validate that the triangulation represents a 2-manifold.
+
+    Args:
+        mesh: The SurfaceMesh instance.
+        faces: (m, 3) array of faces.
+        edges: (e, 2) array of edges.
+        edge_faces: Incident faces per edge.
+
+    Raises:
+        ValueError: If the mesh is not a manifold or has degenerate triangles.
+    """
     for idx, incident in enumerate(edge_faces):
         if len(incident) > 2:
             raise ValueError(
@@ -419,6 +581,18 @@ def _validate_surface(
 
 
 def _compute_base_edge_lengths(vertices: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    """Compute Euclidean lengths for a set of edges.
+
+    Args:
+        vertices: (n, d) array of coordinates.
+        edges: (e, 2) array of vertex indices.
+
+    Returns:
+        Array of edge lengths.
+
+    Raises:
+        ValueError: If any edge has zero length.
+    """
     base = np.empty(len(edges), dtype=np.float64)
     for idx, (i, j) in enumerate(edges):
         diff = vertices[int(i)] - vertices[int(j)]
@@ -430,7 +604,19 @@ def _compute_base_edge_lengths(vertices: np.ndarray, edges: np.ndarray) -> np.nd
 
 
 def _triangle_angles_from_lengths(a: float, b: float, c: float) -> np.ndarray:
-    """Return the three angles opposite sides a, b, c."""
+    """Return the three angles opposite sides a, b, c.
+
+    Args:
+        a: Length of first side.
+        b: Length of second side.
+        c: Length of third side.
+
+    Returns:
+        (3,) array of angles in radians.
+
+    Raises:
+        ValueError: If lengths are non-positive or violate triangle inequality.
+    """
     if min(a, b, c) <= 0:
         raise ValueError("Triangle edge lengths must be strictly positive.")
     if not (a + b > c and a + c > b and b + c > a):
@@ -446,6 +632,14 @@ def _triangle_angles_from_lengths(a: float, b: float, c: float) -> np.ndarray:
 
 
 def _cotangents_from_angles(angles: np.ndarray) -> np.ndarray:
+    """Compute cotangents for a set of angles with stabilization.
+
+    Args:
+        angles: (3,) array of angles.
+
+    Returns:
+        (3,) array of cotangents.
+    """
     s = np.sin(angles)
     c = np.cos(angles)
     out = np.empty_like(angles)
@@ -464,11 +658,31 @@ def _accumulate_edge_weight(
     j: int,
     value: float,
 ) -> None:
+    """Helper to accumulate weight into an edge dictionary.
+
+    Args:
+        weights: Dictionary mapping sorted edge tuples to floats.
+        i: First vertex.
+        j: Second vertex.
+        value: Weight to add.
+    """
     edge = _sorted_edge(i, j)
     weights[edge] = weights.get(edge, 0.0) + float(value)
 
 
 def _surface_target_curvature(mesh: SurfaceMesh, target: Optional[np.ndarray]) -> np.ndarray:
+    """Compute target curvature distribution based on Gauss-Bonnet.
+
+    Args:
+        mesh: The SurfaceMesh instance.
+        target: Optional explicitly prescribed curvature.
+
+    Returns:
+        (n_vertices,) array of target curvatures.
+
+    Raises:
+        ValueError: If prescribed target sum violates Gauss-Bonnet.
+    """
     total_goal = _TWO_PI * float(mesh.euler_characteristic)
     if target is not None:
         target = np.asarray(target, dtype=np.float64)
@@ -499,8 +713,15 @@ def _solve_pinned_linear_system(
     rhs: np.ndarray,
     pin_vertex: int,
 ) -> np.ndarray:
-    """
-    Stable singular system solver using LSQR and rigid pinning.
+    """Stable singular system solver using LSQR and rigid pinning.
+
+    Args:
+        matrix: Sparse Laplacian matrix.
+        rhs: Right-hand side (curvature residual).
+        pin_vertex: Index of the vertex to pin to zero.
+
+    Returns:
+        Minimal-norm solution vector.
     """
     from scipy.sparse.linalg import lsqr
     
@@ -515,6 +736,16 @@ def _solve_pinned_linear_system(
 
 
 def _metric_is_valid(mesh: SurfaceMesh, u: np.ndarray, method: str) -> bool:
+    """Check if the metric remains valid (positive lengths, triangle inequality).
+
+    Args:
+        mesh: The SurfaceMesh instance.
+        u: Current log-conformal factors.
+        method: Conformal scaling method.
+
+    Returns:
+        True if the metric is valid.
+    """
     try:
         tri_lengths = mesh.triangle_edge_lengths(u=u, method=method)
     except Exception:
@@ -538,6 +769,21 @@ def _solve_uniformization(
     damping: float,
     line_search: bool,
 ) -> SurfaceUniformizationResult:
+    """Internal solver loop for Ricci flow and circle packing.
+
+    Args:
+        mesh: SurfaceMesh to uniformize.
+        method: Scaling method.
+        target_curvature: Optional prescribed target.
+        max_iter: Maximum iterations.
+        tol: Convergence tolerance.
+        pin_vertex: Index of pinned vertex.
+        damping: Initial step damping.
+        line_search: Whether to use backtracking line search.
+
+    Returns:
+        A SurfaceUniformizationResult instance.
+    """
     target = _surface_target_curvature(mesh, target_curvature)
     u = np.zeros(mesh.n_vertices, dtype=np.float64)
     history: list[float] = []
@@ -635,16 +881,19 @@ def discrete_ricci_flow(
 ) -> SurfaceUniformizationResult:
     """Uniformize a triangulated surface using discrete Ricci flow.
 
-    Parameters
-    ----------
-    surface:
-        Either a :class:`SurfaceMesh`, a :class:`SimplicialComplex`, or a
-        ``(vertices, faces)`` pair.
-    coordinates:
-        Optional coordinates when ``surface`` is a simplicial complex.
-    target_curvature:
-        Optional prescribed curvature vector. If omitted, the target is the
-        constant-curvature distribution implied by the Euler characteristic.
+    Args:
+        surface: Input surface (Mesh, Complex, or (V, F) pair).
+        coordinates: Optional explicit coordinates.
+        target_curvature: Optional target curvature vector.
+        max_iter: Maximum iterations.
+        tol: Convergence tolerance.
+        pin_vertex: Index of pinned vertex.
+        damping: Damping factor for Newton steps.
+        line_search: Whether to use backtracking line search.
+        validate: Whether to validate the mesh.
+
+    Returns:
+        A SurfaceUniformizationResult instance.
     """
     mesh = _coerce_surface_mesh(surface, coordinates=coordinates, validate=validate)
     return _solve_uniformization(
@@ -671,7 +920,22 @@ def circle_packing_uniformization(
     line_search: bool = True,
     validate: bool = True,
 ) -> SurfaceUniformizationResult:
-    """Uniformize a triangulated surface via a circle-packing style metric ansatz."""
+    """Uniformize a triangulated surface via a circle-packing style metric ansatz.
+
+    Args:
+        surface: Input surface.
+        coordinates: Optional coordinates.
+        target_curvature: Optional target curvature.
+        max_iter: Maximum iterations.
+        tol: Tolerance.
+        pin_vertex: Pinned vertex index.
+        damping: Damping factor.
+        line_search: Whether to use line search.
+        validate: Whether to validate.
+
+    Returns:
+        A SurfaceUniformizationResult instance.
+    """
     mesh = _coerce_surface_mesh(surface, coordinates=coordinates, validate=validate)
     return _solve_uniformization(
         mesh,
@@ -700,7 +964,23 @@ def uniformize_surface(
 ) -> SurfaceUniformizationResult:
     """User-facing uniformization entry point.
 
-    ``method`` may be ``"ricci"`` or ``"circle_packing"``.
+    Args:
+        surface: Input surface.
+        method: Solver method ('ricci' or 'circle_packing').
+        coordinates: Optional coordinates.
+        target_curvature: Optional target curvature.
+        max_iter: Maximum iterations.
+        tol: Tolerance.
+        pin_vertex: Pinned vertex index.
+        damping: Damping factor.
+        line_search: Whether to use line search.
+        validate: Whether to validate.
+
+    Returns:
+        A SurfaceUniformizationResult instance.
+
+    Raises:
+        ValueError: If the method is unknown.
     """
     if method == "ricci":
         return discrete_ricci_flow(
@@ -735,6 +1015,19 @@ def _coerce_surface_mesh(
     coordinates: Optional[np.ndarray] = None,
     validate: bool = True,
 ) -> SurfaceMesh:
+    """Coerce various inputs into a SurfaceMesh instance.
+
+    Args:
+        surface: The input surface data.
+        coordinates: Optional coordinates for complexes.
+        validate: Whether to validate the mesh.
+
+    Returns:
+        A SurfaceMesh instance.
+
+    Raises:
+        TypeError: If the input type is not supported.
+    """
     if isinstance(surface, SurfaceMesh):
         return surface
     if isinstance(surface, SimplicialComplex):
@@ -769,6 +1062,18 @@ def vertex_gaussian_curvature(
     coordinates: Optional[np.ndarray] = None,
     validate: bool = True,
 ) -> np.ndarray:
+    """Functional wrapper for vertex Gaussian curvature.
+
+    Args:
+        surface: Input surface.
+        u: Optional log-conformal factors.
+        method: Conformal scaling method.
+        coordinates: Optional coordinates.
+        validate: Whether to validate.
+
+    Returns:
+        (n_vertices,) array of curvatures.
+    """
     mesh = _coerce_surface_mesh(surface, coordinates=coordinates, validate=validate)
     return mesh.vertex_gaussian_curvature(u=u, method=method)
 
@@ -781,6 +1086,18 @@ def cotangent_laplacian(
     coordinates: Optional[np.ndarray] = None,
     validate: bool = True,
 ) -> csr_matrix:
+    """Functional wrapper for the cotangent Laplacian.
+
+    Args:
+        surface: Input surface.
+        u: Optional log-conformal factors.
+        method: Conformal scaling method.
+        coordinates: Optional coordinates.
+        validate: Whether to validate.
+
+    Returns:
+        Sparse Laplacian matrix.
+    """
     mesh = _coerce_surface_mesh(surface, coordinates=coordinates, validate=validate)
     return mesh.cotangent_laplacian(u=u, method=method)
 
@@ -791,9 +1108,15 @@ def surface_target_curvature(
     coordinates: Optional[np.ndarray] = None,
     validate: bool = True,
 ) -> np.ndarray:
+    """Functional wrapper for target curvature distribution.
+
+    Args:
+        surface: Input surface.
+        coordinates: Optional coordinates.
+        validate: Whether to validate.
+
+    Returns:
+        (n_vertices,) array of target curvatures.
+    """
     mesh = _coerce_surface_mesh(surface, coordinates=coordinates, validate=validate)
     return _surface_target_curvature(mesh, None)
-
-
-
-

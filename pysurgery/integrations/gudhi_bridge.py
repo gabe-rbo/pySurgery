@@ -29,7 +29,11 @@ _SLOW_BOUNDARY_FALLBACK_WARNED = False
 
 
 def _warn_slow_boundary_fallback(reason: str) -> None:
-    """Emit a one-time warning when chain extraction falls back to Python."""
+    """Emit a one-time warning when chain extraction falls back to Python.
+
+    Args:
+        reason (str): The reason for the fallback.
+    """
     global _SLOW_BOUNDARY_FALLBACK_WARNED
     if _SLOW_BOUNDARY_FALLBACK_WARNED:
         return
@@ -44,6 +48,15 @@ def _extract_complex_data_python(simplex_tree, simplices=None, max_dim=None):
     """Pure-Python boundary extraction from a GUDHI simplex tree.
 
     Builds cellular boundary matrices `d_k` by enumerating codimension-1 faces.
+
+    Args:
+        simplex_tree: The GUDHI simplex tree.
+        simplices: Optional list of simplices.
+        max_dim: Optional maximum dimension.
+
+    Returns:
+        tuple: A tuple containing boundaries, cells, dim_simplices, and
+            simplex_to_idx.
     """
     boundaries = {}
     if max_dim is None:
@@ -91,10 +104,18 @@ def _extract_complex_data_python(simplex_tree, simplices=None, max_dim=None):
 
 
 def extract_complex_data(simplex_tree, *, include_metadata: bool = True):
-    """
-    Extract boundary matrices, cell counts, and simplex index maps from a simplex tree.
+    """Extract boundary matrices, cell counts, and simplex index maps from a simplex tree.
 
     Uses Julia acceleration when available and falls back to pure Python otherwise.
+
+    Args:
+        simplex_tree: The GUDHI simplex tree.
+        include_metadata (bool): Whether to include full simplex lists and maps.
+            Defaults to True.
+
+    Returns:
+        tuple: A tuple containing boundaries, cells, dim_simplices, and
+            simplex_to_idx.
     """
     simplices = list(simplex_tree.get_skeleton(simplex_tree.dimension()))
     max_dim = simplex_tree.dimension()
@@ -140,7 +161,14 @@ def extract_complex_data(simplex_tree, *, include_metadata: bool = True):
 
 
 def extract_boundary_chain_data(simplex_tree):
-    """Return only boundary operators and cell counts for chain-level consumers."""
+    """Return only boundary operators and cell counts for chain-level consumers.
+
+    Args:
+        simplex_tree: The GUDHI simplex tree.
+
+    Returns:
+        tuple: A tuple containing boundaries and cells.
+    """
     boundaries, cells, _, _ = extract_complex_data(simplex_tree, include_metadata=False)
     return boundaries, cells
 
@@ -148,12 +176,22 @@ def extract_boundary_chain_data(simplex_tree):
 def simplex_tree_to_intersection_form(
     simplex_tree, allow_approx: bool = False
 ) -> IntersectionForm:
-    """
-    Automatically derives the rigorous Intersection Form Q for a 4D manifold
-    directly from its GUDHI SimplexTree filtration.
+    """Derives the rigorous Intersection Form Q for a 4D manifold directly from its GUDHI SimplexTree filtration.
 
     It extracts the 2-cohomology basis, evaluates the Alexander-Whitney Cup Product,
     and applies it to the fundamental class [M].
+
+    Args:
+        simplex_tree: The GUDHI simplex tree.
+        allow_approx (bool): Whether to allow approximate computations for massisve
+            datasets. Defaults to False.
+
+    Returns:
+        IntersectionForm: The derived intersection form.
+
+    Raises:
+        HomologyError: If fundamental class extraction fails or cup product
+            matrix is not symmetric.
     """
     boundaries, cells, dim_simplices, simplex_to_idx = extract_complex_data(
         simplex_tree
@@ -314,22 +352,21 @@ def simplex_tree_to_intersection_form(
 
 
 def extract_persistence_to_surgery(simplex_tree, min_persistence=0.5):
-    """
-    Analyzes a GUDHI SimplexTree's persistence diagram.
+    """Analyzes a GUDHI SimplexTree's persistence diagram.
+
     Identifies 'long-lived' cycles and attempts to construct an algebraic surgery plan
     for them, essentially applying surgery theory to denoise the manifold's topology.
 
-    Parameters
-    ----------
-    simplex_tree : gudhi.SimplexTree
-        A filtered simplicial complex.
-    min_persistence : float
-        The threshold for a cycle to be considered 'real' topological data rather than noise.
+    Args:
+        simplex_tree (gudhi.SimplexTree): A filtered simplicial complex.
+        min_persistence (float): The threshold for a cycle to be considered 'real'
+            topological data rather than noise. Defaults to 0.5.
 
-    Returns
-    -------
-    list
-        A list of dimensions where surgery might be required.
+    Returns:
+        list: A list of dimensions where surgery might be required.
+
+    Raises:
+        ImportError: If GUDHI is not installed.
     """
     if not HAS_GUDHI:
         raise ImportError("GUDHI is required. Install via 'pip install gudhi'.")
@@ -361,20 +398,22 @@ def extract_persistence_to_surgery(simplex_tree, min_persistence=0.5):
 def signature_landscape(
     simplex_tree, allow_approx: bool = False
 ) -> List[Tuple[float, int]]:
-    """
-    A novel TDA invariant: The Signature Landscape.
+    """A novel TDA invariant: The Signature Landscape.
+
     Instead of Betti numbers, we track the evolution of the intersection form's signature
     across a sequence of filtered simplicial complexes (representing a filtration).
 
-    Parameters
-    ----------
-    simplex_tree : gudhi.SimplexTree
-        A filtered GUDHI SimplexTree.
+    Args:
+        simplex_tree (gudhi.SimplexTree): A filtered GUDHI SimplexTree.
+        allow_approx (bool): Whether to allow approximate computations.
+            Defaults to False.
 
-    Returns
-    -------
-    List[Tuple[float, int]]
-        The sequence of (filtration_value, signature) over the filtration.
+    Returns:
+        List[Tuple[float, int]]: The sequence of (filtration_value, signature)
+            over the filtration.
+
+    Raises:
+        ImportError: If GUDHI is not installed.
     """
     if not HAS_GUDHI:
         raise ImportError("GUDHI is required. Install via 'pip install gudhi'.")
@@ -414,8 +453,7 @@ def signature_landscape(
 def triangulate_surface_python(
     points: np.ndarray, tolerance: float = 1e-10
 ) -> gudhi.SimplexTree:
-    """
-    Pure Python implementation: Triangulates a 2D surface from a point cloud.
+    """Pure Python implementation: Triangulates a 2D surface from a point cloud.
 
     Geometric approach:
     1. Centers the point cloud at origin
@@ -423,17 +461,18 @@ def triangulate_surface_python(
     3. Performs Delaunay triangulation in 2D
     4. Returns GUDHI SimplexTree with edges and faces
 
-    Parameters
-    ----------
-    points : np.ndarray
-        Point cloud of shape (n_points, 3) embedded in 3D space
-    tolerance : float
-        Tolerance for detecting degenerate cases
+    Args:
+        points (np.ndarray): Point cloud of shape (n_points, 3) embedded in 3D space.
+        tolerance (float): Tolerance for detecting degenerate cases. Defaults to 1e-10.
 
-    Returns
-    -------
-    gudhi.SimplexTree
-        Simplex tree with 0-cells (vertices), 1-cells (edges), 2-cells (faces)
+    Returns:
+        gudhi.SimplexTree: Simplex tree with 0-cells (vertices), 1-cells (edges),
+            and 2-cells (faces).
+
+    Raises:
+        ImportError: If GUDHI is not installed.
+        ValueError: If points are not 3D or fewer than 3 points provided.
+        HomologyError: If Delaunay triangulation fails.
     """
     if not HAS_GUDHI:
         raise ImportError("GUDHI is required. Install via 'pip install gudhi'.")
@@ -469,7 +508,7 @@ def triangulate_surface_python(
     try:
         from scipy.spatial import Delaunay
 
-        delaunay = Delaunay(projected_2d)
+        delaunay = Delaunay(projected_2d, qhull_options="QJ")
         faces = delaunay.simplices
     except Exception as e:
         raise HomologyError(f"Delaunay triangulation failed: {e}")
@@ -502,8 +541,7 @@ def triangulate_surface_python(
 def triangulate_surface(
     points: np.ndarray, tolerance: float = 1e-10
 ) -> gudhi.SimplexTree:
-    """
-    Triangulates a 2D surface from a point cloud using Julia acceleration when available.
+    """Triangulates a 2D surface from a point cloud using Julia acceleration when available.
 
     Automatically detects surface geometry without requiring parameter tuning.
     Works for a single connected component.
@@ -514,43 +552,19 @@ def triangulate_surface(
     3. Performs Delaunay triangulation in 2D
     4. Returns GUDHI SimplexTree with edges and faces
 
-    Parameters
-    ----------
-    points : np.ndarray
-        Point cloud of shape (n_points, 3) embedded in 3D space.
-        Should represent a single connected 2D surface.
-    tolerance : float
-        Tolerance for detecting degenerate cases (default: 1e-10)
+    Args:
+        points (np.ndarray): Point cloud of shape (n_points, 3) embedded in 3D space.
+            Should represent a single connected 2D surface.
+        tolerance (float): Tolerance for detecting degenerate cases. Defaults to 1e-10.
 
-    Returns
-    -------
-    gudhi.SimplexTree
-        Simplex tree with:
-        - 0-cells (vertices) for each input point
-        - 1-cells (edges) connecting vertices
-        - 2-cells (faces) forming the triangulation
+    Returns:
+        gudhi.SimplexTree: Simplex tree with 0-cells (vertices), 1-cells (edges),
+            and 2-cells (faces).
 
-    Raises
-    ------
-    ImportError
-        If GUDHI is not installed
-    ValueError
-        If points are not 3D or fewer than 3 points provided
-    HomologyError
-        If Delaunay triangulation fails
-
-    Notes
-    -----
-    - Automatically determines surface orientation via PCA
-    - No parameter tuning required (unlike GUDHI's max_edge_length)
-    - Julia acceleration is always preferred when available
-
-    Examples
-    --------
-    >>> points = np.random.randn(100, 3) * 5
-    >>> points = points / np.linalg.norm(points, axis=1, keepdims=True)  # Project to sphere
-    >>> st = triangulate_surface(points)
-    >>> print(f"Vertices: {st.num_vertices()}, Faces: {st.num_simplices()}")
+    Raises:
+        ImportError: If GUDHI is not installed.
+        ValueError: If points are not 3D or fewer than 3 points provided.
+        HomologyError: If Delaunay triangulation fails.
     """
     points = np.asarray(points, dtype=np.float64)
 

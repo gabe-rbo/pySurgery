@@ -1,23 +1,19 @@
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, Any, List, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 from .core.complexes import ChainComplex
 from .core.exceptions import DimensionError
 
 
 class AlgebraicPoincareComplex(BaseModel):
-    """
-    Representation of an Algebraic Poincare complex (C_*, psi).
+    """Representation of an Algebraic Poincare complex (C_*, psi).
 
-    Attributes
-    ----------
-    chain_complex : ChainComplex
-        The underlying chain complex C_*.
-    fundamental_class : np.ndarray
-        The fundamental class [X] in H_n(C).
-    psi : Dict[int, np.ndarray]
-        The higher-order diagonal map components representing the chain homotopy
-        equivalence between C^* and C_{n-*}.
+    Attributes:
+        chain_complex: The underlying chain complex C_*.
+        fundamental_class: The fundamental class [X] in H_n(C).
+        dimension: The dimension of the complex.
+        psi: The higher-order diagonal map components representing the chain homotopy
+            equivalence between C^* and C_{n-*}.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -27,10 +23,23 @@ class AlgebraicPoincareComplex(BaseModel):
     dimension: int
     psi: Dict[int, np.ndarray] = Field(default_factory=dict)
 
-    def model_post_init(self, __context):
+    def model_post_init(self, __context: Any) -> None:
+        """Validate Poincare data after initialization.
+
+        Args:
+            __context: Initialization context.
+        """
         self._validate_poincare_data()
 
-    def _chain_group_size(self, k: int):
+    def _chain_group_size(self, k: int) -> Optional[int]:
+        """Get the size of the chain group C_k.
+
+        Args:
+            k: The degree.
+
+        Returns:
+            Optional[int]: The size of C_k, or None if not determinable.
+        """
         if k < 0:
             return 0
         if k in self.chain_complex.cells:
@@ -44,6 +53,11 @@ class AlgebraicPoincareComplex(BaseModel):
         return None
 
     def _validate_poincare_data(self) -> None:
+        """Internal validation for Poincare complex data.
+
+        Raises:
+            DimensionError: If data dimensions are inconsistent.
+        """
         fund = np.asarray(self.fundamental_class).flatten()
         if fund.ndim != 1:
             raise DimensionError("fundamental_class must be a 1D chain vector.")
@@ -79,8 +93,10 @@ class AlgebraicPoincareComplex(BaseModel):
                 )
 
     def dual_complex(self) -> ChainComplex:
-        """
-        Compute the dual chain complex C^* = Hom(C, Z).
+        """Compute the dual chain complex C^* = Hom(C, Z).
+
+        Returns:
+            ChainComplex: The dual ChainComplex instance.
         """
         # Transpose the boundary operators to get coboundary operators.
         # Store δ^n at key n+1 so that boundaries[k] means "map going into degree k-1"
@@ -98,15 +114,25 @@ class AlgebraicPoincareComplex(BaseModel):
         self,
         cohomology_class: np.ndarray,
         k: int,
-        simplices: Optional[dict[int, list[tuple[int, ...]]]] = None,
+        simplices: Optional[Dict[int, List[Tuple[int, ...]]]] = None,
     ) -> np.ndarray:
-        r"""
-        Compute the cap product [X] \cap \alpha.
-        
+        r"""Compute the cap product [X] \cap \alpha.
+
         If self.psi[k] is available, applies it directly. 
         Otherwise, if 'simplices' (the simplicial structure) is provided,
         it evaluates the cap product using the Alexander-Whitney diagonal:
         (sigma \cap alpha) = alpha(front k-face of sigma) * (back (n-k)-face of sigma).
+
+        Args:
+            cohomology_class: The cohomology class alpha to cap with.
+            k: The degree of the cohomology class.
+            simplices: Optional simplicial structure for AW diagonal evaluation.
+
+        Returns:
+            np.ndarray: The resulting chain in C_{n-k}.
+
+        Raises:
+            DimensionError: If dimensions are inconsistent or required data is missing.
         """
         n = self.dimension
         alpha = np.asarray(cohomology_class)

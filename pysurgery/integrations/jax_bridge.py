@@ -92,7 +92,14 @@ def build_signature_loss_function_differentiable(
 
 
 def build_signature_loss_function_exact(target_signature: int):
-    """Build a non-differentiable exact signature loss function (NumPy)."""
+    """Build a non-differentiable exact signature loss function (NumPy).
+
+    Args:
+        target_signature: The target topological signature.
+
+    Returns:
+        A function that computes the exact signature loss.
+    """
 
     def signature_loss(predicted_matrix: np.ndarray) -> float:
         sig = exact_signature(predicted_matrix)
@@ -232,6 +239,14 @@ def jax_warmup():
         jax_pairwise_distance(data)
         
         # 4. Warm up GW
+        p = jnp.ones(5) / 5
+        q = jnp.ones(5) / 5
+        jax_gromov_wasserstein(jnp.eye(5), jnp.eye(5), p, q)
+        
+        return {"available": True, "status": "Warmup complete"}
+    except Exception as e:
+        return {"available": True, "status": f"Warmup failed: {e!r}"}
+    # 4. Warm up GW
         p = jnp.ones(5) / 5
         q = jnp.ones(5) / 5
         jax_gromov_wasserstein(jnp.eye(5), jnp.eye(5), p, q)

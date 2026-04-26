@@ -6,7 +6,18 @@ import numpy as np
 
 
 def coerce_int_matrix(matrix: Any, *, name: str = "matrix") -> np.ndarray:
-    """Return a 2D int64 matrix and raise clear errors for invalid input."""
+    """Return a 2D int64 matrix and raise clear errors for invalid input.
+
+    Args:
+        matrix (Any): The input matrix-like object to coerce.
+        name (str): The name of the matrix for error messages. Defaults to "matrix".
+
+    Returns:
+        np.ndarray: A 2D array of type int64.
+
+    Raises:
+        ValueError: If the input is not a 2D array or contains non-integer values.
+    """
     arr = np.asarray(matrix)
     if arr.ndim != 2:
         raise ValueError(f"{name} must be a 2D array-like object")
@@ -24,7 +35,17 @@ def coerce_int_matrix(matrix: Any, *, name: str = "matrix") -> np.ndarray:
 
 
 def normalize_word_token(token: str) -> str:
-    """Normalize a free-group token into canonical g or g^-1 form."""
+    """Normalize a free-group token into canonical g or g^-1 form.
+
+    Args:
+        token (str): The group word token to normalize.
+
+    Returns:
+        str: The normalized token.
+
+    Raises:
+        ValueError: If the token is empty or represents an invalid inverse.
+    """
     t = str(token).strip()
     if not t:
         raise ValueError("Group word token cannot be empty")
@@ -41,7 +62,15 @@ def normalize_word_token(token: str) -> str:
 
 
 def validate_group_descriptor(descriptor: str) -> tuple[bool, str]:
-    """Validate supported descriptor grammar used by high-level APIs."""
+    """Validate supported descriptor grammar used by high-level APIs.
+
+    Args:
+        descriptor (str): The group descriptor string to validate.
+
+    Returns:
+        tuple[bool, str]: A tuple containing a boolean indicating validity and
+            a status message ("ok" or an error message).
+    """
     d = str(descriptor).strip()
     if not d:
         return False, "Group descriptor is empty"

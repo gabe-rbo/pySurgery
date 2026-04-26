@@ -107,16 +107,24 @@ class HomotopyEquivalenceWitnessHook:
 
 @dataclass
 class HomotopyCompletionCertificate:
+    """Formal certificate of a homotopy-equivalence completion.
+
+    Attributes:
+        provided: Whether a certificate was provided.
+        source: Source of the certificate.
+        exact: Whether the certificate is exact.
+        validated: Whether the certificate has been formally validated.
+        equivalence_type: The type of equivalence certified.
+        summary: Human-readable summary.
+        assumptions: Mathematical assumptions for the certificate.
+        payload: Raw certificate data.
+    """
+
     provided: bool
     source: str
     exact: bool
     validated: bool
-    equivalence_type: Literal[
-        "homotopy_equivalence",
-        "simple_homotopy_equivalence",
-        "h_cobordism",
-        "s_cobordism",
-    ] = "homotopy_equivalence"
+    equivalence_type: str = "homotopy_equivalence"
     summary: str = ""
     assumptions: list[str] = field(default_factory=list)
     payload: dict[str, object] = field(default_factory=dict)
@@ -455,6 +463,14 @@ def _normalize_definite_lattice_isometry_certificate(
 
 
 def _canonical_coefficient_ring(raw_ring: object | None) -> str | None:
+    """Returns a canonical string representation of a coefficient ring.
+
+    Args:
+        raw_ring: The raw ring descriptor.
+
+    Returns:
+        Canonical ring name (e.g., 'Z', 'Z/2Z', 'Q').
+    """
     if raw_ring is None:
         return None
     ring = str(raw_ring).strip()
@@ -950,7 +966,15 @@ def _search_integer_isometry(
     """Search for U in GL_n(Z) with U^T Q1 U = Q2.
 
     For definite forms, use an exact finite lattice search (optionally accelerated by Julia).
-    For non-definite forms, keep the older bounded brute-force fallback.
+    For non-definite forms, use a bounded brute-force fallback.
+
+    Args:
+        Q1: First symmetric integer matrix.
+        Q2: Second symmetric integer matrix.
+        max_entry: Maximum entry value for search (fallback mode).
+
+    Returns:
+        The isometry matrix U if found, None otherwise.
     """
     if (
         Q1.ndim != 2
@@ -2740,8 +2764,14 @@ def analyze_homeomorphism_4d(
 def surgery_to_remove_impediments(
     m: IntersectionForm, target_sig: int
 ) -> Tuple[bool, str]:
-    """
-    Analyzes if surgery can be used to remove the 'impediment' to a target signature.
+    """Analyzes if surgery can be used to remove the 'impediment' to a target signature.
+
+    Args:
+        m: The current intersection form.
+        target_sig: The target signature.
+
+    Returns:
+        A tuple of (can_fix, surgery_plan).
     """
     sig_diff = m.signature() - target_sig
     if sig_diff == 0:

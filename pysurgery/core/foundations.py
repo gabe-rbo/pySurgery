@@ -10,7 +10,17 @@ CONTRACT_VERSION = "2026.04-phase10"
 
 
 class CoverageMatrixEntry(BaseModel):
-    """One scoped theorem-support claim in the package coverage matrix."""
+    """One scoped theorem-support claim in the package coverage matrix.
+
+    Attributes:
+        dimension_class (str): The dimension class (e.g., "2D", "3D").
+        pi_family (str): The fundamental group family.
+        theorem (str): The name of the theorem.
+        theorem_tag (str): A unique tag for the theorem.
+        status (str): Support status ("exact", "partial", or "unsupported").
+        required_inputs (list[str]): List of required input types.
+        notes (list[str]): Additional notes and caveats.
+    """
 
     dimension_class: str
     pi_family: str
@@ -22,7 +32,16 @@ class CoverageMatrixEntry(BaseModel):
 
 
 class AnalyzerContract(BaseModel):
-    """Contract metadata attached to analyzer outputs and witness payloads."""
+    """Contract metadata attached to analyzer outputs and witness payloads.
+
+    Attributes:
+        analyzer (str): The name of the analyzer.
+        theorem (str): The theorem being applied.
+        theorem_tag (str): The unique tag for the theorem.
+        contract_version (str): The version of the contract.
+        required_inputs (list[str]): List of required inputs for the contract.
+        exactness_policy (str): The policy governing exact statements.
+    """
 
     analyzer: str
     theorem: str
@@ -108,7 +127,11 @@ COVERAGE_MATRIX: list[CoverageMatrixEntry] = [
 
 
 def coverage_status_counts() -> dict[str, int]:
-    """Return the count of matrix entries by support status."""
+    """Return the count of matrix entries by support status.
+
+    Returns:
+        dict[str, int]: A dictionary mapping status strings to their counts.
+    """
     counts = Counter(entry.status for entry in COVERAGE_MATRIX)
     return dict(counts)
 
@@ -119,7 +142,17 @@ def get_contract(
     theorem_tag: str,
     required_inputs: list[str] | None = None,
 ) -> AnalyzerContract:
-    """Create a normalized analyzer contract record."""
+    """Create a normalized analyzer contract record.
+
+    Args:
+        analyzer (str): The name of the analyzer.
+        theorem (str): The name of the theorem.
+        theorem_tag (str): The unique tag for the theorem.
+        required_inputs (list[str] | None): Optional list of required inputs.
+
+    Returns:
+        AnalyzerContract: The generated analyzer contract.
+    """
     return AnalyzerContract(
         analyzer=analyzer,
         theorem=theorem,

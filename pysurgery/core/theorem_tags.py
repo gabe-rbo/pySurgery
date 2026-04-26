@@ -13,7 +13,14 @@ THEOREM_TAGS: dict[str, str] = {
 
 
 def infer_theorem_tag(theorem: str | None) -> str | None:
-    """Infer a stable theorem tag from user-facing theorem labels."""
+    """Infer a stable theorem tag from user-facing theorem labels.
+
+    Args:
+        theorem: The user-facing theorem label to infer a tag for.
+
+    Returns:
+        The inferred theorem tag, or None if the input is None.
+    """
     if theorem is None:
         return None
     t = str(theorem).strip()
