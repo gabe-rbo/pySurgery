@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysurgery"
-version = "1.6.1"
+version = "1.6.2"
 description = "A high-performance Python library for Computational Surgery Theory."
 dependencies = [
     "numpy>=2.4.4",
@@ -24,7 +24,7 @@ tda = ["gudhi"]
 mesh = ["trimesh"]
 ml = ["jax", "jaxlib", "torch", "torch_geometric"]
 test = ["pytest", "hypothesis>=6.152.1"]
-all = ["gudhi", "trimesh", "jax", "jaxlib", "torch", "torch_geometric", "pytest", "hypothesis>=6.152.1"]
+all = ["gudhi", "trimesh", "jax", "jaxlib", "torch", "torch_geometric", "pytest", "hypothesis>=6.152.1", 'plotly']
 
 [tool.setuptools.packages.find]
 where = ["."]
