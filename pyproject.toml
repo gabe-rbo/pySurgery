@@ -11,7 +11,8 @@ dependencies = [
     "scipy>=1.17.1",
     "sympy>=1.14.0",
     "numba>=0.65.0",
-    "pydantic>=2.13.2"
+    "pydantic>=2.13.2",
+    "juliacall>=0.9.22"
 ]
 authors = [
   { name = "Gabriel Ribeiro", email = "gabriel.ribeiro@dcc.ufmg.br" }
@@ -29,4 +30,7 @@ all = ["gudhi", "trimesh", "jax", "jaxlib", "torch", "torch_geometric", "pytest"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pysurgery*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.jl", "*.yaml"]
 

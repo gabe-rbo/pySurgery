@@ -1,10 +1,10 @@
 import pytest
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings
 import numpy as np
 from pysurgery.core.complexes import SimplicialComplex, CWComplex
-from pysurgery.core.fundamental_group import _pi1_raw_data_python, extract_pi_1
+from pysurgery.core.fundamental_group import extract_pi_1
 from pysurgery.bridge.julia_bridge import julia_engine
-from tests.strategies import simplicial_complexes_raw, point_clouds
+from strategies import simplicial_complexes_raw, point_clouds
 
 @pytest.mark.skipif(not julia_engine.available, reason="Julia engine not available")
 @settings(max_examples=50, deadline=None)

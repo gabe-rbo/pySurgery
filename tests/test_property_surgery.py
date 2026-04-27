@@ -1,4 +1,3 @@
-import pytest
 from hypothesis import given, settings, strategies as st
 import numpy as np
 from pysurgery.core.intersection_forms import IntersectionForm

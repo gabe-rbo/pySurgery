@@ -1,6 +1,5 @@
 import numpy as np
 from hypothesis import strategies as st
-import itertools
 
 @st.composite
 def point_clouds(draw, min_pts=4, max_pts=20, dim=3):

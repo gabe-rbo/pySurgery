@@ -1,8 +1,6 @@
-import pytest
-from hypothesis import given, settings, strategies as st
-import numpy as np
+from hypothesis import given, settings
 from pysurgery.core.complexes import SimplicialComplex
-from tests.strategies import point_clouds
+from strategies import point_clouds
 
 @settings(max_examples=50, deadline=None)
 @given(point_clouds(min_pts=5, max_pts=20))

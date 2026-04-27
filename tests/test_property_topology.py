@@ -1,9 +1,7 @@
-import pytest
-from hypothesis import given, settings, strategies as st
-import numpy as np
+from hypothesis import given, settings
 from pysurgery.core.complexes import SimplicialComplex
-from pysurgery.core.fundamental_group import extract_pi_1, simplify_presentation
-from tests.strategies import simplicial_complexes_raw, connected_simplicial_complexes_raw
+from pysurgery.core.fundamental_group import extract_pi_1
+from strategies import simplicial_complexes_raw, connected_simplicial_complexes_raw
 
 @settings(max_examples=100, deadline=None)
 @given(simplicial_complexes_raw())
@@ -50,7 +48,6 @@ def test_hurewicz_rank_consistency_property(simplices):
     pi1 = extract_pi_1(sc)
     # The abelianized rank should match H1 rank.
     # We can use our exact algebra to compute this.
-    simple_pi1 = simplify_presentation(pi1.generators, pi1.relations)
     
     # Simple check for now: pi1 is not None and has at least some generators if H1_rank > 0
     if h1_rank > 0:
