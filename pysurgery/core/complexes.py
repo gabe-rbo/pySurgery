@@ -1194,13 +1194,13 @@ class ChainComplex(BaseModel):
 
             mod_p = int(p) if ring_kind == "ZMOD" else None
             target_rank, _ = self.cohomology(n)
-            
+
             # Optimized incremental reduction using pre-allocated matrix
             max_pivots = cn_size
             pivot_matrix = np.zeros((max_pivots, cn_size), dtype=np.int64 if mod_p else float)
             pivot_indices = np.zeros(max_pivots, dtype=np.int64)
             n_pivots = 0
-            
+
             if dn is not None:
                 dn_T_arr = dn.T.toarray()
                 for j in range(dn_T_arr.shape[1]):
@@ -1248,12 +1248,11 @@ class ChainComplex(BaseModel):
             S, U, V = smith_normal_decomp(dnp1_T)
             # Z^n = ker(dn_plus_1^T). Columns of V corresponding to zero diagonal in S.
             z_basis = []
-            for j in range(V.cols):
-                if j >= S.rows or S[j, j] == 0:
+            for j in range(V.shape[1]):
+                if j >= S.shape[0] or S[j, j] == 0:
                     z_basis.append(np.array(V[:, j], dtype=np.int64).flatten())
         else:
             z_basis = [np.eye(cn_size, dtype=np.int64)[j] for j in range(cn_size)]
-
         # Optimized integral incremental reduction
         max_pivots = cn_size
         pivot_matrix = np.zeros((max_pivots, cn_size), dtype=np.int64)
@@ -1923,6 +1922,7 @@ class SimplicialComplex(BaseModel):
             A SimplicialComplex instance.
         """
         from scipy.spatial import Delaunay
+        import itertools
 
         pts = np.asarray(points, dtype=np.float64)
         if pts.ndim != 2:
@@ -1933,12 +1933,12 @@ class SimplicialComplex(BaseModel):
 
         dt = Delaunay(pts, qhull_options="QJ")
         simplices_d = dt.simplices
-        
+
         # Handle lack of alpha (EMST Heuristic)
         if alpha is None and max_alpha_square is None:
             import warnings
             warnings.warn("No alpha provided. Defaulting to EMST maximum edge length to ensure connectivity.")
-            
+
             alpha2 = None
             from ..bridge.julia_bridge import julia_engine
             if julia_engine.available:
@@ -1947,20 +1947,19 @@ class SimplicialComplex(BaseModel):
                     warnings.warn(f"[Alpha Complex] Alpha value found throgh EMST Heuristic {alpha2}")
                 except Exception:
                     pass
-            
+
             if alpha2 is None:
                 # Python fallback - Vectorized edge extraction
                 if len(simplices_d) > 0:
                     # simplices_d is (N, dim+1)
                     # All unique edges can be found by extracting combinations and sorting
                     all_edges = []
-                    import itertools
                     for i, j in itertools.combinations(range(simplices_d.shape[1]), 2):
                         all_edges.append(np.sort(simplices_d[:, [i, j]], axis=1))
-                    
+
                     edges_arr = np.unique(np.concatenate(all_edges, axis=0), axis=0)
                     u_idx, v_idx = edges_arr[:, 0], edges_arr[:, 1]
-                    
+
                     from scipy.sparse import csr_matrix
                     from scipy.sparse.csgraph import minimum_spanning_tree
                     dists = np.sqrt(np.sum((pts[u_idx] - pts[v_idx])**2, axis=1))
@@ -1973,7 +1972,6 @@ class SimplicialComplex(BaseModel):
             alpha2 = float(max_alpha_square)
         else:
             alpha2 = float(alpha**2)
-
         from pysurgery.bridge.julia_bridge import julia_engine
         if julia_engine.available:
             valid_simplices_list = julia_engine.compute_alpha_complex_simplices(
@@ -2997,14 +2995,21 @@ class SimplicialComplex(BaseModel):
                         candidate_simplices = set(coface_map[v])
                     else:
                         candidate_simplices.intersection_update(coface_map[v])
-                        if not candidate_simplices:
-                            return set()
+                
+                if not candidate_simplices:
+                    return set()
 
                 link = set()
                 for s in candidate_simplices:
-                    s_set = set(s)
-                    if not (sigma_set & s_set) and tuple(sorted(sigma_set | s_set)) in current_simplices:
-                        link.add(s)
+                    tau = tuple(sorted(set(s) - sigma_set))
+                    if tau: 
+                        link.add(tau)
+                    else:
+                        # Empty set is technically in the link, 
+                        # but for intersection purposes we can use an explicit marker if needed.
+                        # However, Link(u) \cap Link(v) == Link(uv) usually concerns non-empty simplices.
+                        # If we want to be rigorous, we can include the empty set.
+                        link.add(())
                 return link
 
             edges = [s for s in current_simplices if len(s) == 2]

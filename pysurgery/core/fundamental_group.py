@@ -514,6 +514,13 @@ def _pi1_raw_data_python(cw: CWComplex):
             edge_list.append((u, v))
             adj[u].append((v, e, col_d))
             adj[v].append((u, e, col_d))
+        elif len(col_r) == 0:
+            # Self-loop! Boundary is v - v = 0.
+            # In a CW complex, if d1 column is zero, it's a loop.
+            # We must associate it with SOME vertex. If n_vertices > 0, pick 0.
+            v = 0
+            edge_list.append((v, v))
+            adj[v].append((v, e, np.array([0])))
         else:
             edge_list.append(None)
     
