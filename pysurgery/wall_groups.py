@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Dict
 from math import comb
 from collections import Counter
 from pydantic import BaseModel, Field
@@ -394,12 +394,13 @@ class LDirectSumElement(BaseModel):
 
 class WallGroupL(BaseModel):
     """
-    Interface for computing Wall's surgery obstruction groups L_n(pi).
+    Interface for computing Wall's surgery obstruction groups L_n(pi, w).
     Extends beyond the simply-connected case into finite groups and Z.
     """
 
     dimension: int
     pi: Union[str, GroupPresentation] = "1"
+    w1: Optional[Dict[str, int]] = None  # Orientation character
 
     @staticmethod
     def _normalize_pi(pi: Union[str, GroupPresentation]) -> str:
@@ -417,20 +418,20 @@ class WallGroupL(BaseModel):
         return sig // 8
 
     def compute_obstruction(
-        self, form: Optional[IntersectionForm] = None
+        self, form: Optional[IntersectionForm] = None, backend: str = "auto"
     ) -> Union[int, str]:
         """
         Backward-compatible output (int or diagnostic string).
         """
-        return self.compute_obstruction_result(form).legacy_output()
+        return self.compute_obstruction_result(form, backend=backend).legacy_output()
 
     def compute_obstruction_element(
-        self, form: Optional[IntersectionForm] = None
+        self, form: Optional[IntersectionForm] = None, backend: str = "auto"
     ) -> LDirectSumElement:
-        return self.compute_obstruction_result(form).to_direct_sum_element()
+        return self.compute_obstruction_result(form, backend=backend).to_direct_sum_element()
 
     def _compute_for_single_factor(
-        self, n: int, pi: str, form: Optional[IntersectionForm]
+        self, n: int, pi: str, form: Optional[IntersectionForm], backend: str = "auto"
     ) -> ObstructionResult:
         assumptions: List[str] = []
         if pi == "1":
@@ -497,6 +498,42 @@ class WallGroupL(BaseModel):
             )
 
         if pi == "Z":
+            is_twisted = False
+            if self.w1:
+                # Check if the generator of Z is mapped to -1
+                # Z usually has one generator in our descriptors
+                if any(v == -1 for v in self.w1.values()):
+                    is_twisted = True
+            
+            if is_twisted:
+                assumptions.append("Twisted Shaneson splitting model for L_n(Z, w)")
+                # L_n(Z, twisted) is Z2 for n even, 0 for n odd
+                if n % 2 == 0:
+                    return ObstructionResult(
+                        dimension=n,
+                        pi=pi,
+                        computable=True,
+                        exact=True,
+                        value=form.arf_invariant() if (form and isinstance(form, QuadraticForm)) else 0,
+                        modulus=2,
+                        message="Twisted L_even(Z) is Z/2Z.",
+                        decomposition_kind="single_factor",
+                        assembly_certified=True,
+                        assumptions=assumptions,
+                    )
+                else:
+                    return ObstructionResult(
+                        dimension=n,
+                        pi=pi,
+                        computable=True,
+                        exact=True,
+                        value=0,
+                        message="Twisted L_odd(Z) is zero.",
+                        decomposition_kind="single_factor",
+                        assembly_certified=True,
+                        assumptions=assumptions,
+                    )
+
             assumptions.append("Shaneson splitting model for L_n(Z)")
             if n % 4 == 0:
                 return ObstructionResult(
@@ -581,17 +618,25 @@ class WallGroupL(BaseModel):
                 raise SurgeryObstructionError(
                     f"Intersection form required to compute Wall group L_{{{n}}}(Z_{p}) multisignature obstruction."
                 )
-            if julia_engine.available:
-                return ObstructionResult(
-                    dimension=n,
-                    pi=pi,
-                    computable=True,
-                    exact=True,
-                    value=int(julia_engine.compute_multisignature(form.matrix, p)),
-                    decomposition_kind="single_factor",
-                    assembly_certified=True,
-                    assumptions=assumptions,
-                )
+            # Normalize backend
+            backend_norm = str(backend).lower().strip()
+            use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
+            if use_julia:
+                try:
+                    return ObstructionResult(
+                        dimension=n,
+                        pi=pi,
+                        computable=True,
+                        exact=True,
+                        value=int(julia_engine.compute_multisignature(form.matrix, p)),
+                        decomposition_kind="single_factor",
+                        assembly_certified=True,
+                        assumptions=assumptions,
+                    )
+                except Exception as e:
+                    if backend_norm == "julia":
+                        raise e
             return ObstructionResult(
                 dimension=n,
                 pi=pi,
@@ -614,20 +659,25 @@ class WallGroupL(BaseModel):
         )
 
     def compute_obstruction_result(
-        self, form: Optional[IntersectionForm] = None
+        self, form: Optional[IntersectionForm] = None, backend: str = "auto"
     ) -> ObstructionResult:
-        """Compute surgery obstruction as a typed result with exactness metadata."""
+        """Compute surgery obstruction as a typed result with exactness metadata.
+        
+        Args:
+            form: The intersection/quadratic form.
+            backend: 'auto', 'julia', or 'python'.
+        """
         n = self.dimension
         pi = self._normalize_pi(self.pi)
         if "x" not in pi.lower():
-            return self._compute_for_single_factor(n, pi, form)
+            return self._compute_for_single_factor(n, pi, form, backend=backend)
 
         factors = [f.strip() for f in pi.split("x") if f.strip()]
         nontrivial = [f for f in factors if f != "1"]
         if len(nontrivial) == 0:
-            return self._compute_for_single_factor(n, "1", form)
+            return self._compute_for_single_factor(n, "1", form, backend=backend)
         if len(nontrivial) == 1:
-            return self._compute_for_single_factor(n, nontrivial[0], form)
+            return self._compute_for_single_factor(n, nontrivial[0], form, backend=backend)
 
         # Generalized Shaneson splitting for products with multiple Z factors:
         # L_n(pi x Z^k) ≅ ⊕_{j=0}^k binom(k,j) L_{n-j}(pi).
@@ -642,7 +692,7 @@ class WallGroupL(BaseModel):
                     multiplicity = comb(z_count, j)
                     base_res = WallGroupL(
                         dimension=n - j, pi=rest_pi
-                    ).compute_obstruction_result(form)
+                    ).compute_obstruction_result(form, backend=backend)
                     component_results.append(base_res)
                     summands.append(
                         {

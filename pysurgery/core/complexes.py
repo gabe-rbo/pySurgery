@@ -534,26 +534,30 @@ def _is_independent_wrt(
 
 
 def _matrix_rank_for_ring(
-    matrix: csr_matrix, ring_kind: str, p: int | None = None
+    matrix: csr_matrix, ring_kind: str, p: int | None = None, backend: str = "auto"
 ) -> int:
-    """Compute matrix rank in the requested coefficient field, preferring Julia when available.
+    """Compute matrix rank in the requested coefficient field with backend selection.
 
     Args:
         matrix: The sparse matrix.
         ring_kind: One of 'Q' or 'ZMOD'.
         p: Modulus for 'ZMOD'.
-
-    Returns:
-        The rank of the matrix.
+        backend: 'auto', 'julia', or 'python'.
     """
     if matrix is None or matrix.nnz == 0:
         return 0
 
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
     if ring_kind == "Q":
-        if julia_engine.available:
+        if use_julia:
             try:
                 return int(julia_engine.compute_sparse_rank_q(matrix))
             except Exception as exc:
+                if backend_norm == "julia":
+                    raise exc
                 warnings.warn(
                     "Topological Hint: Julia rank over Q failed in `ChainComplex.homology`; "
                     f"falling back to NumPy dense rank ({exc!r})."
@@ -566,10 +570,12 @@ def _matrix_rank_for_ring(
     if ring_kind == "ZMOD":
         if p is None:
             raise ValueError("Prime modulus p is required for Z/pZ rank computation.")
-        if julia_engine.available:
+        if use_julia:
             try:
                 return int(julia_engine.compute_sparse_rank_mod_p(matrix, int(p)))
             except Exception as exc:
+                if backend_norm == "julia":
+                    raise exc
                 warnings.warn(
                     "Topological Hint: Julia rank over Z/pZ failed in `ChainComplex.homology`; "
                     f"falling back to Python elimination ({exc!r})."
@@ -786,17 +792,18 @@ class ChainComplex(BaseModel):
         self._cache_set(key, out)
         return out
 
-    def _homology_over_z(self, n: int) -> Tuple[int, List[int]]:
+    def _homology_over_z(self, n: int, backend: str = "auto") -> Tuple[int, List[int]]:
         """Exact integral homology helper used by coefficient-change formulas.
 
         Args:
             n: Homological degree.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             A tuple (rank, torsion) for H_n(C; Z).
         """
         n = int(n)
-        key = ("chain", "homology_over_z", n)
+        key = ("chain", "homology_over_z", n, backend)
         cached = self._cache_get(key)
         if cached is not None:
             return cached
@@ -826,14 +833,14 @@ class ChainComplex(BaseModel):
             return out
 
         if dn is not None and dn.nnz > 0:
-            snf_n = get_sparse_snf_diagonal(dn)
+            snf_n = get_sparse_snf_diagonal(dn, backend=backend)
             rank_n = np.count_nonzero(snf_n)
         else:
             rank_n = 0
         dim_ker_n = c_n_size - rank_n
 
         if dn_plus_1 is not None and dn_plus_1.nnz > 0:
-            snf_n_plus_1 = get_sparse_snf_diagonal(dn_plus_1)
+            snf_n_plus_1 = get_sparse_snf_diagonal(dn_plus_1, backend=backend)
             rank_im_n_plus_1 = np.count_nonzero(snf_n_plus_1)
             torsion = [int(x) for x in snf_n_plus_1 if x > 1]
             if not torsion and any(x == 1 for x in snf_n_plus_1):
@@ -850,7 +857,7 @@ class ChainComplex(BaseModel):
         return out
 
     def homology(
-        self, n: int | None = None
+        self, n: int | None = None, backend: str = "auto"
     ) -> Tuple[int, List[int]] | Dict[int, Tuple[int, List[int]]]:
         """Compute the n-th homology group H_n(C) = ker(d_n) / im(d_{n+1}).
 
@@ -859,22 +866,23 @@ class ChainComplex(BaseModel):
 
         Args:
             n: Optional homological degree to compute.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             If n is provided: A tuple (rank, torsion).
             If n is None: A dictionary mapping degree to (rank, torsion).
         """
         if n is None:
-            key_all = ("chain", "homology", "all", str(self.coefficient_ring))
+            key_all = ("chain", "homology", "all", str(self.coefficient_ring), backend)
             cached_all = self._cache_get(key_all)
             if cached_all is not None:
                 return cached_all
-            out_all = {dim: self.homology(dim) for dim in self._homological_dimensions()}
+            out_all = {dim: self.homology(dim, backend=backend) for dim in self._homological_dimensions()}
             self._cache_set(key_all, out_all)
             return out_all
 
         n = int(n)
-        key = ("chain", "homology", n, str(self.coefficient_ring))
+        key = ("chain", "homology", n, str(self.coefficient_ring), backend)
         cached = self._cache_get(key)
         if cached is not None:
             return cached
@@ -882,12 +890,8 @@ class ChainComplex(BaseModel):
         ring_kind, p = _parse_coefficient_ring(self.coefficient_ring)
 
         if ring_kind == "ZMOD" and p is not None and not _is_prime(int(p)):
-            warnings.warn(
-                f"Composite-modulus homology in `ChainComplex.homology` over Z/{p}Z uses UCT + integral SNF fallback; "
-                "install/enable Julia for faster exact sparse integer reductions."
-            )
-            r_n, t_n = self._homology_over_z(n)
-            _, t_nm1 = self._homology_over_z(n - 1)
+            r_n, t_n = self._homology_over_z(n, backend=backend)
+            _, t_nm1 = self._homology_over_z(n - 1, backend=backend)
             modulus = int(p)
 
             rank_mod, torsion_mod = _composite_mod_uct_decomposition(
@@ -923,12 +927,12 @@ class ChainComplex(BaseModel):
 
         if dn is not None and dn.nnz > 0:
             if ring_kind == "Z":
-                snf_n = get_sparse_snf_diagonal(dn)
+                snf_n = get_sparse_snf_diagonal(dn, backend=backend)
                 rank_n = np.count_nonzero(snf_n)
             elif ring_kind == "Q":
-                rank_n = _matrix_rank_for_ring(dn, "Q")
+                rank_n = _matrix_rank_for_ring(dn, "Q", backend=backend)
             else:
-                rank_n = _matrix_rank_for_ring(dn, "ZMOD", int(p))
+                rank_n = _matrix_rank_for_ring(dn, "ZMOD", int(p), backend=backend)
         else:
             rank_n = 0
 
@@ -936,7 +940,7 @@ class ChainComplex(BaseModel):
 
         if dn_plus_1 is not None and dn_plus_1.nnz > 0:
             if ring_kind == "Z":
-                snf_n_plus_1 = get_sparse_snf_diagonal(dn_plus_1)
+                snf_n_plus_1 = get_sparse_snf_diagonal(dn_plus_1, backend=backend)
                 rank_im_n_plus_1 = np.count_nonzero(snf_n_plus_1)
                 torsion = [int(x) for x in snf_n_plus_1 if x > 1]
                 if not torsion and any(x == 1 for x in snf_n_plus_1):
@@ -945,10 +949,10 @@ class ChainComplex(BaseModel):
                         " only unit factors, so torsion could not be fully resolved."
                     )
             elif ring_kind == "Q":
-                rank_im_n_plus_1 = _matrix_rank_for_ring(dn_plus_1, "Q")
+                rank_im_n_plus_1 = _matrix_rank_for_ring(dn_plus_1, "Q", backend=backend)
                 torsion = []
             else:
-                rank_im_n_plus_1 = _matrix_rank_for_ring(dn_plus_1, "ZMOD", int(p))
+                rank_im_n_plus_1 = _matrix_rank_for_ring(dn_plus_1, "ZMOD", int(p), backend=backend)
                 torsion = []
         else:
             rank_im_n_plus_1 = 0
@@ -959,30 +963,31 @@ class ChainComplex(BaseModel):
         return out
 
     def cohomology(
-        self, n: int | None = None
+        self, n: int | None = None, backend: str = "auto"
     ) -> Tuple[int, List[int]] | Dict[int, Tuple[int, List[int]]]:
         """Compute the n-th cohomology group H^n(C).
 
         Args:
             n: Optional homological degree to compute.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             If n is provided: A tuple (rank, torsion).
             If n is None: A dictionary mapping degree to (rank, torsion).
         """
         if n is None:
-            key_all = ("chain", "cohomology", "all", str(self.coefficient_ring))
+            key_all = ("chain", "cohomology", "all", str(self.coefficient_ring), backend)
             cached_all = self._cache_get(key_all)
             if cached_all is not None:
                 return cached_all
             out_all = {
-                dim: self.cohomology(dim) for dim in self._homological_dimensions()
+                dim: self.cohomology(dim, backend=backend) for dim in self._homological_dimensions()
             }
             self._cache_set(key_all, out_all)
             return out_all
 
         n = int(n)
-        key = ("chain", "cohomology", n, str(self.coefficient_ring))
+        key = ("chain", "cohomology", n, str(self.coefficient_ring), backend)
         cached = self._cache_get(key)
         if cached is not None:
             return cached
@@ -991,8 +996,8 @@ class ChainComplex(BaseModel):
         if ring_kind == "ZMOD":
             _, p = _parse_coefficient_ring(self.coefficient_ring)
             if p is not None and not _is_prime(int(p)):
-                r_n, t_n = self._homology_over_z(n)
-                _, t_nm1 = self._homology_over_z(n - 1)
+                r_n, t_n = self._homology_over_z(n, backend=backend)
+                _, t_nm1 = self._homology_over_z(n - 1, backend=backend)
                 modulus = int(p)
                 rank_mod, torsion_mod = _composite_mod_uct_decomposition(
                     r_n, t_n, t_nm1, modulus
@@ -1000,7 +1005,7 @@ class ChainComplex(BaseModel):
                 out = (int(rank_mod), torsion_mod)
                 self._cache_set(key, out)
                 return out
-        free_rank, _ = self.homology(n)
+        free_rank, _ = self.homology(n, backend=backend)
         if ring_kind == "Z":
             _, prev_torsion = self.homology(n - 1)
             out = (free_rank, prev_torsion)
@@ -1063,55 +1068,60 @@ class ChainComplex(BaseModel):
         self._cache_set(key, out)
         return out
 
-    def betti_number(self, n: int | None = None) -> int | Dict[int, int]:
+    def betti_number(self, n: int | None = None, backend: str = "auto") -> int | Dict[int, int]:
         """Return the n-th Betti number (rank of H_n).
 
         Args:
             n: Optional degree.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             Betti number or dictionary of Betti numbers.
         """
         if n is None:
-            key_all = ("chain", "betti_number", "all", str(self.coefficient_ring))
+            key_all = ("chain", "betti_number", "all", str(self.coefficient_ring), backend)
             cached_all = self._cache_get(key_all)
             if cached_all is not None:
                 return cached_all
-            hom_all = self.homology()
+            hom_all = self.homology(backend=backend)
             out_all = {dim: rank for dim, (rank, _) in hom_all.items()}
             self._cache_set(key_all, out_all)
             return out_all
 
         n = int(n)
-        key = ("chain", "betti_number", n, str(self.coefficient_ring))
+        key = ("chain", "betti_number", n, str(self.coefficient_ring), backend)
         cached = self._cache_get(key)
         if cached is not None:
             return cached
-        rank, _ = self.homology(n)
+        rank, _ = self.homology(n, backend=backend)
         out = int(rank)
         self._cache_set(key, out)
         return out
 
-    def betti_numbers(self) -> Dict[int, int]:
+    def betti_numbers(self, backend: str = "auto") -> Dict[int, int]:
         """Return all Betti numbers.
+
+        Args:
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             Dictionary mapping degree to Betti number.
         """
-        out = self.betti_number()
+        out = self.betti_number(backend=backend)
         return out
 
-    def cohomology_basis(self, n: int) -> list[np.ndarray]:
+    def cohomology_basis(self, n: int, backend: str = "auto") -> list[np.ndarray]:
         """Computes a basis for the free part of the n-th cohomology group H^n(C).
 
         Args:
             n: Degree.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             List of cochain vectors forming a basis.
         """
         n = int(n)
-        key = ("chain", "cohomology_basis", n, str(self.coefficient_ring))
+        key = ("chain", "cohomology_basis", n, str(self.coefficient_ring), backend)
         cached = self._cache_get(key)
         if cached is not None:
             return cached
@@ -1132,21 +1142,44 @@ class ChainComplex(BaseModel):
 
         ring_kind, p = _parse_coefficient_ring(self.coefficient_ring)
 
+        # Normalize backend
+        backend_norm = str(backend).lower().strip()
+        use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
+        if use_julia:
+            try:
+                # Delegate to Julia for exact/fast sparse SNF-based basis
+                if ring_kind == "Z":
+                    d_np1_coo = dn_plus_1.tocoo() if dn_plus_1 is not None and dn_plus_1.nnz > 0 else None
+                    
+                    if d_np1_coo is not None:
+                        # Julia expects: d_np1, d_n, cn_size
+                        # We pass boundaries[n+1] as the first map
+                        basis_raw = julia_engine.compute_sparse_cohomology_basis(
+                            d_np1_coo.row, d_np1_coo.col, d_np1_coo.data,
+                            cn_size=cn_size
+                        )
+                        out = [np.asarray(v) for v in basis_raw]
+                        self._cache_set(key, out)
+                        return out
+                elif ring_kind == "ZMOD":
+                    # Julia mod-p implementation hook
+                    pass
+            except Exception as e:
+                if backend_norm == "julia":
+                    raise e
+
         if ring_kind == "ZMOD" and p is not None and not _is_prime(int(p)):
-            warnings.warn(
-                f"Composite-modulus cohomology basis in `ChainComplex.cohomology_basis` over Z/{p}Z uses integral-basis reduction fallback; "
-                "install/enable Julia for faster exact sparse quotient-basis computation."
-            )
             integral_complex = ChainComplex(
                 boundaries=self.boundaries,
                 dimensions=self.dimensions,
                 cells=self.cells,
                 coefficient_ring="Z",
             )
-            basis_z = integral_complex.cohomology_basis(n)
+            basis_z = integral_complex.cohomology_basis(n, backend=backend)
             out = []
             modulus = int(p)
-            target_rank, _ = self.cohomology(n)
+            target_rank, _ = self.cohomology(n, backend=backend)
             for v in basis_z[:target_rank]:
                 out.append(np.asarray(v, dtype=np.int64) % modulus)
             while len(out) < target_rank and cn_size > 0:
@@ -1300,21 +1333,24 @@ class ChainComplex(BaseModel):
         self._cache_set(key, int(chi))
         return int(chi)
 
-    def topological_invariants(self) -> Dict[str, Any]:
+    def topological_invariants(self, backend: str = "auto") -> Dict[str, Any]:
         """Compute all key topological invariants at once.
+
+        Args:
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             A dictionary containing homology, cohomology, Betti numbers,
             and the Euler characteristic.
         """
-        key = ("chain", "topological_invariants", str(self.coefficient_ring))
+        key = ("chain", "topological_invariants", str(self.coefficient_ring), backend)
         cached = self._cache_get(key)
         if cached is not None:
             return cast(Dict[str, Any], cached)
 
-        homology = self.homology()
-        cohomology = self.cohomology()
-        betti = self.betti_numbers()
+        homology = self.homology(backend=backend)
+        cohomology = self.cohomology(backend=backend)
+        betti = self.betti_numbers(backend=backend)
         chi = self.euler_characteristic()
 
         out = {
@@ -1464,41 +1500,44 @@ class CWComplex(BaseModel):
         return self.attaching_maps
 
     def homology(
-        self, n: int | None = None
+        self, n: int | None = None, backend: str = "auto"
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
         """Compute the n-th cellular homology.
 
         Args:
             n: Optional degree.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             Rank/torsion or dictionary of results.
         """
-        return self.cellular_chain_complex().homology(n)
+        return self.cellular_chain_complex().homology(n, backend=backend)
 
     def cohomology(
-        self, n: int | None = None
+        self, n: int | None = None, backend: str = "auto"
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
         """Compute the n-th cellular cohomology.
 
         Args:
             n: Optional degree.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             Rank/torsion or dictionary of results.
         """
-        return self.cellular_chain_complex().cohomology(n)
+        return self.cellular_chain_complex().cohomology(n, backend=backend)
 
-    def cohomology_basis(self, n: int) -> list[np.ndarray]:
+    def cohomology_basis(self, n: int, backend: str = "auto") -> list[np.ndarray]:
         """Compute a basis for cellular cohomology.
 
         Args:
             n: Degree.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             List of basis vectors.
         """
-        return self.cellular_chain_complex().cohomology_basis(n)
+        return self.cellular_chain_complex().cohomology_basis(n, backend=backend)
 
     def euler_characteristic(self) -> int:
         """Compute the Euler characteristic.
@@ -1508,32 +1547,36 @@ class CWComplex(BaseModel):
         """
         return self.cellular_chain_complex().euler_characteristic()
 
-    def betti_number(self, n: int | None = None) -> int | Dict[int, int]:
+    def betti_number(self, n: int | None = None, backend: str = "auto") -> int | Dict[int, int]:
         """Return the n-th Betti number.
 
         Args:
             n: Optional degree.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             Betti number or dictionary of Betti numbers.
         """
-        return self.cellular_chain_complex().betti_number(n)
+        return self.cellular_chain_complex().betti_number(n, backend=backend)
 
-    def betti_numbers(self) -> Dict[int, int]:
+    def betti_numbers(self, backend: str = "auto") -> Dict[int, int]:
         """Return all Betti numbers.
 
         Returns:
             Dictionary mapping degree to Betti number.
         """
-        return self.cellular_chain_complex().betti_numbers()
+        return self.cellular_chain_complex().betti_numbers(backend=backend)
 
-    def topological_invariants(self) -> Dict[str, Any]:
+    def topological_invariants(self, backend: str = "auto") -> Dict[str, Any]:
         """Compute all key topological invariants.
+
+        Args:
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             Dictionary of invariants.
         """
-        return self.cellular_chain_complex().topological_invariants()
+        return self.cellular_chain_complex().topological_invariants(backend=backend)
 
     def cellular_chain_complex(
         self, *, coefficient_ring: str | None = None
@@ -1907,6 +1950,7 @@ class SimplicialComplex(BaseModel):
         *,
         max_alpha_square: Optional[float] = None,
         coefficient_ring: str = "Z",
+        backend: str = "auto",
     ) -> "SimplicialComplex":
         """Compute an Alpha complex for the given points and distance threshold.
 
@@ -1917,6 +1961,7 @@ class SimplicialComplex(BaseModel):
             alpha: Distance threshold (circumradius).
             max_alpha_square: Squared distance threshold override.
             coefficient_ring: Coefficient ring label.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             A SimplicialComplex instance.
@@ -1934,25 +1979,28 @@ class SimplicialComplex(BaseModel):
         dt = Delaunay(pts, qhull_options="QJ")
         simplices_d = dt.simplices
 
+        # Normalize backend
+        backend_norm = str(backend).lower().strip()
+        use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
         # Handle lack of alpha (EMST Heuristic)
         if alpha is None and max_alpha_square is None:
             import warnings
             warnings.warn("No alpha provided. Defaulting to EMST maximum edge length to ensure connectivity.")
 
             alpha2 = None
-            from ..bridge.julia_bridge import julia_engine
-            if julia_engine.available:
+            if use_julia:
                 try:
                     alpha2 = julia_engine.compute_alpha_threshold_emst(pts, simplices_d)
-                    warnings.warn(f"[Alpha Complex] Alpha value found throgh EMST Heuristic {alpha2}")
-                except Exception:
-                    pass
+                    warnings.warn(f"[Alpha Complex] Alpha value found through EMST Heuristic {alpha2}")
+                except Exception as e:
+                    if backend_norm == "julia":
+                        raise e
 
             if alpha2 is None:
                 # Python fallback - Vectorized edge extraction
                 if len(simplices_d) > 0:
-                    # simplices_d is (N, dim+1)
-                    # All unique edges can be found by extracting combinations and sorting
+                    # All unique edges
                     all_edges = []
                     for i, j in itertools.combinations(range(simplices_d.shape[1]), 2):
                         all_edges.append(np.sort(simplices_d[:, [i, j]], axis=1))
@@ -1972,164 +2020,92 @@ class SimplicialComplex(BaseModel):
             alpha2 = float(max_alpha_square)
         else:
             alpha2 = float(alpha**2)
-        from pysurgery.bridge.julia_bridge import julia_engine
-        if julia_engine.available:
-            valid_simplices_list = julia_engine.compute_alpha_complex_simplices(
-                pts, simplices_d, alpha2, dim
-            )
-            return cls.from_simplices(valid_simplices_list, coefficient_ring=coefficient_ring, close_under_faces=True)
 
-        valid_simplices: set[tuple[int, ...]] = set()
+        if use_julia:
+            try:
+                valid_simplices_list = julia_engine.compute_alpha_complex_simplices(
+                    pts, simplices_d, alpha2, dim
+                )
+                return cls.from_simplices(valid_simplices_list, coefficient_ring=coefficient_ring, close_under_faces=True)
+            except Exception as e:
+                if backend_norm == "julia":
+                    raise e
+                import warnings
+                warnings.warn(f"Julia Alpha Complex failed ({e!r}). Falling back to pure Python.")
 
-        if dim == 2:
-            # 1. Compute circumradius for all triangles
-            p0 = pts[simplices_d[:, 0]]
-            p1 = pts[simplices_d[:, 1]]
-            p2 = pts[simplices_d[:, 2]]
-            
-            area = 0.5 * np.abs((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1]) - (p2[:, 0] - p0[:, 0]) * (p1[:, 1] - p0[:, 1]))
-            a2 = np.sum((p1 - p2)**2, axis=1)
-            b2 = np.sum((p0 - p2)**2, axis=1)
-            c2 = np.sum((p0 - p1)**2, axis=1)
-            
-            with np.errstate(divide='ignore', invalid='ignore'):
-                r2_tri = (a2 * b2 * c2) / (16.0 * area**2 + 1e-30)
-            
-            # Obtuse check for triangles (diametral sphere logic)
-            longest_edge_sq = np.maximum(np.maximum(a2, b2), c2)
-            is_obtuse = (a2 + b2 < c2) | (a2 + c2 < b2) | (b2 + c2 < a2)
-            r2_tri = np.where(is_obtuse, longest_edge_sq / 4.0, r2_tri)
-            
-            for i, s in enumerate(simplices_d):
-                if r2_tri[i] <= alpha2:
-                    valid_simplices.add(tuple(sorted(int(v) for v in s)))
-            
-            # 2. Check edges - Vectorized
-            all_edges = []
-            for combo in itertools.combinations(range(3), 2):
-                all_edges.append(np.sort(simplices_d[:, list(combo)], axis=1))
-            edges_arr = np.unique(np.concatenate(all_edges, axis=0), axis=0)
-            
-            e_len2 = np.sum((pts[edges_arr[:, 0]] - pts[edges_arr[:, 1]])**2, axis=1)
-            valid_mask_edge = (e_len2 / 4.0) <= alpha2
-            for s in edges_arr[valid_mask_edge]:
-                valid_simplices.add(tuple(int(v) for v in s))
-        
-        elif dim == 3:
-            # 1. Check Tetrahedra (3-simplices) - Vectorized
-            p0 = pts[simplices_d[:, 0]]
-            p1 = pts[simplices_d[:, 1]]
-            p2 = pts[simplices_d[:, 2]]
-            p3 = pts[simplices_d[:, 3]]
-            
-            v1 = p1 - p0
-            v2 = p2 - p0
-            v3 = p3 - p0
-            
-            # Using the formula R = |v1|^2 (v2 x v3) + |v2|^2 (v3 x v1) + |v3|^2 (v1 x v2) / (2 * det(v1, v2, v3))
-            cp23 = np.cross(v2, v3)
-            cp31 = np.cross(v3, v1)
-            cp12 = np.cross(v1, v2)
-            
-            det_val = np.sum(v1 * cp23, axis=1)
-            
-            num = (np.sum(v1**2, axis=1)[:, None] * cp23 + 
-                   np.sum(v2**2, axis=1)[:, None] * cp31 + 
-                   np.sum(v3**2, axis=1)[:, None] * cp12)
-            
-            r2_tet = np.sum(num**2, axis=1) / (4.0 * det_val**2 + 1e-30)
-            
-            # Filter valid tetrahedra
-            valid_mask = (r2_tet <= alpha2) & (np.abs(det_val) > 1e-15)
-            for s in simplices_d[valid_mask]:
-                valid_simplices.add(tuple(sorted(int(v) for v in s)))
-            
-            # 2. Extract and check unique Triangles (2-simplices) - Vectorized
-            all_tris = []
-            for combo in itertools.combinations(range(4), 3):
-                all_tris.append(np.sort(simplices_d[:, list(combo)], axis=1))
-            tris_arr = np.unique(np.concatenate(all_tris, axis=0), axis=0)
-            
-            tp0 = pts[tris_arr[:, 0]]
-            tp1 = pts[tris_arr[:, 1]]
-            tp2 = pts[tris_arr[:, 2]]
-            
-            tv1 = tp1 - tp0
-            tv2 = tp2 - tp0
-            
-            # Formula for triangle circumradius in 3D: R = |a||b||c| / 4*Area
-            a2 = np.sum((tp1 - tp2)**2, axis=1)
-            b2 = np.sum(tv2**2, axis=1)
-            c2 = np.sum(tv1**2, axis=1)
-            
-            areas = 0.5 * np.linalg.norm(np.cross(tv1, tv2), axis=1)
-            
-            with np.errstate(divide='ignore', invalid='ignore'):
-                r2_tri = (a2 * b2 * c2) / (16.0 * areas**2 + 1e-30)
-            
-            # Obtuse check for triangles
-            longest_e2 = np.maximum(np.maximum(a2, b2), c2)
-            is_obtuse = (a2 + b2 < c2) | (a2 + c2 < b2) | (b2 + c2 < a2)
-            r2_tri = np.where(is_obtuse, longest_e2 / 4.0, r2_tri)
-            
-            valid_mask_tri = (r2_tri <= alpha2) & (areas > 1e-15)
-            for s in tris_arr[valid_mask_tri]:
-                valid_simplices.add(tuple(int(v) for v in s))
+        # Python fallback - Robust Alpha Complex (Gabriel condition)
+        # A simplex is included if its circumradius is <= alpha.
+        def get_all_faces(simplices, d):
+            faces = set()
+            for s in simplices:
+                for combo in itertools.combinations(s, d+1):
+                    faces.add(tuple(sorted(int(v) for v in combo)))
+            if not faces:
+                return np.zeros((0, d + 1), dtype=np.int64)
+            return np.array(list(faces), dtype=np.int64)
 
-            # 3. Extract and check unique Edges (1-simplices) - Vectorized
-            all_edges = []
-            for combo in itertools.combinations(range(4), 2):
-                all_edges.append(np.sort(simplices_d[:, list(combo)], axis=1))
-            edges_arr = np.unique(np.concatenate(all_edges, axis=0), axis=0)
+        _r2_cache_py = {}
+
+        def get_r2_py(s_indices):
+            s_key = tuple(sorted(s_indices))
+            if s_key in _r2_cache_py:
+                return _r2_cache_py[s_key]
             
-            e_len2 = np.sum((pts[edges_arr[:, 0]] - pts[edges_arr[:, 1]])**2, axis=1)
-            valid_mask_edge = (e_len2 / 4.0) <= alpha2
-            for s in edges_arr[valid_mask_edge]:
-                valid_simplices.add(tuple(int(v) for v in s))
+            k = len(s_key)
+            if k == 1:
+                return 0.0
+            
+            pts_s = pts[list(s_key)]
+            if k == 2:
+                val = np.sum((pts_s[0] - pts_s[1])**2) / 4.0
+                _r2_cache_py[s_key] = val
+                return val
+            
+            if k == 3:
+                # Triangle
+                p0, p1, p2 = pts_s[0], pts_s[1], pts_s[2]
+                v1, v2 = p1 - p0, p2 - p0
+                area2 = 0.25 * np.sum(np.cross(v1, v2)**2)
+                a2, b2, c2 = np.sum((p1-p2)**2), np.sum((p0-p2)**2), np.sum((p0-p1)**2)
+                r2_acute = (a2 * b2 * c2) / (16.0 * area2 + 1e-30)
+                is_obtuse = (a2 + b2 < c2) | (a2 + c2 < b2) | (b2 + c2 < a2)
+                val = max(a2, b2, c2) / 4.0 if is_obtuse else r2_acute
+                _r2_cache_py[s_key] = val
+                return val
 
-        else:
-            # Generalized N-dimensional fallback (with sub-face evaluation and caching)
-            _r2_cache: Dict[Tuple[int, ...], float] = {}
+            # Generic N-dimensional
+            p0 = pts_s[0]
+            A_mat = pts_s[1:] - p0
+            b_vec = 0.5 * np.sum((pts_s[1:] - p0)**2, axis=1)
+            try:
+                # Check for degeneracy in 3D (k=4)
+                if k-1 == dim and abs(np.linalg.det(A_mat)) < 1e-15:
+                    r2_max = 0.0
+                    for face in itertools.combinations(s_key, k-1):
+                        r2_max = max(r2_max, get_r2_py(face))
+                    _r2_cache_py[s_key] = r2_max
+                    return r2_max
 
-            def get_r2(simplex_indices):
-                sorted_idx = tuple(sorted(simplex_indices))
-                if sorted_idx in _r2_cache:
-                    return _r2_cache[sorted_idx]
-                
-                pts_s = pts[list(sorted_idx)]
-                k = len(sorted_idx)
-                if k == 1:
-                    return 0.0
-                p0 = pts_s[0]
-                A = pts_s[1:] - p0
-                b = 0.5 * np.sum((pts_s[1:] - p0)**2, axis=1)
-                try:
-                    c, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
-                    val = np.sum(c**2)
-                    _r2_cache[sorted_idx] = val
-                    return val
-                except Exception:
-                    _r2_cache[sorted_idx] = float('inf')
-                    return float('inf')
+                c_vec, _, _, _ = np.linalg.lstsq(A_mat, b_vec, rcond=None)
+                val = np.sum(c_vec**2)
+                _r2_cache_py[s_key] = val
+                return val
+            except Exception:
+                _r2_cache_py[s_key] = np.inf
+                return np.inf
 
-            for s in simplices_d:
-                sorted_s = tuple(sorted(s))
-                if get_r2(sorted_s) <= alpha2:
-                    valid_simplices.add(sorted_s)
-                else:
-                    # Maximal simplex failed, check sub-faces recursively or by dimension
-                    for r in range(dim, 1, -1):
-                        for face in itertools.combinations(sorted_s, r):
-                            if face in valid_simplices:
-                                continue
-                            if get_r2(face) <= alpha2:
-                                valid_simplices.add(tuple(sorted(face)))
-
-        # Final closure logic
+        valid_simplices_final = set()
         for i in range(n_pts):
-            valid_simplices.add((i,))
-            
-        return cls.from_simplices(valid_simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
+            valid_simplices_final.add((i,))
+
+        # Evaluate all faces of Delaunay triangulation
+        for d in range(1, dim + 1):
+            d_simplices = get_all_faces(simplices_d, d)
+            for s in d_simplices:
+                if get_r2_py(s) <= alpha2:
+                    valid_simplices_final.add(tuple(s))
+        
+        return cls.from_simplices(list(valid_simplices_final), coefficient_ring=coefficient_ring, close_under_faces=True)
 
     @classmethod
     def from_crust_algorithm(
@@ -2573,46 +2549,49 @@ class SimplicialComplex(BaseModel):
         return mat
 
     def homology(
-        self, n: int | None = None
+        self, n: int | None = None, backend: str = "auto"
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
         """Compute the homology of the simplicial complex.
 
         Args:
             n: Optional homological degree to compute. If None, computes for all degrees.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             If n is provided: A tuple (rank, torsion).
             If n is None: A dictionary mapping degree to (rank, torsion).
         """
-        return self.cellular_chain_complex().homology(n)
+        return self.cellular_chain_complex().homology(n, backend=backend)
 
     def cohomology(
-        self, n: int | None = None
+        self, n: int | None = None, backend: str = "auto"
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
         """Compute the cohomology of the simplicial complex.
 
         Args:
             n: Optional homological degree to compute. If None, computes for all degrees.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             If n is provided: A tuple (rank, torsion).
             If n is None: A dictionary mapping degree to (rank, torsion).
         """
-        return self.cellular_chain_complex().cohomology(n)
+        return self.cellular_chain_complex().cohomology(n, backend=backend)
 
-    def cohomology_basis(self, n: int) -> list[np.ndarray]:
+    def cohomology_basis(self, n: int, backend: str = "auto") -> list[np.ndarray]:
         """Compute a basis for the n-th cohomology group.
 
         Args:
             n: Degree.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             list[np.ndarray]: List of cochain vectors forming a basis.
         """
-        return self.cellular_chain_complex().cohomology_basis(n)
+        return self.cellular_chain_complex().cohomology_basis(n, backend=backend)
 
     def reduced_homology(
-        self, n: int | None = None
+        self, n: int | None = None, backend: str = "auto"
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
         r"""Compute the reduced homology groups \tilde{H}_n(K).
         
@@ -2622,14 +2601,15 @@ class SimplicialComplex(BaseModel):
 
         Args:
             n: Optional homological degree to compute. If None, returns all degrees.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             If n is provided: A tuple (rank, torsion).
             If n is None: A dictionary mapping degree to (rank, torsion).
         """
-        h = self.homology()
+        h = self.homology(backend=backend)
         if not isinstance(h, dict):
-            h = {i: self.homology(i) for i in self._homological_dimensions()}
+            h = {i: self.homology(i, backend=backend) for i in self._homological_dimensions()}
             
         rh = {}
         for k, (rank, torsion) in h.items():
@@ -2653,32 +2633,38 @@ class SimplicialComplex(BaseModel):
             
         return rh
 
-    def is_homology_manifold(self) -> tuple[bool, int | None, dict[int, str]]:
+    def is_homology_manifold(self, backend: str = "auto") -> tuple[bool, int | None, dict[int, str]]:
         r"""Check if the simplicial complex is a homology manifold (potentially with boundary).
-        
+
         A complex is a d-dimensional homology manifold if for every vertex v:
         - \tilde{H}_*(Lk(v)) \cong \tilde{H}_*(S^{d-1}) (interior vertex)
         - \tilde{H}_*(Lk(v)) \cong \tilde{H}_*(D^{d-1}) \cong 0 (boundary vertex)
-        
+
+        Args:
+            backend: 'auto', 'julia', or 'python'.
+
         Returns:
             tuple: A tuple containing:
                 - is_manifold (bool): True if it's a homology manifold.
                 - dimension (int | None): The detected intrinsic dimension.
                 - diagnostics (dict[int, str]): Mapping vertex ID to failure reason.
         """
-        if julia_engine.available:
+        # Normalize backend
+        backend_norm = str(backend).lower().strip()
+        use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
+        if use_julia:
             try:
                 # Accelerate heavy vertex link homology loop in Julia
                 all_simplices = []
                 for d in self.dimensions:
                     all_simplices.extend(self.n_simplices(d))
                 return julia_engine.is_homology_manifold_jl(all_simplices, self.dimension)
-            except (MemoryError, KeyboardInterrupt):
-                raise
             except Exception as e:
+                if backend_norm == "julia":
+                    raise e
                 import warnings
                 warnings.warn(f"Julia is_homology_manifold failed ({e!r}). Falling back to pure Python.")
-
         vertices = [v[0] for v in self.n_simplices(0)]
         if not vertices:
             return True, -1, {}

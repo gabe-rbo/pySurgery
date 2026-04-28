@@ -1108,6 +1108,7 @@ def compute_homology_basis_from_simplices(
     max_roots: Optional[int] = None,
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
+    backend: str = "auto",
 ) -> HomologyBasisResult:
     """Compute H_k generator representatives from simplices over Z/2.
 
@@ -1136,6 +1137,10 @@ def compute_homology_basis_from_simplices(
         raise ValueError("mode must be 'valid' or 'optimal'")
 
     simplices_list = [tuple(int(x) for x in s) for s in simplices]
+    
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
 
     # Keep H1 optimal path backward-compatible and data-grounded.
     if dimension == 1 and mode == "optimal":
@@ -1146,9 +1151,10 @@ def compute_homology_basis_from_simplices(
             max_roots=max_roots,
             root_stride=root_stride,
             max_cycles=max_cycles,
+            backend=backend
         )
 
-    if julia_engine.available:
+    if use_julia:
         try:
             out = julia_engine.compute_homology_basis_from_simplices(
                 simplices_list,
@@ -1190,6 +1196,8 @@ def compute_homology_basis_from_simplices(
                 ),
             )
         except Exception as exc:
+            if backend_norm == "julia":
+                raise exc
             warnings.warn(
                 f"Julia homology engine was available but failed during computation ({exc!r}). "
                 "Falling back to Python/Numba-accelerated engine."
@@ -1215,6 +1223,7 @@ def compute_homology_basis_from_complex(
     max_roots: Optional[int] = None,
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
+    backend: str = "auto",
 ) -> HomologyBasisResult:
     """Compute H_k generators directly from a SimplicialComplex object.
 
@@ -1226,15 +1235,15 @@ def compute_homology_basis_from_complex(
         max_roots (Optional[int]): Max roots for H1 optimal.
         root_stride (int): Stride for roots. Defaults to 1.
         max_cycles (Optional[int]): Max candidates for H1 optimal.
+        backend (str): 'auto', 'julia', or 'python'.
 
     Returns:
         HomologyBasisResult: The computed homology basis.
     """
     # Get all simplices up to dim + 1
     simplices = []
-    for d in range(dimension + 1):
+    for d in range(dimension + 2):
         simplices.extend(list(complex.n_simplices(d)))
-    simplices.extend(list(complex.n_simplices(dimension + 1)))
 
     v_simps = list(complex.n_simplices(0))
     num_vertices = max(v[0] for v in v_simps) + 1 if v_simps else 0
@@ -1248,6 +1257,7 @@ def compute_homology_basis_from_complex(
         max_roots=max_roots,
         root_stride=root_stride,
         max_cycles=max_cycles,
+        backend=backend,
     )
 
 
@@ -1258,6 +1268,7 @@ def compute_optimal_h1_basis_from_complex(
     max_roots: Optional[int] = None,
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
+    backend: str = "auto",
 ) -> HomologyBasisResult:
     """Compute an optimal H1 basis directly from a SimplicialComplex object.
 
@@ -1267,6 +1278,7 @@ def compute_optimal_h1_basis_from_complex(
         max_roots (Optional[int]): Max roots.
         root_stride (int): Stride for roots. Defaults to 1.
         max_cycles (Optional[int]): Max candidates.
+        backend (str): 'auto', 'julia', or 'python'.
 
     Returns:
         HomologyBasisResult: The computed optimal H1 basis.
@@ -1283,4 +1295,5 @@ def compute_optimal_h1_basis_from_complex(
         max_roots=max_roots,
         root_stride=root_stride,
         max_cycles=max_cycles,
+        backend=backend,
     )

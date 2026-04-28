@@ -161,6 +161,7 @@ def alexander_whitney_cup(
     simplex_to_idx_q: Dict[Tuple[int, ...], int],
     i: int = 0,
     modulus: int | None = None,
+    backend: str = "auto",
 ) -> np.ndarray:
     """Computes the Alexander-Whitney cup product of a p-cochain alpha and a q-cochain beta.
 
@@ -178,16 +179,21 @@ def alexander_whitney_cup(
         simplex_to_idx_q: Mapping from q-simplex tuple to cochain index.
         i: Interleaving degree (defaults to 0 for standard cup product).
         modulus: Optional modulus for arithmetic.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         The resulting (p+q-i)-cochain evaluated on target simplices.
     """
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
     # Convert list of tuples to a contiguous NumPy array for cache-friendly iteration
     # This prevents object-overhead in memory when dealing with millions of simplices.
     if len(simplices_p_plus_q) == 0:
         return np.zeros(0, dtype=np.int64)
 
-    if i == 0 and julia_engine.available:
+    if i == 0 and use_julia:
         try:
             return julia_engine.compute_alexander_whitney_cup(
                 alpha,
@@ -200,6 +206,8 @@ def alexander_whitney_cup(
                 modulus=modulus,
             )
         except Exception as e:
+            if backend_norm == "julia":
+                raise e
             warnings.warn(
                 f"Topological Hint: Julia cup product acceleration failed ({e!r}). "
                 "Falling back to slower pure-Python evaluation."

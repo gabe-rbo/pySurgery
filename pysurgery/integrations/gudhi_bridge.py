@@ -103,15 +103,14 @@ def _extract_complex_data_python(simplex_tree, simplices=None, max_dim=None):
     return boundaries, cells, dim_simplices, simplex_to_idx
 
 
-def extract_complex_data(simplex_tree, *, include_metadata: bool = True):
+def extract_complex_data(simplex_tree, *, include_metadata: bool = True, backend: str = "auto"):
     """Extract boundary matrices, cell counts, and simplex index maps from a simplex tree.
-
-    Uses Julia acceleration when available and falls back to pure Python otherwise.
 
     Args:
         simplex_tree: The GUDHI simplex tree.
         include_metadata (bool): Whether to include full simplex lists and maps.
             Defaults to True.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         tuple: A tuple containing boundaries, cells, dim_simplices, and
@@ -120,7 +119,11 @@ def extract_complex_data(simplex_tree, *, include_metadata: bool = True):
     simplices = list(simplex_tree.get_skeleton(simplex_tree.dimension()))
     max_dim = simplex_tree.dimension()
 
-    if julia_engine.available:
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
+    if use_julia:
         try:
             simplex_entries = [s for s, _ in simplices]
             if include_metadata:
@@ -149,10 +152,15 @@ def extract_complex_data(simplex_tree, *, include_metadata: bool = True):
                 )
             return boundaries, cells, dim_simplices, simplex_to_idx
         except Exception as e:
+            if backend_norm == "julia":
+                raise e
             _warn_slow_boundary_fallback(f"Julia boundary assembly failed ({e!r}).")
             return _extract_complex_data_python(
                 simplex_tree, simplices=simplices, max_dim=max_dim
             )
+
+    if backend_norm == "julia" and not julia_engine.available:
+        raise RuntimeError("Julia backend requested but not available.")
 
     _warn_slow_boundary_fallback("Julia backend unavailable.")
     return _extract_complex_data_python(
@@ -174,17 +182,14 @@ def extract_boundary_chain_data(simplex_tree):
 
 
 def simplex_tree_to_intersection_form(
-    simplex_tree, allow_approx: bool = False
+    simplex_tree, allow_approx: bool = False, backend: str = "auto"
 ) -> IntersectionForm:
     """Derives the rigorous Intersection Form Q for a 4D manifold directly from its GUDHI SimplexTree filtration.
 
-    It extracts the 2-cohomology basis, evaluates the Alexander-Whitney Cup Product,
-    and applies it to the fundamental class [M].
-
     Args:
         simplex_tree: The GUDHI simplex tree.
-        allow_approx (bool): Whether to allow approximate computations for massisve
-            datasets. Defaults to False.
+        allow_approx (bool): Whether to allow approximate computations.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         IntersectionForm: The derived intersection form.
@@ -193,14 +198,18 @@ def simplex_tree_to_intersection_form(
         HomologyError: If fundamental class extraction fails or cup product
             matrix is not symmetric.
     """
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
     boundaries, cells, dim_simplices, simplex_to_idx = extract_complex_data(
-        simplex_tree
+        simplex_tree, backend=backend
     )
     complex_c = ChainComplex(
         boundaries=boundaries, dimensions=list(cells.keys()), coefficient_ring="Z"
     )
 
-    basis_2 = complex_c.cohomology_basis(2)
+    basis_2 = complex_c.cohomology_basis(2, backend=backend)
 
     if not basis_2 or 4 not in cells:
         return IntersectionForm(matrix=np.zeros((0, 0), dtype=int), dimension=4)
@@ -209,7 +218,7 @@ def simplex_tree_to_intersection_form(
     if 4 in boundaries:
         fund_class_found = False
 
-        if julia_engine.available:
+        if use_julia:
             try:
                 # We need the nullspace of d4. compute_sparse_cohomology_basis computes nullspace of d_np1.T
                 # So we pass d4.T to find ker(d4).
@@ -220,6 +229,8 @@ def simplex_tree_to_intersection_form(
                     fund_class = basis_4[0].flatten()
                     fund_class_found = True
             except Exception as e:
+                if backend_norm == "julia":
+                    raise e
                 msg = f"Topological Hint: Julia bridge failed to extract [M] ({e!r}). Falling back to SymPy exact nullspace."
                 warnings.warn(msg)
 
@@ -539,9 +550,9 @@ def triangulate_surface_python(
 
 
 def triangulate_surface(
-    points: np.ndarray, tolerance: float = 1e-10
+    points: np.ndarray, tolerance: float = 1e-10, backend: str = "auto"
 ) -> gudhi.SimplexTree:
-    """Triangulates a 2D surface from a point cloud using Julia acceleration when available.
+    """Triangulates a 2D surface from a point cloud with backend selection.
 
     Automatically detects surface geometry without requiring parameter tuning.
     Works for a single connected component.
@@ -556,6 +567,7 @@ def triangulate_surface(
         points (np.ndarray): Point cloud of shape (n_points, 3) embedded in 3D space.
             Should represent a single connected 2D surface.
         tolerance (float): Tolerance for detecting degenerate cases. Defaults to 1e-10.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         gudhi.SimplexTree: Simplex tree with 0-cells (vertices), 1-cells (edges),
@@ -568,8 +580,12 @@ def triangulate_surface(
     """
     points = np.asarray(points, dtype=np.float64)
 
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
     # Prefer Julia acceleration whenever available.
-    if julia_engine.available:
+    if use_julia:
         try:
             triangles = julia_engine.triangulate_surface_delaunay(points, tolerance)
 
@@ -597,6 +613,8 @@ def triangulate_surface(
 
             return st
         except Exception as e:
+            if backend_norm == "julia":
+                raise e
             warnings.warn(
                 f"Topological Hint: Julia surface triangulation failed ({e!r}). "
                 "Falling back to slower pure-Python Delaunay triangulation."

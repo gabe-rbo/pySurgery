@@ -3,7 +3,8 @@ from typing import Dict, List
 from math import gcd
 import numpy as np
 import sympy as sp
-from pydantic import BaseModel, ConfigDict, Field
+from scipy.sparse import csr_matrix
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .complexes import CWComplex
 from .exact_algebra import normalize_word_token
 from .generator_models import Pi1GeneratorTrace, Pi1PresentationWithTraces
@@ -13,27 +14,44 @@ from ..bridge.julia_bridge import julia_engine
 class FundamentalGroup(BaseModel):
     """Representation of the Fundamental Group pi_1(X) of a CW Complex.
 
-    Uses the Edge-Path Group algorithm.
-
     Attributes:
         generators: A list of generator names as strings.
         relations: A list of relators, where each relator is a list of generator tokens.
+        orientation_character: A map from generator names to {1, -1} (w1 character).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     generators: List[str]
     relations: List[List[str]]
+    orientation_character: Dict[str, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _fill_default_w1(self):
+        """Ensure all generators have an entry in orientation_character."""
+        for g in self.generators:
+            if g not in self.orientation_character:
+                self.orientation_character[g] = 1
+        return self
 
     def __str__(self):
-        """Format the presentation as `<g1, g2 | r1, r2, ...>`.
+        """Format the presentation as `<g1, g2 | r1, r2, ...>` with memory efficiency.
 
         Returns:
             A string representation of the group presentation.
         """
-        gens = ", ".join(self.generators)
-        rels = ", ".join(["".join(r) for r in self.relations])
-        return f"< {gens} | {rels} >"
+        import io
+        buf = io.StringIO()
+        buf.write("< ")
+        buf.write(", ".join(self.generators))
+        buf.write(" | ")
+        
+        # Stream relators to avoid building one giant string if possible
+        # but join is already somewhat optimized. We'll join them once.
+        buf.write(", ".join("".join(r) for r in self.relations))
+        
+        buf.write(" >")
+        return buf.getvalue()
 
 
 def _inverse_word_token(tok: str) -> str:
@@ -85,9 +103,10 @@ def _cyclic_reduce(word: List[str]) -> List[str]:
 
 
 def _canonicalize_cyclic_word(word: List[str]) -> List[str]:
-    """Canonicalize a cyclic word up to rotation and inversion.
+    """Canonicalize a cyclic word up to rotation and inversion using Booth's Algorithm.
 
-    This normalization gives deterministic relator representatives for deduping.
+    This normalization gives deterministic relator representatives for deduping
+    in O(N) time.
 
     Args:
         word: A list of generator tokens representing a cyclic word.
@@ -97,19 +116,31 @@ def _canonicalize_cyclic_word(word: List[str]) -> List[str]:
     """
     if not word:
         return []
+
+    def least_rotation(s: List[str]) -> List[str]:
+        n = len(s)
+        ss = s + s
+        f = [-1] * (2 * n)
+        k = 0
+        for j in range(1, 2 * n):
+            sj = ss[j]
+            i = f[j - k - 1]
+            while i != -1 and sj != ss[k + i + 1]:
+                if sj < ss[k + i + 1]:
+                    k = j - i - 1
+                i = f[i]
+            if sj != ss[k + i + 1]:
+                if sj < ss[k + i + 1]:
+                    k = j
+                f[j - k] = -1
+            else:
+                f[j - k] = i + 1
+        return ss[k : k + n]
+
     inv_rev = [_inverse_word_token(t) for t in reversed(word)]
-
-    def rotations(w: List[str]):
-        n = len(w)
-        for i in range(n):
-            yield w[i:] + w[:i]
-
-    best = None
-    for cand in list(rotations(word)) + list(rotations(inv_rev)):
-        key = tuple(cand)
-        if best is None or key < tuple(best):
-            best = cand
-    return best if best is not None else []
+    cand1 = least_rotation(word)
+    cand2 = least_rotation(inv_rev)
+    return cand1 if tuple(cand1) < tuple(cand2) else cand2
 
 
 def _normalize_pi1_mode(
@@ -248,7 +279,10 @@ def _substitute_generator_word(
 def _find_substitution_move(
     generators: List[str], relations: List[List[str]]
 ) -> tuple[str, int, List[str]] | None:
-    """Find a deterministic one-occurrence substitution candidate.
+    """Find a length-minimizing one-occurrence substitution candidate.
+
+    Heuristic: Select generator g that minimizes (len(rhs) - 1) * (count(g) - 1)
+    to prevent exponential growth in relator lengths during Tietze reduction.
 
     Args:
         generators: Current list of generator names.
@@ -258,18 +292,38 @@ def _find_substitution_move(
         A tuple `(generator, defining_relator_index, replacement_word)` if a
         candidate is found, otherwise None.
     """
-    for g in generators:
+    candidates = []
+    g_counts = collections.Counter()
+    for rel in relations:
+        for tok in rel:
+            g_counts[_token_base(tok)] += 1
+
+    for g in sorted(generators): # Deterministic iteration
+        count = g_counts[g]
+        if count == 0:
+            continue
         for rel_idx, rel in enumerate(relations):
             occ = [i for i, tok in enumerate(rel) if _token_base(tok) == g]
             if len(occ) == 1:
                 idx = occ[0]
                 rhs = _solve_generator_from_relator(rel, idx)
-                return g, rel_idx, rhs
-    return None
+                # Cost is net change in total presentation length
+                cost = (len(rhs) - 1) * (count - 1)
+                candidates.append((cost, g, rel_idx, rhs))
+
+    if not candidates:
+        return None
+
+    # Sort by cost, then generator name for determinism
+    candidates.sort(key=lambda x: (x[0], x[1]))
+    best = candidates[0]
+    return best[1], best[2], best[3]
 
 
 def simplify_presentation(
-    generators: List[str], relations: List[List[str]]
+    generators: List[str], 
+    relations: List[List[str]],
+    backend: str = "auto"
 ) -> FundamentalGroup:
     """Simplify a finitely presented group using a deterministic Tietze-lite loop.
 
@@ -310,17 +364,18 @@ def simplify_presentation(
     return FundamentalGroup(generators=gens, relations=rels)
 
 
-def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
+def infer_standard_group_descriptor(pi1: FundamentalGroup, backend: str = "auto") -> str | None:
     """Infer a conservative descriptor among {"1", "Z", "Z_n"} when provable.
 
     Args:
         pi1: The fundamental group presentation to analyze.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         A string descriptor if a standard form can be inferred, otherwise None.
     """
     simplified = simplify_presentation(
-        list(pi1.generators), [list(rel) for rel in pi1.relations]
+        list(pi1.generators), [list(rel) for rel in pi1.relations], backend=backend
     )
     gens = list(simplified.generators)
     rels = [list(rel) for rel in simplified.relations]
@@ -369,11 +424,44 @@ def infer_standard_group_descriptor(pi1: FundamentalGroup) -> str | None:
         if not abelian_rows:
             return " x ".join(["Z"] * len(gens))
 
-        M = sp.Matrix(abelian_rows)
-        S = sp.matrices.normalforms.smith_normal_form(M, domain=sp.ZZ)
+        # --- Surgical SNF Pre-reduction ---
+        # 1. First find rank over Z/pZ for large p to identify free rank
+        # 2. Reduce the matrix by peeling off obvious pivots to speed up SymPy
+        M_np = np.array(abelian_rows, dtype=object)
+        m, n = M_np.shape
+        
+        # Simple structural reduction: peel rows with single +/-1
+        diag = []
+        keep_rows = [True] * m
+        keep_cols = [True] * n
+        
+        for r in range(m):
+            row_nz = np.where(M_np[r, :] != 0)[0]
+            if len(row_nz) == 1:
+                col = row_nz[0]
+                if abs(M_np[r, col]) == 1 and keep_cols[col]:
+                    keep_rows[r] = False
+                    keep_cols[col] = False
+                    # This corresponds to a Z/1Z factor (trivial)
+        
+        core_rows = [r for r, keep in enumerate(keep_rows) if keep]
+        core_cols = [c for c, keep in enumerate(keep_cols) if keep]
+        
+        if not core_cols:
+            factors = ["Z"] * (n - (m - len(core_rows)))
+            factors = [f for f in factors if f != "1"]
+            return " x ".join(factors) if factors else "1"
+
+        M_core = sp.Matrix(M_np[core_rows, :][:, core_cols])
+        S = sp.matrices.normalforms.smith_normal_form(M_core, domain=sp.ZZ)
+        
         diag_len = min(S.rows, S.cols)
         diag = [abs(int(S[i, i])) for i in range(diag_len) if int(S[i, i]) != 0]
-        free_rank = max(0, len(gens) - len(diag))
+        
+        # Free rank: Total generators - (peeled pivots + core pivots)
+        peeled_count = m - len(core_rows)
+        free_rank = max(0, n - (peeled_count + len(diag)))
+        
         factors = ["Z"] * free_rank + [f"Z_{d}" for d in diag if d > 1]
         if not factors:
             return "1"
@@ -426,43 +514,128 @@ class GroupPresentation(BaseModel):
         return self.kind
 
 
-def _path_between_tree(u: int, v: int, parent: Dict[int, int]) -> List[int]:
-    """Return the vertex path between u and v in a rooted spanning forest."""
+def _path_between_tree(u: int, v: int, parent: Dict[int, int], depth: Dict[int, int]) -> List[int]:
+    """Return the vertex path between u and v in a rooted spanning forest using O(depth) LCA."""
     path_u: List[int] = []
-    seen_u = set()
-    x = u
-    while x != -1:
-        path_u.append(x)
-        seen_u.add(x)
-        x = parent.get(x, -1)
-
     path_v: List[int] = []
-    y = v
-    while y not in seen_u and y != -1:
-        path_v.append(y)
-        y = parent.get(y, -1)
+    
+    curr_u, curr_v = u, v
+    
+    # Bring both nodes to the same depth
+    while depth[curr_u] > depth[curr_v]:
+        path_u.append(curr_u)
+        curr_u = parent[curr_u]
+    while depth[curr_v] > depth[curr_u]:
+        path_v.append(curr_v)
+        curr_v = parent[curr_v]
+        
+    # Move up until LCA is found
+    while curr_u != curr_v:
+        path_u.append(curr_u)
+        path_v.append(curr_v)
+        curr_u = parent[curr_u]
+        curr_v = parent[curr_v]
+        
+    path_u.append(curr_u) # Add the common ancestor
+    return path_u + list(reversed(path_v))
 
-    if y == -1:
+
+def _reconstruct_cycle_from_edges(
+    edge_indices: List[int], 
+    d1: csr_matrix, 
+    raw_gen_map: Dict[int, str]
+) -> List[str]:
+    """Reconstruct a directed cycle from an unordered set of boundary edges.
+    
+    Handles non-simple boundaries (e.g., figure-eight) using a robust
+    neighbor-traversal matching used edges.
+    """
+    if not edge_indices:
         return []
-    lca = y
-    i = path_u.index(lca)
-    return path_u[: i + 1] + list(reversed(path_v))
+    
+    local_adj = collections.defaultdict(list)
+    
+    # Extract endpoint and orientation info from d1 for each edge in the face
+    for e in edge_indices:
+        col = d1.getcol(e).tocoo()
+        verts = col.row
+        vals = col.data
+        if len(verts) == 2:
+            v_idx = verts[np.where(vals == 1)[0][0]] if 1 in vals else verts[1]
+            u_idx = verts[np.where(vals == -1)[0][0]] if -1 in vals else verts[0]
+            
+            # (neighbor, edge_idx, orientation)
+            local_adj[u_idx].append((v_idx, e, 1))
+            local_adj[v_idx].append((u_idx, e, -1))
+        elif len(verts) == 1:
+            v = verts[0]
+            local_adj[v].append((v, e, 1))
+        else:
+            # Zero-boundary loop!
+            v = 0
+            local_adj[v].append((v, e, 1))
+
+    if not local_adj:
+        return []
+
+    # Simple robust traversal matching available edge instances
+    # For CW boundaries, this effectively traverses the Eulerian circuit
+    curr_v = next(iter(local_adj.keys()))
+    path = []
+    # Track which *instances* of edges in edge_indices have been used
+    used_indices = set()
+    
+    for _ in range(len(edge_indices)):
+        found = False
+        if curr_v not in local_adj:
+            break
+            
+        for next_v, e_idx, orient in local_adj[curr_v]:
+            # Find an unused occurrence of this edge index in the face boundary
+            match_idx = -1
+            for i, ei in enumerate(edge_indices):
+                if ei == e_idx and i not in used_indices:
+                    match_idx = i
+                    break
+            
+            if match_idx != -1:
+                used_indices.add(match_idx)
+                gen = raw_gen_map.get(e_idx)
+                if gen:
+                    path.append(gen if orient == 1 else f"{gen}^-1")
+                curr_v = next_v
+                found = True
+                break
+        
+        if not found:
+            # Try jumping to another component if disconnected (shouldn't happen for a single cell)
+            remaining = set(range(len(edge_indices))) - used_indices
+            if remaining:
+                # A single 2-cell boundary MUST be connected.
+                pass
+            break
+            
+    return path
 
 
-def _pi1_raw_data_python(cw: CWComplex):
-    """Build raw pi1 data from CW boundary maps."""
+def _pi1_raw_data_python(cw: CWComplex, backend: str = "auto"):
+    """Build raw pi1 data from CW boundary maps with optimized LCA and cycle reconstruction."""
     d1 = cw.attaching_maps.get(1)
     d2 = cw.attaching_maps.get(2)
 
     if d1 is None:
-        return {}, [], [], {"generator_mode": "raw", "backend_used": "python"}
+        return {}, [], [], {"generator_mode": "raw", "backend_used": "python", "orientation_character": {}}
 
     n_vertices, n_edges = d1.shape
     if n_edges == 0:
-        return {}, [], [], {"generator_mode": "raw", "backend_used": "python"}
+        return {}, [], [], {"generator_mode": "raw", "backend_used": "python", "orientation_character": {}}
+
+    # Normalize backend choice
+    backend = str(backend).lower().strip()
+    use_julia = (backend == "julia") or (backend == "auto" and julia_engine.available)
 
     # --- Performance Path: Julia ---
-    if julia_engine.available:
+    if use_julia:
         try:
             d1_coo = d1.tocoo()
             if d2 is not None and d2.nnz > 0:
@@ -480,26 +653,30 @@ def _pi1_raw_data_python(cw: CWComplex):
                 n_faces
             )
             
-            # Reconstruct traces as pydantic models
+            # Reconstruct traces bypassing Pydantic validation for speed
             py_traces = []
             for tr in res["traces"]:
-                py_traces.append(Pi1GeneratorTrace(
+                py_traces.append(Pi1GeneratorTrace.model_construct(
                     generator=tr["generator"],
                     edge_index=tr["edge_index"],
                     component_root=tr["component_root"],
                     vertex_path=tr["vertex_path"],
-                    directed_edge_path=tr["directed_edge_path"],
+                    directed_edge_path=[tuple(e) for e in tr["directed_edge_path"]],
                     undirected_edge_path=[tuple(sorted(e)) for e in tr["undirected_edge_path"]]
                 ))
             
-            return res["generators"], res["relations"], py_traces, {"generator_mode": "raw", "backend_used": "julia"}
+            w1 = res.get("orientation_character", {g: 1 for g in res["generators"].values()})
+            return res["generators"], res["relations"], py_traces, {"generator_mode": "raw", "backend_used": "julia", "orientation_character": w1}
         except Exception as e:
+            if backend == "julia":
+                raise e
             import warnings
             warnings.warn(f"Julia pi1_raw_data failed ({e!r}). Falling back to optimized Python.")
 
     visited = [False] * n_vertices
     tree_edges = set()
     parent: Dict[int, int] = {}
+    depth: Dict[int, int] = {}
     component_root: Dict[int, int] = {}
 
     # Build adjacency
@@ -510,38 +687,49 @@ def _pi1_raw_data_python(cw: CWComplex):
         col_r = d1_csc.indices[d1_csc.indptr[e]:d1_csc.indptr[e+1]]
         col_d = d1_csc.data[d1_csc.indptr[e]:d1_csc.indptr[e+1]]
         if len(col_r) == 2:
-            u, v = col_r[0], col_r[1]
-            edge_list.append((u, v))
-            adj[u].append((v, e, col_d))
-            adj[v].append((u, e, col_d))
-        elif len(col_r) == 0:
-            # Self-loop! Boundary is v - v = 0.
-            # In a CW complex, if d1 column is zero, it's a loop.
-            # We must associate it with SOME vertex. If n_vertices > 0, pick 0.
-            v = 0
+            # Check signs for source/target
+            try:
+                u_idx = col_r[np.where(col_d == -1)[0][0]]
+                v_idx = col_r[np.where(col_d == 1)[0][0]]
+            except IndexError:
+                # Fallback for unsigned edges
+                u_idx, v_idx = col_r[0], col_r[1]
+            edge_list.append((u_idx, v_idx))
+            adj[u_idx].append((v_idx, e, 1))
+            adj[v_idx].append((u_idx, e, -1))
+        elif len(col_r) == 1:
+            v = col_r[0]
             edge_list.append((v, v))
-            adj[v].append((v, e, np.array([0])))
+            adj[v].append((v, e, 1))
         else:
-            edge_list.append(None)
+            # Zero boundary (e.g. S1 loop with 1 vertex)
+            if n_vertices > 0:
+                v = 0
+                edge_list.append((v, v))
+                adj[v].append((v, e, 1))
+            else:
+                edge_list.append(None)
     
+    # Python BFS with depth tracking
     for start in range(n_vertices):
         if visited[start]:
             continue
-        queue = collections.deque([start])
+        queue = collections.deque([(start, 0)])
         visited[start] = True
         parent[start] = -1
+        depth[start] = 0
         component_root[start] = start
         while queue:
-            curr = queue.popleft()
+            curr, d = queue.popleft()
             for neighbor, edge_idx, _ in adj[curr]:
                 if not visited[neighbor]:
                     visited[neighbor] = True
-                    # Self-loops (u==v) are NEVER in a spanning tree
                     if curr != neighbor:
                         tree_edges.add(edge_idx)
                         parent[neighbor] = curr
+                        depth[neighbor] = d + 1
                         component_root[neighbor] = start
-                        queue.append(neighbor)
+                        queue.append((neighbor, d + 1))
 
     raw_gen_map = {i: f"g_{i}" for i in range(n_edges) if i not in tree_edges and edge_list[i] is not None}
     
@@ -552,14 +740,14 @@ def _pi1_raw_data_python(cw: CWComplex):
             col_r = d2_csc.indices[d2_csc.indptr[f]:d2_csc.indptr[f+1]]
             col_d = d2_csc.data[d2_csc.indptr[f]:d2_csc.indptr[f+1]]
             
-            # Simple relator tracing
-            relation = []
-            for val, e in zip(col_d, col_r):
-                sign = 1 if int(val) > 0 else -1
+            # Flatten into list of edge indices by multiplicity
+            edge_indices = []
+            for e, val in zip(col_r, col_d):
                 for _ in range(abs(int(val))):
-                    if e in raw_gen_map:
-                        gen = raw_gen_map[e]
-                        relation.append(gen if sign == 1 else f"{gen}^-1")
+                    edge_indices.append(e)
+            
+            # Heuristic Cycle Reconstruction for Non-Abelian Relators
+            relation = _reconstruct_cycle_from_edges(edge_indices, d1, raw_gen_map)
             if relation:
                 relations.append(relation)
 
@@ -574,7 +762,7 @@ def _pi1_raw_data_python(cw: CWComplex):
                 n_vertices=n_vertices, n_edges=n_edges
             )
             for tr in raw_trace_dicts:
-                traces.append(Pi1GeneratorTrace(
+                traces.append(Pi1GeneratorTrace.model_construct(
                     generator=str(tr["generator"]),
                     edge_index=int(tr["edge_index"]),
                     component_root=int(tr["component_root"]),
@@ -592,11 +780,11 @@ def _pi1_raw_data_python(cw: CWComplex):
             path = [u]
             directed = [(u, v)]
         else:
-            path_v = _path_between_tree(v, u, parent)
-            directed = [(u, v)] + [(path_v[i], path_v[i+1]) for i in range(len(path_v)-1)]
-            path = [u] + [b for _, b in directed]
+            path_v = _path_between_tree(v, u, parent, depth)
+            directed = [(path_v[i], path_v[i+1]) for i in range(len(path_v)-1)]
+            path = path_v
         
-        traces.append(Pi1GeneratorTrace(
+        traces.append(Pi1GeneratorTrace.model_construct(
             generator=gen_name,
             edge_index=edge_idx,
             component_root=int(component_root.get(u, u)),
@@ -605,7 +793,62 @@ def _pi1_raw_data_python(cw: CWComplex):
             undirected_edge_path=[tuple(sorted(e)) for e in directed]
         ))
 
-    return raw_gen_map, relations, traces, {"generator_mode": "raw", "backend_used": "python"}
+    w1 = {gen_name: 1 for gen_name in raw_gen_map.values()}
+    return raw_gen_map, relations, traces, {"generator_mode": "raw", "backend_used": "python", "orientation_character": w1}
+
+
+def induced_pi1_map(
+    vertex_map: Dict[int, int],
+    source_pi1: Pi1PresentationWithTraces,
+    target_pi1: Pi1PresentationWithTraces
+) -> Dict[str, List[str]]:
+    """Compute the induced map f*: pi1(M) -> pi1(X) from a simplicial map f.
+
+    Args:
+        vertex_map: Mapping from source vertex IDs to target vertex IDs.
+        source_pi1: pi1 presentation of the source complex (M).
+        target_pi1: pi1 presentation of the target complex (X).
+
+    Returns:
+        A dictionary mapping source generator names to words in the target generators.
+    """
+    # 1. Build lookup for target generators: (u, v) -> word token
+    edge_to_gen = {}
+    for tr in target_pi1.traces:
+        # A generator trace corresponds to a single non-tree edge loop
+        # The first edge in the directed_edge_path is the "defining" edge
+        if tr.directed_edge_path:
+            u, v = tr.directed_edge_path[0]
+            edge_to_gen[(u, v)] = tr.generator
+            edge_to_gen[(v, u)] = f"{tr.generator}^-1"
+
+    # 2. Map each source generator
+    mapping = {}
+    for s_tr in source_pi1.traces:
+        # Map vertex path through f
+        target_v_path = [vertex_map.get(v) for v in s_tr.vertex_path]
+        if None in target_v_path:
+            # Incomplete map
+            continue
+            
+        # Convert vertex path to edge word in the target
+        word = []
+        for i in range(len(target_v_path) - 1):
+            u, v = target_v_path[i], target_v_path[i+1]
+            if u == v:
+                continue # Collapse
+            
+            # Check if this edge is a generator in target_pi1
+            if (u, v) in edge_to_gen:
+                word.append(edge_to_gen[(u, v)])
+            else:
+                # Edge must be in the spanning tree of the target
+                # Tree edges contribute identity to the pi1 presentation
+                pass
+        
+        mapping[s_tr.generator] = _free_reduce(word)
+        
+    return mapping
 
 
 def extract_pi_1_with_traces(
@@ -613,22 +856,33 @@ def extract_pi_1_with_traces(
     simplify: bool = True,
     generator_mode: str = "optimized",
     mode: str | None = None,
+    backend: str = "auto",
 ) -> Pi1PresentationWithTraces:
-    """Return pi_1 presentation with generator traces."""
+    """Return pi_1 presentation with generator traces.
+
+    Args:
+        cw: The CW complex to analyze.
+        simplify: Whether to apply Tietze simplification.
+        generator_mode: 'raw' or 'optimized'.
+        mode: Alias for generator_mode.
+        backend: 'auto', 'julia', or 'python'.
+    """
     actual_mode = _normalize_pi1_mode(generator_mode, mode)
-    raw_generators, relations, traces, meta = _pi1_raw_data_python(cw)
+    raw_generators, relations, traces, meta = _pi1_raw_data_python(cw, backend=backend)
     
     if not raw_generators:
         return Pi1PresentationWithTraces(
             generators=[], relations=[], traces=[],
             mode_used=actual_mode, generator_mode=actual_mode,
-            backend_used=meta.get("backend_used", "python")
+            backend_used=meta.get("backend_used", "python"),
+            orientation_character={}
         )
 
     if actual_mode == "raw" or not simplify:
         return Pi1PresentationWithTraces(
             generators=list(raw_generators.values()),
             relations=relations,
+            orientation_character=meta.get("orientation_character", {}),
             traces=traces,
             mode_used=actual_mode,
             generator_mode="raw" if not simplify else actual_mode,
@@ -640,9 +894,15 @@ def extract_pi_1_with_traces(
 
     out_pi = simplify_presentation(list(raw_generators.values()), relations)
     keep = set(out_pi.generators)
+    
+    # Filter orientation character for kept generators
+    raw_w1 = meta.get("orientation_character", {})
+    final_w1 = {g: raw_w1.get(g, 1) for g in out_pi.generators}
+    
     return Pi1PresentationWithTraces(
         generators=list(out_pi.generators),
         relations=out_pi.relations,
+        orientation_character=final_w1,
         traces=[tr for tr in traces if tr.generator in keep],
         mode_used=actual_mode,
         generator_mode="optimized",
@@ -658,7 +918,14 @@ def extract_pi_1(
     simplify: bool = True,
     generator_mode: str = "optimized",
     mode: str | None = None,
+    backend: str = "auto",
 ) -> FundamentalGroup:
     """Compute a pi1 presentation from CW boundary maps."""
-    traces = extract_pi_1_with_traces(cw, simplify=simplify, generator_mode=generator_mode, mode=mode)
-    return FundamentalGroup(generators=traces.generators, relations=traces.relations)
+    traces = extract_pi_1_with_traces(
+        cw, simplify=simplify, generator_mode=generator_mode, mode=mode, backend=backend
+    )
+    return FundamentalGroup(
+        generators=traces.generators, 
+        relations=traces.relations,
+        orientation_character=traces.orientation_character
+    )

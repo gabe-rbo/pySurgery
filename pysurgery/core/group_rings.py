@@ -132,6 +132,13 @@ class GroupRingElement:
             raise GroupRingError(
                 "Cannot multiply elements with different finite-group multiplication tables."
             )
+        return self.multiply(other, backend="auto")
+
+    def multiply(self, other: "GroupRingElement", backend: str = "auto") -> "GroupRingElement":
+        """Multiply two group ring elements with backend selection."""
+        # Normalize backend
+        backend_norm = str(backend).lower().strip()
+        use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
 
         if self.group_law is not None:
             res: Dict[str, int] = {}
@@ -163,17 +170,23 @@ class GroupRingElement:
                 "Group order must be specified for exact ring multiplication, unless group_law is provided."
             )
 
-        if julia_engine.available:
-            res_coeffs = julia_engine.group_ring_multiply(
-                self.coeffs, other.coeffs, self.group_order
-            )
-            return GroupRingElement(
-                res_coeffs,
-                self.group_order,
-                self.group_law,
-                self.inverse_law,
-                self.mul_table,
-            )
+        if use_julia:
+            try:
+                res_coeffs = julia_engine.group_ring_multiply(
+                    self.coeffs, other.coeffs, self.group_order
+                )
+                return GroupRingElement(
+                    res_coeffs,
+                    self.group_order,
+                    self.group_law,
+                    self.inverse_law,
+                    self.mul_table,
+                )
+            except Exception as e:
+                if backend_norm == "julia":
+                    raise e
+
+        # Python fallback...
 
         warnings.warn(
             "Group-ring multiplication fallback in `GroupRingElement.__mul__`: Julia backend unavailable; "

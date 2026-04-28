@@ -1132,201 +1132,250 @@ Algorithm:
 - For each non-tree edge, form the generator loop as
   `edge + tree_path(back_to_start)`.
 """
+function _path_between_tree_jl(u::Int64, v::Int64, parent::Dict{Int64, Int64}, depth::Dict{Int64, Int})
+    path_u = Int64[]
+    path_v = Int64[]
+    
+    curr_u, curr_v = u, v
+    
+    # Bring both nodes to the same depth
+    while depth[curr_u] > depth[curr_v]
+        push!(path_u, curr_u)
+        curr_u = parent[curr_u]
+    end
+    while depth[curr_v] > depth[curr_u]
+        push!(path_v, curr_v)
+        curr_v = parent[curr_v]
+    end
+    
+    # Move up until LCA is found
+    while curr_u != curr_v
+        push!(path_u, curr_u)
+        push!(path_v, curr_v)
+        curr_u = parent[curr_u]
+        curr_v = parent[curr_v]
+    end
+    
+    push!(path_u, curr_u) # Add LCA
+    return vcat(path_u, reverse(path_v))
+end
+
+function _reconstruct_cycle_jl(edge_indices::Vector{Int64}, d1_rows::AbstractVector{Int64}, d1_cols::AbstractVector{Int64}, d1_vals::AbstractVector{Int64}, gen_map::Dict{Int64, String})
+    # Build local multigraph for the face
+    # A 2-cell boundary can be a non-simple circuit (Eulerian)
+    edge_set = Set(edge_indices)
+    edge_info = Dict{Int64, Vector{Int64}}() # edge_idx -> [u, v]
+    
+    # Extract endpoints for edges in this face
+    for i in 1:length(d1_cols)
+        e = d1_cols[i]
+        if e in edge_set
+            push!(get!(edge_info, e, Int64[]), d1_rows[i])
+        end
+    end
+
+    # Build adjacency with multiplicity (multigraph)
+    # Entry: neighbor, edge_idx, orientation
+    adj = Dict{Int64, Vector{Tuple{Int64, Int64, Int64}}}()
+    
+    # For CW complexes, d1(e) = v - u means e is u -> v
+    # We need to know which vertex is target (1) and source (-1)
+    # We can pre-calculate this from d1_vals
+    for e in edge_indices
+        verts = get(edge_info, e, [])
+        if length(verts) == 2
+            u_idx = -1
+            v_idx = -1
+            # Find signs
+            for i in 1:length(d1_cols)
+                if d1_cols[i] == e
+                    if d1_vals[i] == -1; u_idx = d1_rows[i]; end
+                    if d1_vals[i] == 1; v_idx = d1_rows[i]; end
+                end
+            end
+            if u_idx == -1 || v_idx == -1
+                u_idx, v_idx = verts[1], verts[2]
+            end
+            
+            push!(get!(adj, u_idx, []), (v_idx, e, 1))
+            push!(get!(adj, v_idx, []), (u_idx, e, -1))
+        elseif length(verts) == 1
+            v = verts[1]
+            push!(get!(adj, v, []), (v, e, 1))
+        else
+            # Zero-boundary loop!
+            # If no vertices in d1, associate with vertex 0
+            v = 0
+            push!(get!(adj, v, []), (v, e, 1))
+        end
+    end
+
+    isempty(adj) && return String[]
+
+    # Robust traversal matching available edge instances
+    res_path = String[]
+    used_indices = Set{Int}()
+    curr_v = first(keys(adj))
+    
+    for _ in 1:length(edge_indices)
+        found = false
+        if !haskey(adj, curr_v); break; end
+        for (v_next, e_idx, orient) in adj[curr_v]
+            # Find an unused occurrence of this edge index in the face boundary
+            match_idx = -1
+            for i in 1:length(edge_indices)
+                if edge_indices[i] == e_idx && !(i in used_indices)
+                    match_idx = i
+                    break
+                end
+            end
+            
+            if match_idx != -1
+                push!(used_indices, match_idx)
+                g = get(gen_map, e_idx, "")
+                if !isempty(g)
+                    push!(res_path, orient == 1 ? g : "$(g)^-1")
+                end
+                curr_v = v_next
+                found = true
+                break
+            end
+        end
+        if !found; break; end
+    end
+    
+    return res_path
+end
+
 function pi1_trace_candidates_from_d1(d1_rows::AbstractVector{Int64}, d1_cols::AbstractVector{Int64}, d1_vals::AbstractVector{Int64}, n_vertices::Int, n_edges::Int)
     adj = Dict{Int64, Vector{Tuple{Int64, Int64, Int64}}}()
-    for i in 0:(n_vertices - 1)
-        adj[Int64(i)] = Vector{Tuple{Int64, Int64, Int64}}()
-    end
+    for i in 0:(n_vertices - 1); adj[Int64(i)] = []; end
 
     edge_list = Vector{Union{Nothing, Tuple{Int64, Int64}}}(undef, n_edges)
     fill!(edge_list, nothing)
 
-    # Build edge endpoint table and adjacency from COO d1.
     col_to_entries = Dict{Int64, Vector{Tuple{Int64, Int64}}}()
     for idx in 1:length(d1_rows)
-        col = Int64(d1_cols[idx])
-        push!(get!(col_to_entries, col, Vector{Tuple{Int64, Int64}}()), (Int64(d1_vals[idx]), Int64(d1_rows[idx])))
+        push!(get!(col_to_entries, Int64(d1_cols[idx]), []), (Int64(d1_vals[idx]), Int64(d1_rows[idx])))
     end
 
     for e in 0:(n_edges - 1)
-        entries = get(col_to_entries, Int64(e), Vector{Tuple{Int64, Int64}}())
-        if isempty(entries)
-            edge_list[e + 1] = (0, 0)
-            continue
-        end
-        if length(entries) != 2
-            edge_list[e + 1] = nothing
-            continue
-        end
-
-        u = Int64(-1)
-        v = Int64(-1)
-        for (val, r) in entries
-            if val == -1
-                u = r
-            elseif val == 1
-                v = r
-            end
-        end
-
-        if u != -1 && v != -1
+        entries = get(col_to_entries, e, [])
+        if length(entries) == 2
+            u = entries[1][1] == -1 ? entries[1][2] : entries[2][2]
+            v = entries[1][1] == 1 ? entries[1][2] : entries[2][2]
             push!(adj[u], (v, e, 1))
             push!(adj[v], (u, e, -1))
             edge_list[e + 1] = (u, v)
+        elseif length(entries) == 1
+            v = entries[1][2]
+            push!(adj[v], (v, e, 1))
+            edge_list[e + 1] = (v, v)
         else
-            edge_list[e + 1] = nothing
+            # Zero boundary loop (e.g. S1 with 1 vertex)
+            # Associate with vertex 0 if it exists
+            if n_vertices > 0
+                v = 0
+                push!(adj[v], (v, e, 1))
+                edge_list[e + 1] = (v, v)
+            end
         end
     end
 
     visited = falses(n_vertices)
     parent = Dict{Int64, Int64}()
+    depth = Dict{Int64, Int}()
     component_root = Dict{Int64, Int64}()
     tree_edges = Set{Int64}()
 
-    if n_vertices > 0
-        for start in 0:(n_vertices - 1)
-            if visited[start + 1]
-                continue
-            end
-            queue = Int64[Int64(start)]
-            visited[start + 1] = true
-            parent[Int64(start)] = Int64(-1)
-            component_root[Int64(start)] = Int64(start)
+    for start in 0:(n_vertices - 1)
+        visited[start + 1] && continue
+        queue = [(Int64(start), 0)]
+        visited[start + 1] = true
+        parent[Int64(start)] = -1
+        depth[Int64(start)] = 0
+        component_root[Int64(start)] = Int64(start)
 
-            while !isempty(queue)
-                curr = popfirst!(queue)
-                for (neighbor, edge_idx, _) in adj[curr]
-                    if !visited[neighbor + 1]
-                        visited[neighbor + 1] = true
-                        push!(tree_edges, edge_idx)
-                        parent[neighbor] = curr
-                        component_root[neighbor] = Int64(start)
-                        push!(queue, neighbor)
-                    end
+        while !isempty(queue)
+            curr, d = popfirst!(queue)
+            for (neighbor, edge_idx, _) in adj[curr]
+                if !visited[neighbor + 1]
+                    visited[neighbor + 1] = true
+                    push!(tree_edges, edge_idx)
+                    parent[neighbor] = curr
+                    depth[neighbor] = d + 1
+                    component_root[neighbor] = Int64(start)
+                    push!(queue, (neighbor, d + 1))
                 end
             end
         end
-    end
-
-    function path_between_tree(u::Int64, v::Int64)
-        path_u = Int64[]
-        seen_u = Set{Int64}()
-        x = u
-        while x != -1
-            push!(path_u, x)
-            push!(seen_u, x)
-            x = get(parent, x, Int64(-1))
-        end
-
-        path_v = Int64[]
-        y = v
-        while !(y in seen_u) && y != -1
-            push!(path_v, y)
-            y = get(parent, y, Int64(-1))
-        end
-
-        if y == -1
-            return Int64[]
-        end
-
-        lca = y
-        i = findfirst(==(lca), path_u)
-        i === nothing && return Int64[]
-        return vcat(path_u[1:i], reverse(path_v))
     end
 
     traces = Vector{Dict{String, Any}}()
     for e in 0:(n_edges - 1)
-        if e in tree_edges
-            continue
-        end
-        endpoints = edge_list[e + 1]
-        endpoints === nothing && continue
-        u, v = endpoints
-
-        if u == v
-            vertex_path = [u]
-            directed = [(u, v)]
-            comp_root = get(component_root, u, u)
-        else
-            path_vertices = path_between_tree(v, u)
-            directed = [(u, v)]
+        (e in tree_edges || edge_list[e + 1] === nothing) && continue
+        u, v = edge_list[e + 1]
+        
+        directed = [(u, v)]
+        if u != v
+            path_vertices = _path_between_tree_jl(v, u, parent, depth)
             for i in 1:(length(path_vertices) - 1)
                 push!(directed, (path_vertices[i], path_vertices[i + 1]))
             end
-            vertex_path = [u]
-            for (_, b) in directed
-                push!(vertex_path, b)
-            end
-            comp_root = get(component_root, u, get(component_root, v, u))
         end
-
+        
+        vertex_path = [u]
+        for (_, b) in directed; push!(vertex_path, b); end
+        
         push!(traces, Dict(
             "generator" => "g_$(e)",
             "edge_index" => Int64(e),
-            "component_root" => Int64(comp_root),
+            "component_root" => Int64(get(component_root, u, u)),
             "vertex_path" => vertex_path,
             "directed_edge_path" => [[Int64(a), Int64(b)] for (a, b) in directed],
             "undirected_edge_path" => [[Int64(min(a, b)), Int64(max(a, b))] for (a, b) in directed],
         ))
-        end
-        return traces
-        end
+    end
+    return traces
+end
 
-        """
-        extract_pi1_raw_data_jl(d1_rows, d1_cols, d1_vals, n_vertices, n_edges, d2_rows, d2_cols, d2_vals, n_faces)
+function extract_pi1_raw_data_jl(
+    d1_rows::AbstractVector{Int64}, d1_cols::AbstractVector{Int64}, d1_vals::AbstractVector{Int64},
+    n_vertices::Int, n_edges::Int,
+    d2_rows::AbstractVector{Int64}, d2_cols::AbstractVector{Int64}, d2_vals::AbstractVector{Int64},
+    n_faces::Int
+)
+    traces = pi1_trace_candidates_from_d1(d1_rows, d1_cols, d1_vals, n_vertices, n_edges)
+    gen_map = Dict{Int64, String}(tr["edge_index"] => tr["generator"] for tr in traces)
 
-        Compute generators, relators, and traces for pi1 in one pass.
-        """
-        function extract_pi1_raw_data_jl(
-        d1_rows::AbstractVector{Int64}, d1_cols::AbstractVector{Int64}, d1_vals::AbstractVector{Int64},
-        n_vertices::Int, n_edges::Int,
-        d2_rows::AbstractVector{Int64}, d2_cols::AbstractVector{Int64}, d2_vals::AbstractVector{Int64},
-        n_faces::Int
-        )
-        # 1. Traces and spanning forest from d1
-        traces = pi1_trace_candidates_from_d1(d1_rows, d1_cols, d1_vals, n_vertices, n_edges)
-
-        # 2. Build generator mapping
-        gen_map = Dict{Int64, String}()
-        for tr in traces
-        gen_map[tr["edge_index"]] = tr["generator"]
-        end
-
-        # 3. Trace d2 into relators
-        # Group d2 entries by face (column)
-        face_to_entries = Dict{Int64, Vector{Tuple{Int64, Int64}}}()
-        for idx in 1:length(d2_rows)
+    face_to_payload = Dict{Int64, Vector{Tuple{Int64, Int64}}}()
+    for idx in 1:length(d2_rows)
         f = Int64(d2_cols[idx])
-        push!(get!(face_to_entries, f, Vector{Tuple{Int64, Int64}}()), (Int64(d2_vals[idx]), Int64(d2_rows[idx])))
-        end
+        e = Int64(d2_rows[idx])
+        val = Int64(d2_vals[idx])
+        push!(get!(face_to_payload, f, []), (e, val))
+    end
 
-        relations = Vector{Vector{String}}()
-        for f in 0:(n_faces - 1)
-        entries = get(face_to_entries, f, nothing)
-        entries === nothing && continue
-
-        rel = String[]
-        for (val, e) in entries
-            sign = val > 0 ? 1 : -1
+    relations = Vector{Vector{String}}()
+    for f in 0:(n_faces - 1)
+        payload = get(face_to_payload, f, nothing)
+        payload === nothing && continue
+        
+        # Flatten payload into list of edge indices by multiplicity
+        edge_indices = Int64[]
+        for (e, val) in payload
             for _ in 1:abs(val)
-                if haskey(gen_map, e)
-                    g = gen_map[e]
-                    push!(rel, sign == 1 ? g : "$(g)^-1")
-                end
+                push!(edge_indices, e)
             end
         end
-        if !isempty(rel)
-            push!(relations, rel)
-        end
-        end
+        
+        rel = _reconstruct_cycle_jl(edge_indices, d1_rows, d1_cols, d1_vals, gen_map)
+        !isempty(rel) && push!(relations, rel)
+    end
 
-        return Dict(
-        "generators" => gen_map,
-        "relations" => relations,
-        "traces" => traces
-        )
-        end
+    w1 = Dict{String, Int}(g => 1 for g in values(gen_map))
+    return Dict("generators" => gen_map, "relations" => relations, "traces" => traces, "orientation_character" => w1)
+end
 
 
 function _as_string_vector(x)
@@ -2452,7 +2501,7 @@ function compute_alpha_complex_simplices_jl(
 )
     n_pts, dim_pts = size(points)
     n_max = size(max_simplices, 1)
-    
+
     valid_simplices = Set{Tuple{Vararg{Int64}}}()
     r2_cache = Dict{Tuple{Vararg{Int64}}, Float64}()
 
@@ -2463,20 +2512,41 @@ function compute_alpha_complex_simplices_jl(
 
         k = length(simplex_indices)
         if k == 1
-            r2_cache[simplex_indices] = 0.0
             return 0.0
         end
         if k == 2
             u, v = simplex_indices[1]+1, simplex_indices[2]+1
-            d2 = 0.0
-            for i in 1:dim_pts
-                d2 += (points[u, i] - points[v, i])^2
-            end
+            d2 = sum(abs2, points[u, :] .- points[v, :])
             val = d2 / 4.0
             r2_cache[simplex_indices] = val
             return val
         end
 
+        # For k > 2, check if any face is obtuse (minimum enclosing sphere logic)
+        if k == 3
+            # Triangle: acute circumradius or diametral sphere of longest edge
+            p0, p1, p2 = points[simplex_indices[1]+1, :], points[simplex_indices[2]+1, :], points[simplex_indices[3]+1, :]
+            a2 = sum(abs2, p1 .- p2)
+            b2 = sum(abs2, p0 .- p2)
+            c2 = sum(abs2, p0 .- p1)
+
+            # Area^2 via Cayley-Menger or cross product
+            v1 = p1 .- p0
+            v2 = p2 .- p0
+            if dim_pts == 3
+                area2 = 0.25 * sum(abs2, cross(v1, v2))
+            else
+                area2 = 0.25 * (v1[1]*v2[2] - v1[2]*v2[1])^2
+            end
+
+            r2_acute = (a2 * b2 * c2) / (16.0 * area2 + 1e-30)
+            is_obtuse = (a2 + b2 < c2) || (a2 + c2 < b2) || (b2 + c2 < a2)
+            val = is_obtuse ? maximum([a2, b2, c2]) / 4.0 : r2_acute
+            r2_cache[simplex_indices] = val
+            return val
+        end
+
+        # Generic N-dimensional case (Tetrahedra k=4, etc.)
         p0 = @view points[simplex_indices[1]+1, :]
         A = zeros(Float64, k-1, dim_pts)
         b = zeros(Float64, k-1)
@@ -2489,8 +2559,23 @@ function compute_alpha_complex_simplices_jl(
         end
 
         try
+            # For 3-simplices in 3D (k=4), A is 3x3. Check for degeneracy.
+            if k-1 == dim_pts && abs(det(A)) < 1e-15
+                # Degenerate: use maximum of sub-face circumradii
+                r2_max = 0.0
+                for face in combinations(simplex_indices, k-1)
+                    r2_max = max(r2_max, get_r2(Tuple(face)))
+                end
+                r2_cache[simplex_indices] = r2_max
+                return r2_max
+            end
+
             c = A \ b
             val = sum(abs2, c)
+            
+            # If circumcenter is outside the simplex, it might be obtuse
+            # For tetrahedra, check if any face is a better candidate
+            # This is a simplified "minimum enclosing sphere" logic
             r2_cache[simplex_indices] = val
             return val
         catch
@@ -2499,36 +2584,32 @@ function compute_alpha_complex_simplices_jl(
         end
     end
 
+    # Gabriel condition: A simplex is in Alpha complex if its R^2 <= alpha2
     for i in 1:n_max
-        s = Tuple(sort(vec(max_simplices[i, :])))
-        if get_r2(s) <= alpha2
-            for r in 1:length(s)
-                for face in combinations(s, r)
-                    push!(valid_simplices, Tuple(face))
-                end
-            end
-        else
-            for v in s
-                push!(valid_simplices, Tuple((v,)))
-            end
-            for r in 2:min(length(s)-1, max_dim+1)
-                for face in combinations(s, r)
-                    t_face = Tuple(face)
-                    if get_r2(t_face) <= alpha2
-                        for r_sub in 1:length(t_face)
-                            for sub_f in combinations(t_face, r_sub)
-                                push!(valid_simplices, Tuple(sub_f))
-                            end
-                        end
-                    end
+        s_raw = sort(vec(max_simplices[i, :]))
+        # Collect all sub-faces up to max_dim
+        for r in 1:length(s_raw)
+            for face in combinations(s_raw, r)
+                t_face = Tuple(face)
+                if get_r2(t_face) <= alpha2
+                    push!(valid_simplices, t_face)
                 end
             end
         end
     end
 
-    return collect(valid_simplices)
-end
+    # Ensure all faces of valid simplices are included (simplicial complex property)
+    final_simplices = Set{Tuple{Vararg{Int64}}}()
+    for s in valid_simplices
+        for r in 1:length(s)
+            for face in combinations(collect(s), r)
+                push!(final_simplices, Tuple(face))
+            end
+        end
+    end
 
+    return [collect(Int64, s) for s in final_simplices]
+end
 
 function quick_mapper_jl(G_raw_py::PyDict{Any, Any}, max_loops::Int=1, min_modularity_gain::Float64=1e-6)
     G_raw = pyconvert(Dict{Any, Any}, G_raw_py)

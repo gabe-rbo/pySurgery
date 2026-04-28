@@ -139,18 +139,17 @@ class WhiteheadGroup(BaseModel):
     method: str = ""
 
 
-def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
+def compute_whitehead_group(pi1: FundamentalGroup, backend: str = "auto") -> WhiteheadGroup:
     """Computes or approximates the Whitehead group for the given fundamental group.
-
-    Uses Julia for exact abelianization and rank extractions via Bass-Heller-Swan.
 
     Args:
         pi1 (FundamentalGroup): The fundamental group.
+        backend (str): 'auto', 'julia', or 'python'.
 
     Returns:
         WhiteheadGroup: The computed Whitehead group representation.
     """
-    descriptor = infer_standard_group_descriptor(pi1)
+    descriptor = infer_standard_group_descriptor(pi1, backend=backend)
 
     if descriptor == "1":
         return WhiteheadGroup(
@@ -199,15 +198,18 @@ def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
             method="free_group_theorem",
         )
 
-    # Prefer Julia: exact sparse reductions scale much better than pure Python SNF.
-    if not julia_engine.available:
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
+    if not use_julia and backend_norm != "python":
         warnings.warn(
             "Whitehead computation fallback in `compute_whitehead_group`: using Python SNF abelianization; "
             "install/enable Julia for much faster exact computation on larger presentations."
         )
 
     try:
-        if julia_engine.available:
+        if use_julia:
             free_rank, torsions = julia_engine.abelianize_and_bhs_rank(
                 pi1.generators, pi1.relations
             )
@@ -262,6 +264,8 @@ def compute_whitehead_group(pi1: FundamentalGroup) -> WhiteheadGroup:
             )
 
     except Exception as e:
+        if backend_norm == "julia":
+            raise e
         return WhiteheadGroup(
             rank=-1,
             description=f"Wh(pi_1) computation failed: {e!r}. Potential s-Cobordism obstruction.",

@@ -3,22 +3,28 @@ import scipy.spatial.distance as dist
 from typing import Tuple, Optional
 from ..bridge.julia_bridge import julia_engine
 
-def orthogonal_procrustes(A: np.ndarray, B: np.ndarray) -> Tuple[np.ndarray, np.ndarray, float]:
+def orthogonal_procrustes(A: np.ndarray, B: np.ndarray, backend: str = "auto") -> Tuple[np.ndarray, np.ndarray, float]:
     """Finds orthogonal matrix R aligning B to A, returning (R, B_aligned, disparity).
 
     Args:
         A (np.ndarray): The target point cloud.
         B (np.ndarray): The point cloud to be aligned.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         Tuple[np.ndarray, np.ndarray, float]: A tuple containing the orthogonal
             matrix R, the aligned point cloud B_aligned, and the disparity (error).
     """
-    if julia_engine.available:
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
+    if use_julia:
         try:
             return julia_engine.orthogonal_procrustes(A, B)
-        except Exception:
-            pass # Fallback
+        except Exception as e:
+            if backend_norm == "julia":
+                raise e
 
     try:
         from scipy.spatial.transform import Rotation
@@ -37,14 +43,13 @@ def orthogonal_procrustes(A: np.ndarray, B: np.ndarray) -> Tuple[np.ndarray, np.
         disparity = np.linalg.norm(A - B_aligned)
         return R, B_aligned, float(disparity)
 
-def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean") -> np.ndarray:
+def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean", backend: str = "auto") -> np.ndarray:
     """Computes pairwise distance matrix using the optimal singular implementation.
-
-    Standardizes on JAX if available to ensure hardware acceleration for all scales.
 
     Args:
         data (np.ndarray): The input data points.
         metric (str): The distance metric to use. Defaults to "euclidean".
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         np.ndarray: The pairwise distance matrix.
@@ -52,16 +57,21 @@ def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean") -> np.n
     Raises:
         ValueError: If the metric is not supported.
     """
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
     from ..integrations.jax_bridge import HAS_JAX
-    if HAS_JAX and metric == "euclidean":
+    if backend_norm != "julia" and HAS_JAX and metric == "euclidean":
         from ..integrations.jax_bridge import jax_pairwise_distance
         return np.asarray(jax_pairwise_distance(data))
 
-    if julia_engine.available:
+    if use_julia:
         try:
             return julia_engine.pairwise_distance_matrix(data, metric)
-        except Exception:
-            pass # Fallback
+        except Exception as e:
+            if backend_norm == "julia":
+                raise e
             
     if metric == "euclidean":
         return dist.squareform(dist.pdist(data, 'euclidean'))
@@ -72,21 +82,27 @@ def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean") -> np.n
     else:
         raise ValueError(f"Unsupported metric: {metric}")
 
-def frechet_distance(curve_a: np.ndarray, curve_b: np.ndarray) -> float:
+def frechet_distance(curve_a: np.ndarray, curve_b: np.ndarray, backend: str = "auto") -> float:
     """Computes Discrete Fréchet distance between two ordered sequences of points.
 
     Args:
         curve_a (np.ndarray): The first sequence of points.
         curve_b (np.ndarray): The second sequence of points.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         float: The discrete Fréchet distance.
     """
-    if julia_engine.available:
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
+    if use_julia:
         try:
             return julia_engine.frechet_distance(curve_a, curve_b)
-        except Exception:
-            pass
+        except Exception as e:
+            if backend_norm == "julia":
+                raise e
             
     # Python fallback DP
     n = len(curve_a)
@@ -114,11 +130,10 @@ def gromov_wasserstein_distance(
     p: Optional[np.ndarray] = None, 
     q: Optional[np.ndarray] = None,
     epsilon: float = 0.01,
-    max_iter: int = 100
+    max_iter: int = 100,
+    backend: str = "auto"
 ) -> float:
     """Computes (Entropic) Gromov-Wasserstein distance.
-
-    Standardizes on JAX if available for all scales.
 
     Args:
         dist_matrix_A (np.ndarray): Distance matrix of the first space.
@@ -127,10 +142,15 @@ def gromov_wasserstein_distance(
         q (Optional[np.ndarray]): Probability distribution on the second space.
         epsilon (float): Regularization parameter. Defaults to 0.01.
         max_iter (int): Maximum number of iterations. Defaults to 100.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         float: The (entropic) Gromov-Wasserstein distance.
     """
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
     n = dist_matrix_A.shape[0]
     m = dist_matrix_B.shape[0]
     
@@ -140,15 +160,16 @@ def gromov_wasserstein_distance(
         q = np.ones(m) / m
 
     from ..integrations.jax_bridge import HAS_JAX
-    if HAS_JAX:
+    if backend_norm != "julia" and HAS_JAX:
         from ..integrations.jax_bridge import jax_gromov_wasserstein
         return float(jax_gromov_wasserstein(dist_matrix_A, dist_matrix_B, p, q, epsilon, max_iter))
 
-    if julia_engine.available:
+    if use_julia:
         try:
             return julia_engine.gromov_wasserstein_distance(dist_matrix_A, dist_matrix_B, p, q, epsilon, max_iter)
-        except Exception:
-            pass
+        except Exception as e:
+            if backend_norm == "julia":
+                raise e
             
     # Python fallback Sinkhorn algorithm
     T = np.outer(p, q)

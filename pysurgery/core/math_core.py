@@ -182,27 +182,24 @@ def get_snf_diagonal(A: np.ndarray) -> np.ndarray:
         return np.array(non_zero, dtype=object)
 
 
-def get_sparse_snf_diagonal(A_sparse, allow_approx: bool = False) -> np.ndarray:
+def get_sparse_snf_diagonal(A_sparse, allow_approx: bool = False, backend: str = "auto") -> np.ndarray:
     """Computes the SNF diagonal for sparse matrices.
-
-    Uses exact integer SNF by default, with optional explicit approximate fallback.
 
     Args:
         A_sparse: The input sparse matrix (e.g., scipy.sparse).
-        allow_approx: Whether to allow approximate floating-point fallback (prohibited).
-
-    Returns:
-        A 1D array of non-zero invariant factors.
-
-    Raises:
-        ValueError: If allow_approx is True (mathematically invalid for surgery).
+        allow_approx: Whether to allow approximate floating-point fallback.
+        backend: 'auto', 'julia', or 'python'.
     """
     from ..bridge.julia_bridge import julia_engine
     import warnings
 
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
     m, n = A_sparse.shape
 
-    if julia_engine.available:
+    if use_julia:
         try:
             A_coo = A_sparse.tocoo()
             out = julia_engine.compute_sparse_snf(
@@ -210,6 +207,8 @@ def get_sparse_snf_diagonal(A_sparse, allow_approx: bool = False) -> np.ndarray:
             )
             return out
         except Exception as e:
+            if backend_norm == "julia":
+                raise e
             msg = f"Topological Hint: Julia backend failed ({e!r}). Falling back to exact Python/SymPy SNF (slower)."
             warnings.warn(msg)
 

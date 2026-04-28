@@ -136,15 +136,15 @@ def test_simplex_tree_intersection_form_exact_mode_raises_without_exact_backend(
             self.boundaries = boundaries
             self.dimensions = dimensions
 
-        def cohomology_basis(self, n):
+        def cohomology_basis(self, n, **kwargs):
             assert n == 2
             return [np.array([1], dtype=np.int64)]
-
     monkeypatch.setattr(
         gudhi_bridge,
         "extract_complex_data",
-        lambda st: (boundaries, cells, dim_simplices, simplex_to_idx),
+        lambda st, **kwargs: (boundaries, cells, dim_simplices, simplex_to_idx),
     )
+
     monkeypatch.setattr(gudhi_bridge, "ChainComplex", _FakeChainComplex)
     monkeypatch.setattr(gudhi_bridge.julia_engine, "available", False)
     monkeypatch.setattr(
@@ -175,15 +175,15 @@ def test_simplex_tree_intersection_form_handles_single_4cell_svd_fallback(monkey
             self.boundaries = boundaries
             self.dimensions = dimensions
 
-        def cohomology_basis(self, n):
+        def cohomology_basis(self, n, **kwargs):
             assert n == 2
             return [np.array([1], dtype=np.int64)]
-
     monkeypatch.setattr(
         gudhi_bridge,
         "extract_complex_data",
-        lambda st: (boundaries, cells, dim_simplices, simplex_to_idx),
+        lambda st, **kwargs: (boundaries, cells, dim_simplices, simplex_to_idx),
     )
+
     monkeypatch.setattr(gudhi_bridge, "ChainComplex", _FakeChainComplex)
     monkeypatch.setattr(gudhi_bridge.julia_engine, "available", False)
     monkeypatch.setattr(

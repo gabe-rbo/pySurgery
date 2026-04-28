@@ -12,10 +12,12 @@ class Pi1Evidence(BaseModel):
     Attributes:
         generators (list[str]): List of generator names.
         relation_count (int): Number of relations in the presentation.
+        orientation_character (dict[str, int]): Map from generator names to {1, -1}.
         inferred_descriptor (str | None): Inferred standard group descriptor.
     """
     generators: list[str] = Field(default_factory=list)
     relation_count: int = 0
+    orientation_character: dict[str, int] = Field(default_factory=dict)
     inferred_descriptor: str | None = None
 
 
@@ -84,6 +86,7 @@ def build_pi1_evidence(pi1: FundamentalGroup | None) -> Pi1Evidence | None:
     return Pi1Evidence(
         generators=list(pi1.generators),
         relation_count=len(pi1.relations),
+        orientation_character=pi1.orientation_character,
         inferred_descriptor=infer_standard_group_descriptor(pi1),
     )
 

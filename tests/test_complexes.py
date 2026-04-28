@@ -383,9 +383,9 @@ def test_cache_clear_forces_recompute(monkeypatch):
     calls = {"count": 0}
     original = complexes.get_sparse_snf_diagonal
 
-    def _wrapped(matrix):
+    def _wrapped(matrix, **kwargs):
         calls["count"] += 1
-        return original(matrix)
+        return original(matrix, **kwargs)
 
     monkeypatch.setattr(complexes, "get_sparse_snf_diagonal", _wrapped)
     _ = c.homology(0)

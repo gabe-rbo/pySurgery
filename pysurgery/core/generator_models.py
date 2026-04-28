@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 
 class Pi1GeneratorTrace(BaseModel):
@@ -45,6 +45,7 @@ class Pi1PresentationWithTraces(BaseModel):
 
     generators: List[str]
     relations: List[List[str]]
+    orientation_character: Dict[str, int] = Field(default_factory=dict)
     traces: List[Pi1GeneratorTrace]
     mode_used: str = ""
     generator_mode: str = ""
