@@ -33,8 +33,15 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          if [[ ! $(git log -1 --pretty=%B) =~ "Bump version" ]]; then
-            bump-my-version bump patch
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          if [[ ! "$COMMIT_MSG" =~ "Bump version" ]]; then
+            BUMP_TYPE="patch"
+            if [[ "$COMMIT_MSG" =~ "#major" ]]; then
+              BUMP_TYPE="major"
+            elif [[ "$COMMIT_MSG" =~ "#minor" ]]; then
+              BUMP_TYPE="minor"
+            fi
+            bump-my-version bump $BUMP_TYPE
             git push --follow-tags
           fi
           

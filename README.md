@@ -46,6 +46,7 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 ### 1. Combinatorial Topology & Complex Generation
 * **Discrete Spaces:** Robust native classes for `SimplicialComplex`, `CWComplex`, and `ChainComplex` with lazy-evaluated, cached topological properties (f-vectors, boundaries).
 * **Topological Simplification:** Rigorous `.simplify()` method for homotopy-equivalent reduction via Link Condition edge contractions and high-performance `.quick_mapper()` for modularity-based structural summarization.
+* **Homotopy Equivalence:** Systematic reduction via simplicial **Collapses** (free face removal) and **Discrete Morse Theory** (Forman matching), yielding minimal chain complexes while preserving mathematical integrity.
 * **Massive Point Clouds:** Native construction of memory-efficient **Alpha Complexes** (2D/3D/ND with EMST connectivity heuristics), **Vietoris-Rips** (via sparse clique enumeration), and **Witness Complexes**.
 * **Parameter-Free Reconstruction:** Implementation of the **Crust Algorithm** for adaptive surface and curve reconstruction without distance thresholds.
 * **Homology & Cohomology:** Exact computation of Betti numbers and torsion coefficients over $\mathbb{Z}$, $\mathbb{Q}$, and $\mathbb{Z}/p\mathbb{Z}$. Includes Universal Coefficient Theorem (UCT) decompositions for composite moduli.
@@ -53,7 +54,8 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 
 ### 2. Algebraic Topology & Cohomological Operations
 * **Cup Products:** Full simplicial implementation of the Alexander-Whitney diagonal approximation to evaluate $\alpha \smile \beta$, exposing the ring structure of cohomology.
-* **Characteristic Classes:** Extraction of Stiefel-Whitney classes (e.g., $w_2$) via Wu's formula to evaluate spin/pin structures and orientability.
+* **Characteristic Classes:** Extraction of Stiefel-Whitney classes ($w_i$) and Euler classes ($e$) for manifold tangent bundles and general **Combinatorial Vector Bundles**. Features a local Whitney-Steenrod fast-path for massive manifold meshes.
+* **Steenrod Squares:** Cohomology operations $Sq^k: H^p(X; \mathbb{Z}_2) \to H^{p+k}(X; \mathbb{Z}_2)$ implemented via optimized cup-i products.
 * **Fundamental Group** ($\pi_1$): Extraction of group presentations via spanning-tree retractions, supporting both raw and optimized (reduced trace) generator modes.
 * **Whitehead Torsion:** $K$-theoretic heuristics for evaluating Whitehead groups ($Wh(\pi_1)$) and s-cobordism obstructions.
 
@@ -72,14 +74,21 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 * **Dimension-Aware Analyzers:** Specialized homeomorphism classification signals tailored for 2D (genus/orientability), 3D (prime decomposition signals), 4D (Freedman/Donaldson invariants), and 5D+ (Surgery theory).
 * **Structured Witnesses:** The `homeomorphism_witness` module does not just return True/False; it generates rigorous certificate objects containing the exact theorems invoked, explicit isometry matrices ($U^T Q_1 U = Q_2$), and explicit delineations of missing obstruction data if surgery is required.
 
-### 6. Geometric Analysis & Immersion
+### 6. Multi-Engine Backend Optionality
+pySurgery features a flexible backend architecture that allows users to prioritize either environment simplicity or raw performance:
+* **`backend='python'`**: Pure-Python execution (enhanced by NumPy/Numba). Requires zero external dependencies. Ideal for rapid prototyping and small-to-medium complexes.
+* **`backend='julia'`**: Native integration with the Julia engine. Recommended for massive SNF reductions and high-dimensional manifold classification.
+* **`backend='auto'` (Default)**: Automatically detects and leverages the most efficient engine available (Julia > Python).
+* **`backend='jax'`**: Specifically used for continuous metric evaluations and differentiable topological approximations.
+
+### 7. Geometric Analysis & Immersion
 * **PL Embeddings:** High-performance $\mathcal{O}(N \log N)$ KDTree-bounded broad-phase and exact narrow-phase checks for piecewise-linear self-intersections and immersions.
 * **Intrinsic Dimension:** Hardware-accelerated manifold dimension estimators using Maximum Likelihood (Levina-Bickel), Two-NN, and Local PCA tangent-space approximations.
 * **Metric Alignment:** Orthogonal Procrustes, discrete Fréchet distances, and JAX-accelerated Entropic Gromov-Wasserstein alignment for comparing ambient metric spaces.
 * **Geometrization & Uniformization:** Heuristics for Thurston's 8 geometries, normal surface residual norms, and discrete conformal equivalence metrics for 2D meshes.
 * **Gauss-Bonnet & Chern-Gauss-Bonnet:** Tools for verifying the relationship between total curvature and Euler characteristic across dimensions, including 4D Weyl and Q-curvature integrations.
 
-### 7. Integrations & Interoperability
+### 8. Integrations & Interoperability
 * **JAX:** Differentiable soft-signatures and high-throughput metric tensors.
 * **Lean 4:** Export functionality to translate discrete simplicial complexes into formal theorem-prover syntax.
 * **PyTorch Geometric:** Bridging topological complexes to graph neural network (GNN) architectures.
@@ -89,7 +98,7 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 
 ## Installation
 
-**Requirements:** Python $\ge 3.10$.
+**Requirements:** Python $\ge 3.12$.
 
 ### 1. Python Package
 
@@ -170,28 +179,44 @@ The curriculum covers:
 
 If you utilize pySurgery in your research, please refer to the `CITATION.cff` file for appropriate attribution. 
 
-## Sessions Reference
+## Mathematical Foundations & Bibliography
 
-The algorithms implemented in pySurgery are grounded in several foundational publications:
+The algorithms and constructs implemented in **pySurgery** are rigorously grounded in foundational topological literature and modern computational research.
 
-* **Alexander-Whitney Cup Product:** Grounded in the classical simplicial diagonal approximation (Alexander & Whitney, 1949).
-* **Bass-Heller-Swan Decomposition:** Used for Whitehead group obstructions and $K$-theory computations.
-* **CkNN (Continuous k-Nearest Neighbors):** Graph construction robust to varying density (Berry & Sauer, 2016).
-* **Freedman's Classification:** Topological classification of simply-connected 4-manifolds (Freedman, 1982).
-* **Gromov-Wasserstein Distance:** Entropic approximation using JAX-accelerated Sinkhorn iterations (Peyré, Cuturi, et al., 2016).
-* **Kirby Calculus:** Implementation of handle slide and blow-up mechanics (Kirby, 1970).
-* **Levina-Bickel MLE:** Intrinsic dimension estimation via maximum likelihood (Levina & Bickel, 2004).
-* **Orthogonal Procrustes:** Matrix alignment for geometric comparison (Schönemann, 1966).
-* **QuickMapper:** Optimization of the Mapper algorithm for high-performance topological structure construction (Liu, Xie & Yi, 2012).
-* **Smith Normal Form (SNF):** Exact integer matrix decomposition used for homology and torsion computations.
-* **Stiefel-Whitney Classes:** Computation via Wu's formula for orientability and Spin structures (Wu, 1950).
-* **Thurston's Geometrization:** Heuristics for 3-manifold classification (Thurston, 1982).
-* **TwoNN:** Intrinsic dimension estimation using two nearest neighbors (Facco et al., 2017).
-* **Wall Groups ($L$-theory):** Based on the surgery obstruction classification (Wall, 1970).
-* **Whitney Embedding:** Piecewise-linear immersion and embedding checks (Whitney, 1944).
-* **Crust Algorithm:** Parameter-free Voronoi-based surface and curve reconstruction (Amenta, Bern & Kamvysselis, 1998).
-* **Simplicial Collapses:** Strict homotopy equivalence via Link Condition edge contractions (Whitehead, 1939).
-* **Computational Topology:** Algorithms extending frameworks from *Computational Topology for Data Analysis* (Dey & Wang).
+### Foundational Theory
+
+*   **Algebraic Surgery:** Ranicki, A. (1980). *Exact sequences in the algebraic theory of surgery*. Princeton University Press.
+*   **Surgery Theory & L-Groups:** Wall, C. T. (1970). *Surgery on compact manifolds*. Academic Press.
+*   **4-Manifold Classification:** Freedman, M. H. (1982). The topology of four-dimensional manifolds. *Journal of Differential Geometry*, 17(3), 357-453.
+*   **Characteristic Classes:** Milnor, J. W., & Stasheff, J. D. (1974). *Characteristic classes*. Princeton University Press.
+*   **K-Theory & Whitehead Torsion:** Milnor, J. W. (1966). Whitehead torsion. *Bulletin of the American Mathematical Society*, 72(3), 358-426.
+*   **Bass-Heller-Swan Theorem:** Bass, H., Heller, A., & Swan, R. G. (1964). The Whitehead group of a polynomial extension. *Publications Mathématiques de l'IHÉS*, 22, 61-79.
+*   **Shaneson Splitting:** Shaneson, J. L. (1968). Wall's surgery obstruction groups for G x Z. *Annals of Mathematics*, 88(1), 1-67.
+*   **Kirby Calculus:** Kirby, R. (1978). A calculus for framed links in S^3. *Inventiones mathematicae*, 45(1), 35-56.
+*   **Normal Surface Theory:** Haken, W. (1961). Theorie der Normalflächen. *Acta Mathematica*, 105(3-4), 245-375.
+*   **3-Manifold Geometrization:** Thurston, W. P. (1982). Three-dimensional manifolds, Kleinian groups and hyperbolic geometry. *Bulletin of the American Mathematical Society*, 6(3), 357-381.
+*   **Simplicial Collapses:** Whitehead, J. H. C. (1939). Simplicial spaces, nuclei and m-groups. *Proceedings of the London Mathematical Society*, 2(1), 241-325.
+*   **Steenrod Squares & Cup-i Products:** Steenrod, N. E. (1947). Products of cocycles and extensions of mappings. *Annals of Mathematics*, 48(2), 290-320.
+*   **Wu Class:** Wu, W. T. (1950). Classes caractéristiques et i-carrés d'une variété. *Comptes Rendus de l'Académie des Sciences*, 230, 508-511.
+*   **Hirzebruch Signature Theorem:** Hirzebruch, F. (1956). *Topological methods in algebraic geometry*. Springer-Verlag.
+*   **Smith Normal Form:** Smith, H. J. S. (1861). On systems of linear indeterminate equations and congruences. *Philosophical Transactions of the Royal Society of London*, 151, 293-326.
+*   **Farrell-Jones Conjecture:** Farrell, F. T., & Jones, L. E. (1993). Isomorphism conjectures in algebraic K-theory. *Journal of the American Mathematical Society*, 6(2), 249-297.
+*   **Surface Classification:** Radó, T. (1925). Über den Begriff der Riemannschen Fläche. *Acta Litt. Sci. Szeged*, 2, 101-121.
+
+### Computational Implementation & Optimization
+
+*   **Computational Topology Foundations:** Edelsbrunner, H., & Harer, J. (2010). *Computational topology: An introduction*. American Mathematical Society.
+*   **Optimal Generators:** Dey, T. K., & Wang, Y. (2022). *Computational topology for data analysis*. Cambridge University Press.
+*   **Efficient Persistent Homology (Leaf-Peeling):** Bauer, U. (2021). Ripser: efficient computation of Vietoris–Rips persistence barcodes. *Journal of Applied and Computational Topology*, 5, 391-423.
+*   **3-Manifold Simplification (Crushing):** Jaco, W., & Rubinstein, J. H. (2003). 0-efficient triangulations of 3-manifolds. *Journal of Differential Geometry*, 65(1), 61-168.
+*   **Algorithmic 3-Topology:** Matveev, S. (2003). *Algorithmic topology and classification of 3-manifolds*. Springer Science & Business Media.
+*   **Sylvester's Law of Inertia (Exact):** Sylvester, J. J. (1852). A demonstration of the theorem that every homogeneous quadratic polynomial is reducible by real orthogonal substitutions to the form of a sum of positive and negative squares. *Philosophical Magazine*, 4(4), 138-142.
+*   **Crust Algorithm:** Amenta, N., Bern, M., & Kamvysselis, M. (1998). A new Voronoi-based surface reconstruction algorithm. *Proceedings of the 25th annual conference on Computer graphics and interactive techniques*, 415-421.
+*   **Gromov-Wasserstein Distance:** Peyré, G., Cuturi, M., & Solomon, J. (2016). Gromov-Wasserstein averaging of kernel and distance matrices. *International Conference on Machine Learning*, 2664-2674.
+*   **Levina-Bickel MLE:** Levina, E., & Bickel, P. J. (2004). Maximum likelihood estimation of intrinsic dimension. *Advances in Neural Information Processing Systems*, 17.
+*   **TwoNN Estimator:** Facco, E., d’Errico, M., Rodriguez, A., & Laio, A. (2017). Estimating the intrinsic dimension of datasets by a minimal neighborhood information. *Scientific Reports*, 7(1), 12140.
+*   **CkNN Graph:** Berry, T., & Sauer, T. (2016). Consistent manifold representation for topological data analysis. *Foundations of Data Science*, 1(1), 1-38.
+*   **QuickMapper:** Liu, Y., Xie, Z., & Yi, J. (2012). A fast algorithm for computing Mapper. *arXiv preprint arXiv:1209.4319*.
 
 ---
 

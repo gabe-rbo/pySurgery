@@ -9,7 +9,7 @@ using Random
 using PythonCall: pyconvert, Py, PyDict
 import PrecompileTools
 
-export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_vietoris_rips, compute_circumradius_sq_3d, compute_circumradius_sq_2d, quick_mapper_jl, cknn_graph_jl, cknn_graph_accelerated_jl, is_homology_manifold_jl, compute_alpha_complex_simplices_jl, compute_alpha_threshold_emst_jl, compute_crust_simplices_jl, compute_witness_complex_simplices_jl
+export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_vietoris_rips, compute_circumradius_sq_3d, compute_circumradius_sq_2d, quick_mapper_jl, cknn_graph_jl, cknn_graph_accelerated_jl, is_homology_manifold_jl, compute_alpha_complex_simplices_jl, compute_alpha_threshold_emst_jl, compute_crust_simplices_jl, compute_witness_complex_simplices_jl, compute_discrete_morse_gradient_jl
 
 const HAS_INTEGER_SNF = try
     @eval import IntegerSmithNormalForm
@@ -3103,10 +3103,10 @@ function is_homology_manifold_jl(simplex_entries, max_dim::Int)
     end
 
     return true, d_global, Dict{Int, String}()
-end
-end # module
+    end
 
-function compute_alpha_threshold_emst_jl(points::AbstractMatrix{Float64}, simplices::AbstractMatrix{Int64})
+    function compute_alpha_threshold_emst_jl(
+points::AbstractMatrix{Float64}, simplices::AbstractMatrix{Int64})
     n_pts = size(points, 1)
     n_simps = size(simplices, 1)
 
@@ -3233,3 +3233,69 @@ function compute_witness_complex_simplices_jl(points::AbstractMatrix{Float64}, l
     # Given how from_witness is implemented in Python, it returns 1-skeleton then expands.
     return collect(simplices)
 end
+
+
+"""
+    compute_discrete_morse_gradient_jl(simplices)
+
+Compute a discrete Morse gradient field using a greedy matching algorithm.
+Returns a list of pairs [[sigma], [tau]].
+"""
+function compute_discrete_morse_gradient_jl(simplices_py)
+    # Convert and normalize simplices
+    all_simplices_list = Vector{Vector{Int64}}()
+    for s_py in pyconvert(Vector{Any}, simplices_py)
+        push!(all_simplices_list, sort(collect(pyconvert(Vector{Any}, s_py))))
+    end
+    all_simplices = Set(all_simplices_list)
+    
+    matched = Set{Vector{Int64}}()
+    matching = Vector{Vector{Vector{Int64}}}()
+    
+    # Group by dimension for efficient coface counting
+    dim_groups = Dict{Int, Vector{Vector{Int64}}}()
+    for s in all_simplices_list
+        d = length(s) - 1
+        push!(get!(dim_groups, d, Vector{Vector{Int64}}()), s)
+    end
+    
+    max_d = maximum(keys(dim_groups))
+    
+    # Process Algorithm (Greedy matching)
+    for d in 0:(max_d - 1)
+        # Re-compute coface counts among UNMATCHED for dimension d
+        unmatched_d = filter(s -> !(s in matched), get(dim_groups, d, []))
+        unmatched_dp1 = filter(s -> !(s in matched), get(dim_groups, d+1, []))
+        unmatched_dp1_set = Set(unmatched_dp1)
+        
+        if isempty(unmatched_d); continue; end
+        
+        # Build coface counts: sigma -> [tau1, tau2, ...]
+        cofaces = Dict{Vector{Int64}, Vector{Vector{Int64}}}()
+        for s in unmatched_d; cofaces[s] = Vector{Vector{Int64}}(); end
+        
+        for tau in unmatched_dp1
+            for i in 1:length(tau)
+                sigma = vcat(tau[1:i-1], tau[i+1:end])
+                if haskey(cofaces, sigma)
+                    push!(cofaces[sigma], tau)
+                end
+            end
+        end
+        
+        # Match free faces (sigma has exactly one coface in unmatched_dp1)
+        for (sigma, targets) in cofaces
+            if length(targets) == 1
+                tau = targets[1]
+                if !(sigma in matched) && !(tau in matched)
+                    push!(matched, sigma)
+                    push!(matched, tau)
+                    push!(matching, [sigma, tau])
+                end
+            end
+        end
+    end
+    
+    return matching
+end
+end # module

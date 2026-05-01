@@ -40,6 +40,10 @@ def smith_normal_decomp(A_in: sp.Matrix | np.ndarray) -> tuple[np.ndarray, np.nd
 
     This implementation handles the reduction iteratively over Z using NumPy object arrays.
 
+    References:
+        Smith, H. J. S. (1861). On systems of linear indeterminate equations and congruences. 
+        Philosophical Transactions of the Royal Society of London, 151, 293-326.
+
     Args:
         A_in: The input integer matrix (SymPy Matrix or NumPy array).
 
@@ -184,6 +188,17 @@ def get_snf_diagonal(A: np.ndarray) -> np.ndarray:
 
 def get_sparse_snf_diagonal(A_sparse, allow_approx: bool = False, backend: str = "auto") -> np.ndarray:
     """Computes the SNF diagonal for sparse matrices.
+
+    This method utilizes an optimal O(V+E) graph-theoretic "leaf-peeling" 
+    pre-processor in the Julia backend to dramatically reduce the matrix size 
+    before performing the standard SNF algorithm.
+
+    References:
+        Edelsbrunner, H., & Harer, J. (2010). Computational topology: An introduction. 
+        American Mathematical Society.
+        
+        Bauer, U. (2021). Ripser: efficient computation of Vietoris–Rips persistence barcodes. 
+        Journal of Applied and Computational Topology, 5, 391-423.
 
     Args:
         A_sparse: The input sparse matrix (e.g., scipy.sparse).

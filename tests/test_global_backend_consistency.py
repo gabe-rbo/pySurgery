@@ -1,8 +1,6 @@
 import pytest
 import numpy as np
-import scipy.sparse as sp
-from pysurgery.core.complexes import SimplicialComplex, ChainComplex
-from pysurgery.core.homology_generators import compute_homology_basis_from_simplices
+from pysurgery.core.complexes import SimplicialComplex
 from pysurgery.core.metrics import compute_distance_matrix, frechet_distance
 
 def test_homology_backend_consistency_sphere():

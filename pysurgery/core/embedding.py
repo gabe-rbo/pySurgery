@@ -35,15 +35,12 @@ from typing import Optional, Sequence
 
 import numpy as np
 from scipy.spatial import cKDTree
-
 from .complexes import SimplicialComplex
 from .theorem_tags import infer_theorem_tag
+from ..bridge.julia_bridge import julia_engine
+from .uniformization import SurfaceMesh
 
-try:  # Optional import to avoid circular/module-load issues.
-    from .uniformization import SurfaceMesh
-except Exception:  # pragma: no cover - optional import path
-    SurfaceMesh = None  # type: ignore[assignment]
-
+_EPS = 1e-12
 try:  # Optional import to avoid circular/module-load issues.
     from .geometrization_3d import Triangulated3Manifold
 except Exception:  # pragma: no cover - optional import path
@@ -495,6 +492,7 @@ def analyze_embedding(
     projection_method: str = "pca",
     projection_matrix: Optional[np.ndarray] = None,
     tol: float = _EPS,
+    backend: str = "auto",
 ) -> EmbeddingResult:
     """High-level embedding / immersion analysis entry point.
 
@@ -506,6 +504,7 @@ def analyze_embedding(
         projection_method: Method for projection ('pca' or 'random').
         projection_matrix: Optional custom projection matrix.
         tol: Numerical tolerance for geometric checks.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         The result of the embedding analysis.
@@ -552,8 +551,8 @@ def analyze_embedding(
             source_name=pl_map.source_name,
         )
 
-    immersion = check_immersion(pl_map, tol=tol)
-    intersections = detect_self_intersections(pl_map, tol=tol)
+    immersion = check_immersion(pl_map, tol=tol, backend=backend)
+    intersections = detect_self_intersections(pl_map, tol=tol, backend=backend)
     embedded = bool(immersion.immersed and not intersections.has_intersections)
     status = "success" if embedded and immersion.exact and intersections.exact else "inconclusive"
     if not immersion.immersed:
@@ -617,16 +616,21 @@ def analyze_embedding(
     )
 
 
-def check_immersion(pl_map: PLMap, *, tol: float = _EPS) -> ImmersionResult:
+def check_immersion(pl_map: PLMap, *, tol: float = _EPS, backend: str = "auto") -> ImmersionResult:
     """Check local injectivity/rank conditions for a PL map.
 
     Args:
         pl_map: The PL map to check.
         tol: Numerical tolerance for rank checks.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         The result of the immersion check.
     """
+    backend_norm = str(backend).lower().strip()
+    if backend_norm == "julia" and not julia_engine.available:
+        julia_engine.require_julia()
+
     top_dim = pl_map.source_dimension
     source_simplices = _top_simplices(pl_map.source_complex)
     local_failures: list[dict[str, object]] = []
@@ -724,16 +728,23 @@ def check_immersion(pl_map: PLMap, *, tol: float = _EPS) -> ImmersionResult:
     )
 
 
-def detect_self_intersections(pl_map: PLMap, *, tol: float = _EPS) -> SelfIntersectionReport:
+def detect_self_intersections(
+    pl_map: PLMap, *, tol: float = _EPS, backend: str = "auto"
+) -> SelfIntersectionReport:
     """Detect self-intersections using broad-phase pruning and exact low-dimensional predicates.
 
     Args:
         pl_map: The PL map to check.
         tol: Numerical tolerance for intersection checks.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         The self-intersection report.
     """
+    backend_norm = str(backend).lower().strip()
+    if backend_norm == "julia" and not julia_engine.available:
+        julia_engine.require_julia()
+
     source_simplices = _all_simplices_by_dim(pl_map.source_complex)
     simplices = [
         s

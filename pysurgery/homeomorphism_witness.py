@@ -225,6 +225,7 @@ def build_1d_homeomorphism_witness(
     c1: ChainComplex,
     c2: ChainComplex,
     allow_approx: bool = False,
+    backend: str = "auto",
 ) -> HomeomorphismWitnessResult:
     """Build a homeomorphism witness for 1D manifolds.
 
@@ -232,6 +233,7 @@ def build_1d_homeomorphism_witness(
         c1: First chain complex.
         c2: Second chain complex.
         allow_approx: Whether to allow approximate/heuristic analysis.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
@@ -240,6 +242,7 @@ def build_1d_homeomorphism_witness(
         c1,
         c2,
         allow_approx=allow_approx,
+        backend=backend,
     )
     return _build_from_result(
         result,
@@ -260,6 +263,7 @@ def build_surface_homeomorphism_witness(
     cohomology_ring_signature_2: Optional[Dict] = None,
     cup_product_signature_1: Optional[Dict] = None,
     cup_product_signature_2: Optional[Dict] = None,
+    backend: str = "auto",
 ) -> HomeomorphismWitnessResult:
     """Build a homeomorphism witness for closed surfaces.
 
@@ -319,6 +323,7 @@ def build_3d_homeomorphism_witness(
     cup_product_signature_1: Optional[Dict] = None,
     cup_product_signature_2: Optional[Dict] = None,
     recognition_certificate: Optional[Union[ThreeManifoldRecognitionCertificate, Dict]] = None,
+    backend: str = "auto",
 ) -> HomeomorphismWitnessResult:
     """Build a homeomorphism witness for 3D manifolds.
 
@@ -335,6 +340,7 @@ def build_3d_homeomorphism_witness(
         cup_product_signature_1: Optional cup products for M1.
         cup_product_signature_2: Optional cup products for M2.
         recognition_certificate: Optional 3D recognition certificate.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
@@ -352,6 +358,7 @@ def build_3d_homeomorphism_witness(
         cup_product_signature_1=cup_product_signature_1,
         cup_product_signature_2=cup_product_signature_2,
         recognition_certificate=recognition_certificate,
+        backend=backend,
     )
     extra = {
         "pi1_1": pi1_1,
@@ -381,6 +388,7 @@ def build_4d_homeomorphism_witness(
     *,
     simply_connected: Optional[bool] = None,
     definite_lattice_isometry_certificate: Optional[Union[DefiniteLatticeIsometryCertificate, Dict]] = None,
+    backend: str = "auto",
 ) -> HomeomorphismWitnessResult:
     """Build a homeomorphism witness for 4D manifolds.
 
@@ -391,6 +399,7 @@ def build_4d_homeomorphism_witness(
         ks2: Optional Kirby-Siebenmann invariant for M2.
         simply_connected: Whether the manifolds are simply connected.
         definite_lattice_isometry_certificate: Optional isometry certificate for definite forms.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
@@ -402,6 +411,7 @@ def build_4d_homeomorphism_witness(
         ks2=ks2,
         simply_connected=simply_connected,
         definite_lattice_isometry_certificate=definite_lattice_isometry_certificate,
+        backend=backend,
     )
     if result.status != "success" or result.is_homeomorphic is not True:
         mapped_status: Literal["inconclusive", "surgery_required"] = (
@@ -509,6 +519,7 @@ def build_high_dim_homeomorphism_witness(
     homotopy_witness_hook: Optional[Union[HomotopyEquivalenceWitnessHook, Dict]] = None,
     homotopy_completion_certificate: Optional[Union[HomotopyCompletionCertificate, Dict]] = None,
     product_assembly_certificate: Optional[Union[ProductAssemblyCertificate, Dict]] = None,
+    backend: str = "auto",
 ) -> HomeomorphismWitnessResult:
     """Build a homeomorphism witness for high-dimensional manifolds (n >= 5).
 
@@ -562,6 +573,7 @@ def build_high_dim_homeomorphism_witness(
         homotopy_witness_hook=homotopy_witness_hook,
         homotopy_completion_certificate=homotopy_completion_certificate,
         product_assembly_certificate=product_assembly_certificate,
+        backend=backend,
     )
     if result.status != "success" or result.is_homeomorphic is not True:
         mapped_status: Literal["inconclusive", "surgery_required"] = (
@@ -682,6 +694,7 @@ def build_homeomorphism_witness(
     recognition_certificate: Optional[Union[ThreeManifoldRecognitionCertificate, Dict]] = None,
     product_assembly_certificate: Optional[Union[ProductAssemblyCertificate, Dict]] = None,
     allow_approx: bool = False,
+    backend: str = "auto",
 ) -> HomeomorphismWitnessResult:
     """Dispatch to the appropriate witness builder based on the supplied data.
 
@@ -717,6 +730,7 @@ def build_homeomorphism_witness(
         recognition_certificate: 3D recognition certificate.
         product_assembly_certificate: Product assembly certificate (high-D).
         allow_approx: Whether to allow approximate analysis.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         HomeomorphismWitnessResult: A HomeomorphismWitnessResult instance.
@@ -737,6 +751,7 @@ def build_homeomorphism_witness(
             ks2=ks2,
             simply_connected=simply_connected,
             definite_lattice_isometry_certificate=definite_lattice_isometry_certificate,
+            backend=backend,
         )
 
     if dim is None:
@@ -762,6 +777,7 @@ def build_homeomorphism_witness(
             c1,
             c2,
             allow_approx=allow_approx,
+            backend=backend,
         )
 
     if dim == 2:
@@ -775,6 +791,7 @@ def build_homeomorphism_witness(
             cohomology_ring_signature_2=cohomology_ring_signature_2,
             cup_product_signature_1=cup_product_signature_1,
             cup_product_signature_2=cup_product_signature_2,
+            backend=backend,
         )
 
     if dim == 3:
@@ -791,6 +808,7 @@ def build_homeomorphism_witness(
             cup_product_signature_1=cup_product_signature_1,
             cup_product_signature_2=cup_product_signature_2,
             recognition_certificate=recognition_certificate,
+            backend=backend,
         )
 
     if dim >= 5:
@@ -817,6 +835,7 @@ def build_homeomorphism_witness(
             homotopy_witness_hook=homotopy_witness_hook,
             homotopy_completion_certificate=homotopy_completion_certificate,
             product_assembly_certificate=product_assembly_certificate,
+            backend=backend,
         )
 
     return HomeomorphismWitnessResult(

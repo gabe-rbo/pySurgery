@@ -72,11 +72,14 @@ def _descriptor_family(descriptor: str) -> str:
     return "generic"
 
 
-def build_pi1_evidence(pi1: FundamentalGroup | None) -> Pi1Evidence | None:
+def build_pi1_evidence(
+    pi1: FundamentalGroup | None, backend: str = "auto"
+) -> Pi1Evidence | None:
     """Build pi1 evidence payload for readiness diagnostics.
 
     Args:
         pi1 (FundamentalGroup | None): The fundamental group to analyze.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         Pi1Evidence | None: The evidence payload, or None if pi1 is None.
@@ -112,18 +115,19 @@ def build_group_ring_context(descriptor: str | None) -> GroupRingContext | None:
 
 
 def evaluate_phase2_readiness(
-    pi1: FundamentalGroup | None, descriptor: str | None
+    pi1: FundamentalGroup | None, descriptor: str | None, backend: str = "auto"
 ) -> Phase2Readiness:
     """Evaluate whether inputs satisfy current phase-2 group-ring prerequisites.
 
     Args:
         pi1 (FundamentalGroup | None): The fundamental group.
         descriptor (str | None): The group descriptor string.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         Phase2Readiness: The readiness evaluation result.
     """
-    pi1_evidence = build_pi1_evidence(pi1)
+    pi1_evidence = build_pi1_evidence(pi1, backend=backend)
     context = build_group_ring_context(descriptor)
 
     gaps: list[str] = []

@@ -1,4 +1,3 @@
-import pytest
 from hypothesis import given, settings
 import numpy as np
 from pysurgery.core.complexes import SimplicialComplex, CWComplex
@@ -6,7 +5,6 @@ from pysurgery.core.fundamental_group import extract_pi_1
 from pysurgery.bridge.julia_bridge import julia_engine
 from strategies import simplicial_complexes_raw, point_clouds
 
-@pytest.mark.skipif(not julia_engine.available, reason="Julia engine not available")
 @settings(max_examples=50, deadline=None)
 @given(simplicial_complexes_raw(max_vertices=12))
 def test_homology_parity_python_vs_julia(simplices):
@@ -29,7 +27,6 @@ def test_homology_parity_python_vs_julia(simplices):
         assert rank_py == rank_jl
         assert torsion_py == torsion_jl
 
-@pytest.mark.skipif(not julia_engine.available, reason="Julia engine not available")
 @settings(max_examples=50, deadline=None)
 @given(simplicial_complexes_raw(max_vertices=10))
 def test_pi1_parity_python_vs_julia(simplices):
@@ -53,7 +50,6 @@ def test_pi1_parity_python_vs_julia(simplices):
     assert len(res_py.generators) == len(res_jl.generators)
     assert len(res_py.relations) == len(res_jl.relations)
 
-@pytest.mark.skipif(not julia_engine.available, reason="Julia engine not available")
 @settings(max_examples=50, deadline=None)
 @given(point_clouds(min_pts=6, max_pts=15, dim=3))
 def test_alpha_complex_parity_python_vs_julia(points):

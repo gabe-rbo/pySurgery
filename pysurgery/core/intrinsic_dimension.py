@@ -584,6 +584,7 @@ def estimate_intrinsic_dimension(
     bootstrap_samples: int = 200,
     confidence: float = 0.95,
     random_state: Optional[int] = 0,
+    backend: str = "auto",
 ) -> IntrinsicDimensionResult:
     """Estimate intrinsic dimension using a small ensemble of estimators.
 
@@ -598,6 +599,7 @@ def estimate_intrinsic_dimension(
         bootstrap_samples: Number of bootstrap samples for confidence interval.
         confidence: Confidence level for the interval.
         random_state: Seed for bootstrap sampling.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         An aggregated IntrinsicDimensionResult.

@@ -8,6 +8,10 @@ from .core.exceptions import DimensionError
 class AlgebraicPoincareComplex(BaseModel):
     """Representation of an Algebraic Poincare complex (C_*, psi).
 
+    References:
+        Ranicki, A. (1980). Exact sequences in the algebraic theory of surgery. 
+        Princeton University Press.
+
     Attributes:
         chain_complex: The underlying chain complex C_*.
         fundamental_class: The fundamental class [X] in H_n(C).

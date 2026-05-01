@@ -120,6 +120,10 @@ class WhiteheadGroup(BaseModel):
 
     Used as the obstruction to the s-Cobordism theorem.
 
+    References:
+        Milnor, J. W. (1966). Whitehead torsion. 
+        Bulletin of the American Mathematical Society, 72(3), 358-426.
+
     Attributes:
         rank (int): The free rank of the Whitehead group.
         description (str): A human-readable description of the group.
@@ -141,6 +145,13 @@ class WhiteheadGroup(BaseModel):
 
 def compute_whitehead_group(pi1: FundamentalGroup, backend: str = "auto") -> WhiteheadGroup:
     """Computes or approximates the Whitehead group for the given fundamental group.
+
+    References:
+        Bass, H., Heller, A., & Swan, R. G. (1964). The Whitehead group of a polynomial extension. 
+        Publications Mathématiques de l'IHÉS, 22, 61-79.
+        
+        Farrell, F. T., & Jones, L. E. (1993). Isomorphism conjectures in algebraic K-theory. 
+        Journal of the American Mathematical Society, 6(2), 249-297.
 
     Args:
         pi1 (FundamentalGroup): The fundamental group.

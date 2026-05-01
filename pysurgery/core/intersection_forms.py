@@ -64,6 +64,12 @@ class IntersectionForm(BaseModel):
 
         Uses exact rational arithmetic via Sylvester's Law of Inertia to ensure correctness.
 
+        References:
+            Sylvester, J. J. (1852). A demonstration of the theorem that every homogeneous 
+            quadratic polynomial is reducible by real orthogonal substitutions to the 
+            form of a sum of positive and negative squares. 
+            Philosophical Magazine, 4(4), 138-142.
+
         Returns:
             int: The signature of the bilinear form.
         """
@@ -173,6 +179,13 @@ class IntersectionForm(BaseModel):
         """Perform algebraic surgery on the manifold by surgering out the isotropic class x.
 
         This corresponds to finding a class y with Q(x, y) = 1, and restricting the form to {x, y}^perp.
+
+        References:
+            Wall, C. T. (1970). Surgery on compact manifolds. 
+            Academic Press.
+            
+            Ranicki, A. (1980). Exact sequences in the algebraic theory of surgery. 
+            Princeton University Press.
 
         Args:
             x (np.ndarray): The isotropic class to surger out.

@@ -102,6 +102,10 @@ class StructureSet(BaseModel):
     This mathematically models the Surgery Exact Sequence:
     ... -> L_{n+1}(pi_1) -> S_TOP(M) -> [M, G/TOP] -> L_n(pi_1)
 
+    References:
+        Wall, C. T. (1970). Surgery on compact manifolds. 
+        Academic Press.
+
     It determines the exact number of distinct manifolds that are
     homotopy equivalent to M but NOT homeomorphic to M.
     """
@@ -118,6 +122,10 @@ class StructureSet(BaseModel):
     def compute_normal_invariants(self, chain: ChainComplex) -> str:
         """
         Computes the rank of the set of Normal Invariants [M, G/TOP] via Sullivan's characteristic variety formula.
+
+        References:
+            Sullivan, D. (1966). Triangulating homotopy equivalences [Doctoral dissertation, Princeton University].
+
         For a simply connected manifold:
         [M, G/TOP] is isomorphic to Sum_{i>=1} H^{4i}(M; Z) + Sum_{i>=1} H^{4i-2}(M; Z_2)
         modulo some 2-torsion extensions. We compute the free rank and Z_2 rank.
@@ -125,7 +133,7 @@ class StructureSet(BaseModel):
         return self.compute_normal_invariants_result(chain).to_report()
 
     def compute_normal_invariants_result(
-        self, chain: ChainComplex
+        self, chain: ChainComplex, backend: str = "auto"
     ) -> NormalInvariantsResult:
         n = self.dimension
         rank_Z = 0
@@ -133,11 +141,11 @@ class StructureSet(BaseModel):
 
         for k in range(1, n + 1):
             if k % 4 == 0:
-                r, _ = chain.cohomology(k)
+                r, _ = chain.cohomology(k, backend=backend)
                 rank_Z += r
             elif k % 4 == 2:
-                r_k, t_k = chain.homology(k)
-                _, t_km1 = chain.homology(k - 1)
+                r_k, t_k = chain.homology(k, backend=backend)
+                _, t_km1 = chain.homology(k - 1, backend=backend)
                 z2_hom = sum(1 for t in t_k if t % 2 == 0)
                 z2_ext = sum(1 for t in t_km1 if t % 2 == 0)
                 rank_Z2 += r_k + z2_hom + z2_ext
@@ -162,6 +170,7 @@ class StructureSet(BaseModel):
         l_n_plus_1_obstruction: Optional[ObstructionResult] = None,
         l_n_state: Optional[LObstructionState] = None,
         l_n_plus_1_state: Optional[LObstructionState] = None,
+        backend: str = "auto",
     ) -> SurgeryExactSequenceResult:
         n = self.dimension
 
@@ -197,14 +206,14 @@ class StructureSet(BaseModel):
                 try:
                     resolved_l_n = WallGroupL(
                         dimension=n, pi=fg
-                    ).compute_obstruction_result()
+                    ).compute_obstruction_result(backend=backend)
                 except Exception:
                     resolved_l_n = None
             if resolved_l_n_plus_1 is None:
                 try:
                     resolved_l_n_plus_1 = WallGroupL(
                         dimension=n + 1, pi=fg
-                    ).compute_obstruction_result()
+                    ).compute_obstruction_result(backend=backend)
                 except Exception:
                     resolved_l_n_plus_1 = None
 

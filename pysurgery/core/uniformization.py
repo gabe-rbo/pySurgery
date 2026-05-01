@@ -30,6 +30,7 @@ import numpy as np
 from scipy.sparse import csr_matrix
 
 from .complexes import SimplicialComplex
+from ..bridge.julia_bridge import julia_engine
 
 _TWO_PI = 2.0 * math.pi
 
@@ -306,12 +307,14 @@ class SurfaceMesh:
         self,
         u: Optional[np.ndarray] = None,
         method: str = "ricci",
+        backend: str = "auto",
     ) -> np.ndarray:
         """Compute the Gaussian curvature at each vertex.
 
         Args:
             u: Optional log-conformal factors.
             method: Conformal scaling method.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             (n_vertices,) array of vertex curvatures.
@@ -1061,6 +1064,7 @@ def vertex_gaussian_curvature(
     method: str = "ricci",
     coordinates: Optional[np.ndarray] = None,
     validate: bool = True,
+    backend: str = "auto",
 ) -> np.ndarray:
     """Functional wrapper for vertex Gaussian curvature.
 
@@ -1070,12 +1074,13 @@ def vertex_gaussian_curvature(
         method: Conformal scaling method.
         coordinates: Optional coordinates.
         validate: Whether to validate.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         (n_vertices,) array of curvatures.
     """
     mesh = _coerce_surface_mesh(surface, coordinates=coordinates, validate=validate)
-    return mesh.vertex_gaussian_curvature(u=u, method=method)
+    return mesh.vertex_gaussian_curvature(u=u, method=method, backend=backend)
 
 
 def cotangent_laplacian(
@@ -1085,6 +1090,7 @@ def cotangent_laplacian(
     method: str = "ricci",
     coordinates: Optional[np.ndarray] = None,
     validate: bool = True,
+    backend: str = "auto",
 ) -> csr_matrix:
     """Functional wrapper for the cotangent Laplacian.
 
@@ -1094,6 +1100,7 @@ def cotangent_laplacian(
         method: Conformal scaling method.
         coordinates: Optional coordinates.
         validate: Whether to validate.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         Sparse Laplacian matrix.
@@ -1107,6 +1114,7 @@ def surface_target_curvature(
     *,
     coordinates: Optional[np.ndarray] = None,
     validate: bool = True,
+    backend: str = "auto",
 ) -> np.ndarray:
     """Functional wrapper for target curvature distribution.
 
@@ -1114,9 +1122,14 @@ def surface_target_curvature(
         surface: Input surface.
         coordinates: Optional coordinates.
         validate: Whether to validate.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         (n_vertices,) array of target curvatures.
     """
+    backend_norm = str(backend).lower().strip()
+    if backend_norm == "julia" and not julia_engine.available:
+        julia_engine.require_julia()
+
     mesh = _coerce_surface_mesh(surface, coordinates=coordinates, validate=validate)
     return _surface_target_curvature(mesh, None)

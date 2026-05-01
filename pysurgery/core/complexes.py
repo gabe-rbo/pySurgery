@@ -1721,6 +1721,7 @@ class SimplicialComplex(BaseModel):
         epsilon: float,
         max_dimension: int,
         coefficient_ring: str = "Z",
+        backend: str = "auto",
     ) -> "SimplicialComplex":
         """Generate a Vietoris-Rips complex from a point cloud.
 
@@ -1874,6 +1875,7 @@ class SimplicialComplex(BaseModel):
         max_dimension: int = 2,
         *,
         coefficient_ring: str = "Z",
+        backend: str = "auto",
     ) -> "SimplicialComplex":
         """Construct a Continuous k-Nearest Neighbors (CkNN) complex.
 
@@ -2112,6 +2114,7 @@ class SimplicialComplex(BaseModel):
         cls,
         points: np.ndarray,
         coefficient_ring: str = "Z",
+        backend: str = "auto",
     ) -> "SimplicialComplex":
         """Reconstruct a surface from a point cloud using the Crust algorithm (Amenta et al., 1998).
 
@@ -2212,6 +2215,14 @@ class SimplicialComplex(BaseModel):
         if max_dimension > 1:
             return sc.expand(max_dimension)
         return sc
+
+    @property
+    def simplices(self) -> List[Tuple[int, ...]]:
+        """Return all simplices in the complex as a flat list."""
+        all_s = []
+        for d in self.dimensions:
+            all_s.extend(self.n_simplices(d))
+        return all_s
 
     @property
     def simplices_field(self) -> Dict[int, List[Tuple[int, ...]]]:
@@ -2786,7 +2797,7 @@ class SimplicialComplex(BaseModel):
         """
         return CWComplex.from_simplicial_complex(self)
 
-    def expand(self, max_dim: int | None = None) -> "SimplicialComplex":
+    def expand(self, max_dim: int | None = None, backend: str = "auto") -> "SimplicialComplex":
         """Expands the simplicial complex into a Flag Complex (Clique Complex).
         
         This adds all cliques of size up to max_dim + 1 as simplices.
@@ -2888,7 +2899,7 @@ class SimplicialComplex(BaseModel):
             close_under_faces=True
         )
 
-    def simplify(self) -> tuple["SimplicialComplex", dict[tuple, list[tuple]]]:
+    def simplify(self, backend: str = "auto") -> tuple["SimplicialComplex", dict[tuple, list[tuple]]]:
         """Simplify the simplicial complex into a smaller homotopy equivalent one.
         
         This method performs a rigorous topological reduction using iterative edge 
@@ -3051,6 +3062,7 @@ class SimplicialComplex(BaseModel):
         self,
         max_loops: int = 1,
         min_modularity_gain: float = 1e-6,
+        backend: str = "auto",
     ) -> tuple["SimplicialComplex", dict[tuple, list[tuple]]]:
         """Simplify the complex using modularity-based vertex merging (Liu-Xie-Yi 2012).
         
@@ -3296,6 +3308,203 @@ class SimplicialComplex(BaseModel):
             Dict[int, int]: Dictionary mapping dimension to simplex count.
         """
         return {d: len(list(self.n_simplices(d))) for d in self.dimensions}
+
+    def betti_number(self, n: int | None = None, backend: str = "auto") -> int | dict[int, int]:
+        """Return the n-th Betti number of the simplicial complex."""
+        return self.cellular_chain_complex().betti_number(n, backend=backend)
+
+    def betti_numbers(self, backend: str = "auto") -> dict[int, int]:
+        """Return all Betti numbers of the simplicial complex."""
+        return self.cellular_chain_complex().betti_numbers(backend=backend)
+
+    def fundamental_group(self, simplify: bool = True, backend: str = "auto"):
+        """Compute the fundamental group of the simplicial complex."""
+        from .fundamental_group import extract_pi_1
+        return extract_pi_1(self.to_cw_complex(), simplify=simplify, backend=backend)
+
+    def collapse(self) -> "SimplicialComplex":
+        """Perform all possible simplicial collapses to reduce the complex size."""
+        current_simplices = set()
+        for d in self.dimensions:
+            for s in self.n_simplices(d):
+                current_simplices.add(tuple(sorted(s)))
+        
+        any_change = True
+        while any_change:
+            any_change = False
+            from collections import defaultdict
+            coface_count = defaultdict(int)
+            coface_target = {}
+            for s in current_simplices:
+                n = len(s)
+                if n < 2:
+                    continue
+                for i in range(n):
+                    face = s[:i] + s[i+1:]
+                    coface_count[face] += 1
+                    coface_target[face] = s
+            
+            free_faces = [f for f, count in coface_count.items() if count == 1 and f in current_simplices]
+            if free_faces:
+                free_faces.sort(key=len, reverse=True)
+                for f in free_faces:
+                    if f in current_simplices:
+                        tau = coface_target[f]
+                        if tau in current_simplices:
+                            current_simplices.remove(f)
+                            current_simplices.remove(tau)
+                            any_change = True
+                            break
+        
+        return SimplicialComplex.from_simplices(list(current_simplices), coefficient_ring=self.coefficient_ring)
+
+    def discrete_morse_gradient(self, backend: str = "auto") -> dict[tuple[int, ...], tuple[int, ...]]:
+        """Compute a discrete Morse gradient vector field."""
+        from ..bridge.julia_bridge import julia_engine
+        import warnings
+        backend_norm = str(backend).lower().strip()
+        use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
+        if use_julia:
+            try:
+                raw_simplices = [list(s) for d in self.dimensions for s in self.n_simplices(d)]
+                matching_raw = julia_engine.compute_discrete_morse_gradient_jl(raw_simplices)
+                return {tuple(sorted(pair[0])): tuple(sorted(pair[1])) for pair in matching_raw}
+            except Exception as e:
+                if backend_norm == "julia":
+                    raise e
+                warnings.warn(f"Julia Morse gradient failed: {e!r}. Falling back to Python.")
+
+        from collections import defaultdict
+        matching = {}
+        matched = set()
+        all_simplices = []
+        for d in self.dimensions:
+            for s in self.n_simplices(d):
+                all_simplices.append(tuple(sorted(s)))
+        all_simplices.sort(key=len)
+        
+        any_change = True
+        while any_change:
+            any_change = False
+            unmatched = [s for s in all_simplices if s not in matched]
+            if not unmatched:
+                break
+            
+            unmatched_set = set(unmatched)
+            coface_count = defaultdict(int)
+            coface_target = {}
+            for s in unmatched:
+                n = len(s)
+                if n < 2:
+                    continue
+                for i in range(n):
+                    face = s[:i] + s[i+1:]
+                    if face in unmatched_set:
+                        coface_count[face] += 1
+                        coface_target[face] = s
+            
+            free_faces = [f for f, count in coface_count.items() if count == 1]
+            if free_faces:
+                free_faces.sort(key=len, reverse=True)
+                for f in free_faces:
+                    if f not in matched:
+                        tau = coface_target[f]
+                        if tau not in matched:
+                            matching[f] = tau
+                            matched.add(f)
+                            matched.add(tau)
+                            any_change = True
+                if any_change:
+                    continue
+            
+            for s in unmatched:
+                if s not in matched:
+                    matched.add(s)
+                    any_change = True
+                    break
+        return matching
+
+    def morse_complex(self, backend: str = "auto") -> "ChainComplex":
+        """Construct the minimal Morse chain complex."""
+        from collections import defaultdict
+        from scipy.sparse import csr_matrix
+        import numpy as np
+
+        gradient = self.discrete_morse_gradient(backend=backend)
+        all_simplices = sorted([tuple(sorted(s)) for d in self.dimensions for s in self.n_simplices(d)], key=len)
+        matched_sigma = set(gradient.keys())
+        matched_tau = set(gradient.values())
+        critical = [s for s in all_simplices if s not in matched_sigma and s not in matched_tau]
+        
+        critical_by_dim = defaultdict(list)
+        for s in critical:
+            critical_by_dim[len(s) - 1].append(s)
+            
+        morse_boundaries = {}
+        max_dim = max(critical_by_dim.keys()) if critical_by_dim else 0
+        
+        for d in range(1, max_dim + 1):
+            source_crit = critical_by_dim[d]
+            target_crit = critical_by_dim[d-1]
+            if not source_crit or not target_crit:
+                morse_boundaries[d] = csr_matrix((len(target_crit), len(source_crit)), dtype=np.int64)
+                continue
+            
+            matrix = np.zeros((len(target_crit), len(source_crit)), dtype=np.int64)
+            target_to_idx = {s: i for i, s in enumerate(target_crit)}
+            
+            for j, tau_crit in enumerate(source_crit):
+                counts = defaultdict(int)
+                for i in range(len(tau_crit)):
+                    sigma = tau_crit[:i] + tau_crit[i+1:]
+                    sgn = 1 if i % 2 == 0 else -1
+                    counts[sigma] += sgn
+                
+                active = True
+                while active:
+                    active = False
+                    next_counts = defaultdict(int)
+                    for sigma, weight in counts.items():
+                        if weight == 0:
+                            continue
+                        if sigma in target_to_idx:
+                            matrix[target_to_idx[sigma], j] += weight
+                        elif sigma in gradient:
+                            tau_next = gradient[sigma]
+                            sgn_sigma = 0
+                            for i in range(len(tau_next)):
+                                if tau_next[:i] + tau_next[i+1:] == sigma:
+                                    sgn_sigma = 1 if i % 2 == 0 else -1
+                                    break
+                            
+                            w_step = -sgn_sigma
+                            for i in range(len(tau_next)):
+                                s_next = tau_next[:i] + tau_next[i+1:]
+                                if s_next != sigma:
+                                    sgn_s_next = 1 if i % 2 == 0 else -1
+                                    next_counts[s_next] += weight * w_step * sgn_s_next
+                                    active = True
+                    counts = next_counts
+            morse_boundaries[d] = csr_matrix(matrix)
+            
+        cells = {d: len(crit) for d, crit in critical_by_dim.items()}
+        return ChainComplex(
+            dimensions=list(range(max_dim + 1)),
+            boundaries=morse_boundaries,
+            cells=cells,
+            coefficient_ring=self.coefficient_ring
+        )
+
+    def is_homology_isomorphic(self, other: "SimplicialComplex", backend: str = "auto") -> bool:
+        """Check if two simplicial complexes are homology isomorphic."""
+        max_d = max(self.dimension, other.dimension)
+        for d in range(max_d + 1):
+            h1 = self.homology(d, backend=backend)
+            h2 = other.homology(d, backend=backend)
+            if h1 != h2:
+                return False
+        return True
 
     def compute_homology_basis(
         self,

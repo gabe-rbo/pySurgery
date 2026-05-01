@@ -3,6 +3,10 @@
 Algorithmic foundation follows the "Generators and Optimality" chapter in:
 T. K. Dey and Y. Wang, *Computational Topology for Data Analysis*.
 
+References:
+    Dey, T. K., & Wang, Y. (2022). Computational topology for data analysis. 
+    Cambridge University Press.
+
 Implemented pipeline:
 - edge annotations on 2-complexes,
 - shortest-path generated cycle candidates,
@@ -83,6 +87,7 @@ def _infer_num_vertices(simplices: Iterable[Tuple[int, ...]], num_vertices: int)
 def _boundary_mod2_matrix(
     source: list[tuple[int, ...]],
     target: list[tuple[int, ...]],
+    backend: str = "auto",
 ) -> np.ndarray:
     """Builds mod-2 boundary matrix with optional Julia acceleration.
 
@@ -91,6 +96,7 @@ def _boundary_mod2_matrix(
     Args:
         source (list[tuple[int, ...]]): The source simplices (d-simplices).
         target (list[tuple[int, ...]]): The target simplices ((d-1)-simplices).
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         np.ndarray: The mod-2 boundary matrix.
@@ -98,8 +104,12 @@ def _boundary_mod2_matrix(
     if not target or not source:
         return np.zeros((len(target), len(source)), dtype=np.int64)
 
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
     # Prefer Julia acceleration whenever available.
-    if julia_engine.available:
+    if use_julia:
         try:
             payload = julia_engine.compute_boundary_mod2_matrix(source, target)
             return sp.csr_matrix(
@@ -108,6 +118,8 @@ def _boundary_mod2_matrix(
                 dtype=np.int64,
             )
         except Exception as e:
+            if backend_norm == "julia":
+                raise e
             warnings.warn(
                 f"Topological Hint: Julia mod2 boundary assembly failed ({e!r}). "
                 "Falling back to pure Python."
@@ -917,6 +929,7 @@ def greedy_h1_basis(
     simplices: Iterable[Tuple[int, ...]],
     num_vertices: int,
     point_cloud: Optional[np.ndarray] = None,
+    backend: str = "auto",
 ) -> List[Cycle]:
     """Select a greedy independent H1 basis from cycle candidates.
 
@@ -925,10 +938,15 @@ def greedy_h1_basis(
         simplices (Iterable[Tuple[int, ...]]): Input simplices.
         num_vertices (int): Total number of vertices.
         point_cloud (Optional[np.ndarray]): Point cloud coordinates.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         List[Cycle]: The selected basis cycles.
     """
+    backend_norm = str(backend).lower().strip()
+    if backend_norm == "julia" and not julia_engine.available:
+        julia_engine.require_julia()
+
     edges, triangles, vertex_ids = _normalize_edges_triangles(simplices)
     return _greedy_h1_basis_from_normalized(
         cycles,
@@ -1011,6 +1029,7 @@ def compute_optimal_h1_basis_from_simplices(
     max_roots: Optional[int] = None,
     root_stride: int = 1,
     max_cycles: Optional[int] = None,
+    backend: str = "auto",
 ) -> HomologyBasisResult:
     """Compute a data-grounded optimal H1 basis from simplices.
 
@@ -1024,15 +1043,19 @@ def compute_optimal_h1_basis_from_simplices(
         max_roots (Optional[int]): Maximum number of roots for candidates.
         root_stride (int): Stride for roots. Defaults to 1.
         max_cycles (Optional[int]): Maximum number of candidates.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         HomologyBasisResult: The computed optimal H1 basis.
     """
     simplices_list = [tuple(int(x) for x in s) for s in simplices]
     basis: Optional[list[Cycle]] = None
-    used_julia = False
+    
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
 
-    if julia_engine.available:
+    if use_julia:
         try:
             basis_julia = julia_engine.compute_optimal_h1_basis_from_simplices(
                 simplices_list,
@@ -1048,10 +1071,16 @@ def compute_optimal_h1_basis_from_simplices(
             ]
             used_julia = True
         except Exception as exc:
+            if backend_norm == "julia":
+                raise exc
             warnings.warn(
-                f"Julia optimal-H1 engine was available but failed during computation ({exc!r}). "
-                "Falling back to Python/Numba-accelerated greedy algorithm."
+                f"Topological Hint: Julia optimal H1 basis extraction failed ({exc!r}). "
+                "Falling back to Python candidate+greedy pipeline."
             )
+            used_julia = False
+    else:
+        used_julia = False
+
     if basis is None:
         edges, triangles, vertex_ids = _normalize_edges_triangles(simplices_list)
         cycles = _generator_cycles_from_normalized_edges(

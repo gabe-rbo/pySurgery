@@ -68,6 +68,10 @@ def cup_i_product(
 ) -> np.ndarray:
     """Simplicial cup-i product on ordered simplices using exact Steenrod interleaved intervals.
 
+    References:
+        Steenrod, N. E. (1947). Products of cocycles and extensions of mappings. 
+        Annals of Mathematics, 48(2), 290-320.
+
     Args:
         alpha: The p-cochain vector.
         beta: The q-cochain vector.
@@ -236,4 +240,42 @@ def alexander_whitney_cup(
         simplex_to_idx_p,
         simplex_to_idx_q,
         modulus=modulus,
+    )
+
+
+def steenrod_square(
+    alpha: np.ndarray,
+    p: int,
+    k: int,
+    simplices_target: List[Tuple[int, ...]],
+    simplex_to_idx_p: Dict[Tuple[int, ...], int],
+    modulus: int = 2,
+) -> np.ndarray:
+    """Computes the k-th Steenrod square Sq^k(alpha) for a p-cochain alpha.
+
+    Formula: Sq^k(alpha) = alpha cup_{p-k} alpha (mod 2).
+
+    Args:
+        alpha: The p-cochain vector.
+        p: Dimension of alpha.
+        k: The degree of the square.
+        simplices_target: List of (p+k)-simplices.
+        simplex_to_idx_p: Mapping from p-simplex to cochain index.
+        modulus: Arithmetic modulus (must be 2 for Steenrod squares).
+
+    Returns:
+        The resulting (p+k)-cochain evaluated on target simplices.
+    """
+    if k < 0 or k > p:
+        return np.zeros(len(simplices_target), dtype=np.int64)
+    
+    # Sq^k(alpha) lives in H^{p+k}.
+    # cup_i: H^p x H^q -> H^{p+q-i}.
+    # Here q=p, i=p-k. Result dim = p + p - (p - k) = p + k.
+    return cup_i_product(
+        alpha, alpha, p, p, p - k,
+        simplices_target,
+        simplex_to_idx_p,
+        simplex_to_idx_p,
+        modulus=modulus
     )

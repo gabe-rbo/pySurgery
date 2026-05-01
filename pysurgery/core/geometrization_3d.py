@@ -18,10 +18,13 @@ inconclusive or heuristic result rather than overclaiming.
 
 References
 ----------
-- Haken, normal surface theory.
-- Jaco--Rubinstein, crushing and simplification of 3-manifold triangulations.
-- Matveev, algorithmic topology of 3-manifolds.
-- Thurston / Perelman geometrization, for the classification targets.
+- Haken, W. (1961). Theorie der Normalflächen. Acta Mathematica, 105(3-4), 245-375.
+- Jaco, W., & Rubinstein, J. H. (2003). 0-efficient triangulations of 3-manifolds. 
+  Journal of Differential Geometry, 65(1), 61-168.
+- Matveev, S. (2003). Algorithmic topology and classification of 3-manifolds. 
+  Springer Science & Business Media.
+- Thurston, W. P. (1982). Three-dimensional manifolds, Kleinian groups and hyperbolic geometry. 
+  Bulletin of the American Mathematical Society, 6(3), 357-381.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ from scipy.sparse import csr_matrix
 
 from .complexes import ChainComplex, SimplicialComplex
 from .theorem_tags import infer_theorem_tag
-
+from ..bridge.julia_bridge import julia_engine
 
 def _freeze_value(value: object) -> object:
     """Recursively freeze mutable structures into immutable hashes.
@@ -214,18 +217,19 @@ class Triangulated3Manifold:
         return self.simplicial_complex.chain_complex()
 
     def homology(
-        self, n: int | None = None
+        self, n: int | None = None, backend: str = "auto"
     ) -> tuple[int, list[int]] | dict[int, tuple[int, list[int]]]:
         """Return homology in degree ``n`` or all degrees when ``n`` is omitted.
 
         Args:
             n (int | None): The degree of homology. Defaults to None.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             tuple[int, list[int]] | dict[int, tuple[int, list[int]]]: Homology group
                 or dictionary of homology groups.
         """
-        return self.chain_complex().homology(n)
+        return self.simplicial_complex.homology(n, backend=backend)
 
     def dual_graph(self) -> dict[int, set[int]]:
         """Compute the dual graph of the triangulation.
@@ -287,6 +291,9 @@ class Triangulated3Manifold:
 @dataclass
 class NormalSurfaceCandidate:
     """A canonical normal-surface candidate with exact combinatorial bookkeeping.
+
+    References:
+        Haken, W. (1961). Theorie der Normalflächen. Acta Mathematica, 105(3-4), 245-375.
 
     Attributes:
         kind (str): Surface kind (e.g., "sphere", "torus").
@@ -830,13 +837,16 @@ def normal_surface_matching_matrix(manifold: Triangulated3Manifold) -> csr_matri
     return _normal_surface_matching_matrix(manifold)
 
 
-def normal_surface_candidates(manifold: Triangulated3Manifold) -> list[NormalSurfaceCandidate]:
+def normal_surface_candidates(
+    manifold: Triangulated3Manifold, backend: str = "auto"
+) -> list[NormalSurfaceCandidate]:
     """Generate a list of canonical normal-surface candidates.
 
     Includes vertex links, edge links, and surfaces derived from dual-graph cuts.
 
     Args:
         manifold (Triangulated3Manifold): The manifold.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         list[NormalSurfaceCandidate]: List of validated candidates.
@@ -903,6 +913,7 @@ def normal_surface_candidates(manifold: Triangulated3Manifold) -> list[NormalSur
     residuals = _batch_matching_residuals(
         matching_matrix,
         [candidate.coordinates for candidate in candidates],
+        backend=backend,
     )
     validated: list[NormalSurfaceCandidate] = []
     for candidate, residual in zip(candidates, residuals):
@@ -920,12 +931,14 @@ def normal_surface_candidates(manifold: Triangulated3Manifold) -> list[NormalSur
 def _batch_matching_residuals(
     matrix: csr_matrix,
     coordinates: Sequence[np.ndarray],
+    backend: str = "auto",
 ) -> np.ndarray:
     """Compute matching residuals for a batch of coordinate vectors.
 
     Args:
         matrix (csr_matrix): Matching matrix.
         coordinates (Sequence[np.ndarray]): List of coordinate vectors.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         np.ndarray: Vector of residual norms.
@@ -935,17 +948,20 @@ def _batch_matching_residuals(
     if matrix.shape[0] == 0:
         return np.zeros(len(coordinates), dtype=np.float64)
 
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
     coord_matrix = np.column_stack([np.asarray(c, dtype=np.int64).reshape(-1) for c in coordinates])
 
-    if coord_matrix.shape[1] >= _JULIA_RESIDUAL_BATCH_THRESHOLD:
+    if use_julia:
         try:
-            from ..bridge.julia_bridge import julia_engine
-
-            if julia_engine.available:
-                values = julia_engine.compute_normal_surface_residual_norms(matrix, coord_matrix)
-                return np.asarray(values, dtype=np.float64).reshape(-1)
-        except Exception:
-            pass
+            values = julia_engine.compute_normal_surface_residual_norms(matrix, coord_matrix)
+            return np.asarray(values, dtype=np.float64).reshape(-1)
+        except Exception as e:
+            if backend_norm == "julia":
+                raise e
+            import warnings
+            warnings.warn(f"Julia residual batch failed, falling back to Python: {e!r}")
 
     resid = matrix @ coord_matrix
     return np.linalg.norm(np.asarray(resid, dtype=np.float64), axis=0)
@@ -1155,6 +1171,10 @@ def crush_normal_surface(
 ) -> PieceDecomposition:
     """Crush a manifold along a normal surface and decompose into components.
 
+    References:
+        Jaco, W., & Rubinstein, J. H. (2003). 0-efficient triangulations of 3-manifolds. 
+        Journal of Differential Geometry, 65(1), 61-168.
+
     Args:
         manifold (Triangulated3Manifold): The manifold.
         surface (NormalSurfaceCandidate): The normal surface to cut along.
@@ -1362,28 +1382,38 @@ def _decomposition_score(
     return float(score), notes
 
 
-def prime_decomposition(manifold: Triangulated3Manifold) -> PieceDecomposition:
+def prime_decomposition(manifold: Triangulated3Manifold, backend: str = "auto") -> PieceDecomposition:
     """Heuristically compute the prime decomposition of a 3-manifold.
 
     Args:
         manifold (Triangulated3Manifold): The manifold.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         PieceDecomposition: The selected best prime decomposition.
     """
-    return _choose_best_decomposition(manifold, normal_surface_candidates(manifold), kind="prime")
+    return _choose_best_decomposition(
+        manifold, 
+        normal_surface_candidates(manifold, backend=backend), 
+        kind="prime"
+    )
 
 
-def jsj_decomposition(manifold: Triangulated3Manifold) -> PieceDecomposition:
+def jsj_decomposition(manifold: Triangulated3Manifold, backend: str = "auto") -> PieceDecomposition:
     """Heuristically compute the JSJ decomposition of a 3-manifold.
 
     Args:
         manifold (Triangulated3Manifold): The manifold.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         PieceDecomposition: The selected best JSJ decomposition.
     """
-    return _choose_best_decomposition(manifold, normal_surface_candidates(manifold), kind="jsj")
+    return _choose_best_decomposition(
+        manifold, 
+        normal_surface_candidates(manifold, backend=backend), 
+        kind="jsj"
+    )
 
 
 def _homology_sphere_like(manifold: Triangulated3Manifold) -> bool:
@@ -1412,6 +1442,7 @@ def analyze_geometrization(
     embedding_certificate: Optional[object] = None,
     allow_approx: bool = False,
     name: str = "triangulated_3_manifold",
+    backend: str = "auto",
 ) -> GeometrizationResult:
     """Analyze a triangulated 3-manifold using conservative combinatorial heuristics.
 
@@ -1423,16 +1454,17 @@ def analyze_geometrization(
         allow_approx (bool): Whether to allow heuristic/approximate success.
             Defaults to False.
         name (str): Name of the manifold. Defaults to "triangulated_3_manifold".
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         GeometrizationResult: The result of the geometrization analysis.
     """
 
     tri = _coerce_manifold(manifold, name=name)
-    homology = {n: tri.homology(n) for n in range(4)}
-    candidates = normal_surface_candidates(tri)
-    prime = prime_decomposition(tri)
-    jsj = jsj_decomposition(tri)
+    homology = {n: tri.homology(n, backend=backend) for n in range(4)}
+    candidates = normal_surface_candidates(tri, backend=backend)
+    prime = prime_decomposition(tri, backend=backend)
+    jsj = jsj_decomposition(tri, backend=backend)
     theorem = "Geometrization / 3-manifold recognition"
     theorem_tag = infer_theorem_tag(theorem)
 

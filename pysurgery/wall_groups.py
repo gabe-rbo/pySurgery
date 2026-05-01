@@ -396,6 +396,13 @@ class WallGroupL(BaseModel):
     """
     Interface for computing Wall's surgery obstruction groups L_n(pi, w).
     Extends beyond the simply-connected case into finite groups and Z.
+
+    References:
+        Wall, C. T. (1970). Surgery on compact manifolds. 
+        Academic Press.
+        
+        Shaneson, J. L. (1968). Wall's surgery obstruction groups for G x Z. 
+        Annals of Mathematics, 88(1), 1-67.
     """
 
     dimension: int
@@ -822,7 +829,7 @@ class WallGroupL(BaseModel):
         for factor, multiplicity in reduced_factors:
             try:
                 base = WallGroupL(dimension=n, pi=factor).compute_obstruction_result(
-                    form
+                    form, backend=backend
                 )
             except Exception as exc:
                 base = ObstructionResult(

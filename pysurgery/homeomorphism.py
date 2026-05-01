@@ -1149,6 +1149,7 @@ def analyze_homeomorphism_1d_result(
     c1: ChainComplex,
     c2: ChainComplex,
     allow_approx: bool = False,
+    backend: str = "auto",
 ) -> HomeomorphismResult:
     """
     Analyzes the potential for homeomorphism between two 1-dimensional manifolds.
@@ -1219,11 +1220,20 @@ def analyze_homeomorphism_2d_result(
     cohomology_ring_signature_2: dict | None = None,
     cup_product_signature_1: dict | None = None,
     cup_product_signature_2: dict | None = None,
+    backend: str = "auto",
 ) -> HomeomorphismResult:
     """
-    Analyzes the potential for homeomorphism between two 2-dimensional manifolds (surfaces).
+    Analyzes the potential for homeomorphism between two 2D surfaces.
 
     Based on the Classification of Closed Surfaces:
+    Two surfaces are homeomorphic if and only if they have the same:
+    1. Euler characteristic
+    2. Orientability
+
+    References:
+        Radó, T. (1925). Über den Begriff der Riemannschen Fläche. 
+        Acta Litt. Sci. Szeged, 2, 101-121.
+
     Two closed surfaces are homeomorphic if and only if they have:
     1. The same orientability (H_2 = Z vs H_2 = 0).
     2. The same Euler characteristic (or genus).
@@ -1370,6 +1380,7 @@ def analyze_homeomorphism_3d_result(
     cup_product_signature_1: dict | None = None,
     cup_product_signature_2: dict | None = None,
     recognition_certificate: ThreeManifoldRecognitionCertificate | dict | None = None,
+    backend: str = "auto",
 ) -> HomeomorphismResult:
     """
     Analyzes the potential for homeomorphism between two 3-dimensional manifolds.
@@ -1382,8 +1393,8 @@ def analyze_homeomorphism_3d_result(
     # Check basic homology equivalence (exact-only for certifying statements).
     for n in range(4):
         try:
-            r_1, t_1 = c1.homology(n)
-            r_2, t_2 = c2.homology(n)
+            r_1, t_1 = c1.homology(n, backend=backend)
+            r_2, t_2 = c2.homology(n, backend=backend)
         except Exception as e:
             if allow_approx:
                 warnings.warn(
@@ -1586,6 +1597,7 @@ def analyze_homeomorphism_3d(
     cup_product_signature_1: dict | None = None,
     cup_product_signature_2: dict | None = None,
     recognition_certificate: ThreeManifoldRecognitionCertificate | dict | None = None,
+    backend: str = "auto",
 ) -> Tuple[bool | None, str]:
     return analyze_homeomorphism_3d_result(
         c1,
@@ -1598,6 +1610,7 @@ def analyze_homeomorphism_3d(
         cup_product_signature_1=cup_product_signature_1,
         cup_product_signature_2=cup_product_signature_2,
         recognition_certificate=recognition_certificate,
+        backend=backend,
     ).to_legacy_tuple()
 
 
@@ -1625,6 +1638,7 @@ def analyze_homeomorphism_high_dim_result(
     homotopy_witness_hook: HomotopyEquivalenceWitnessHook | dict | None = None,
     homotopy_completion_certificate: HomotopyCompletionCertificate | dict | None = None,
     product_assembly_certificate: ProductAssemblyCertificate | dict | None = None,
+    backend: str = "auto",
 ) -> HomeomorphismResult:
     """
     Analyzes homeomorphism for high-dimensional manifolds (n >= 5) using the s-Cobordism Theorem
@@ -2473,6 +2487,7 @@ def analyze_homeomorphism_high_dim(
     homotopy_witness_hook: HomotopyEquivalenceWitnessHook | dict | None = None,
     homotopy_completion_certificate: HomotopyCompletionCertificate | dict | None = None,
     product_assembly_certificate: ProductAssemblyCertificate | dict | None = None,
+    backend: str = "auto",
 ) -> Tuple[bool | None, str]:
     return analyze_homeomorphism_high_dim_result(
         c1,
@@ -2497,6 +2512,7 @@ def analyze_homeomorphism_high_dim(
         homotopy_witness_hook=homotopy_witness_hook,
         homotopy_completion_certificate=homotopy_completion_certificate,
         product_assembly_certificate=product_assembly_certificate,
+        backend=backend,
     ).to_legacy_tuple()
 
 
@@ -2510,6 +2526,7 @@ def analyze_homeomorphism_4d_result(
     definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate
     | dict
     | None = None,
+    backend: str = "auto",
 ) -> HomeomorphismResult:
     """
     Analyzes the potential for homeomorphism between two simply-connected 4-manifolds.
@@ -2519,10 +2536,13 @@ def analyze_homeomorphism_4d_result(
     1. Their intersection forms are isomorphic over Z.
     2. Their Kirby-Siebenmann invariants match.
 
+    References:
+        Freedman, M. H. (1982). The topology of four-dimensional manifolds. 
+        Journal of Differential Geometry, 17(3), 357-453.
+
     Returns
     -------
-    is_homeomorphic : bool
-    reasoning : str
+    HomeomorphismResult
     """
     if m1.dimension != 4 or m2.dimension != 4:
         raise DimensionError(
@@ -2750,6 +2770,7 @@ def analyze_homeomorphism_4d(
     definite_lattice_isometry_certificate: DefiniteLatticeIsometryCertificate
     | dict
     | None = None,
+    backend: str = "auto",
 ) -> Tuple[bool | None, str]:
     return analyze_homeomorphism_4d_result(
         m1,
@@ -2758,6 +2779,7 @@ def analyze_homeomorphism_4d(
         ks2=ks2,
         simply_connected=simply_connected,
         definite_lattice_isometry_certificate=definite_lattice_isometry_certificate,
+        backend=backend,
     ).to_legacy_tuple()
 
 

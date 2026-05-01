@@ -1734,5 +1734,22 @@ class JuliaBridge:
         except Exception as e:
             raise RuntimeError(f"is_homology_manifold_jl failed: {e!r}")
 
+    def compute_discrete_morse_gradient_jl(self, simplices: list[list[int]]) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
+        """Accelerated Discrete Morse matching in Julia.
+
+        Args:
+            simplices: A list of simplex vertex index lists.
+
+        Returns:
+            A list of pairs ((sigma), (tau)) representing the gradient matching.
+        """
+        self.require_julia()
+        try:
+            res = self.backend.compute_discrete_morse_gradient_jl(simplices)
+            # res is Vector{Vector{Vector{Int64}}} from Julia
+            return [(tuple(sorted(int(x) for x in pair[0])), tuple(sorted(int(x) for x in pair[1]))) for pair in res]
+        except Exception as e:
+            raise RuntimeError(f"compute_discrete_morse_gradient_jl failed: {e!r}")
+
     # Singleton instance
 julia_engine = JuliaBridge()

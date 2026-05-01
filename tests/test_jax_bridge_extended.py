@@ -1,14 +1,11 @@
 import numpy as np
-import pytest
-from pysurgery.integrations.jax_bridge import HAS_JAX, jax_warmup, _approximate_signature, jax_gromov_wasserstein
+from pysurgery.integrations.jax_bridge import jax_warmup, _approximate_signature, jax_gromov_wasserstein
 
-@pytest.mark.skipif(not HAS_JAX, reason="JAX not installed")
 def test_jax_warmup():
     report = jax_warmup()
     assert report["available"] is True
     assert "Warmup complete" in report["status"]
 
-@pytest.mark.skipif(not HAS_JAX, reason="JAX not installed")
 def test_soft_signature():
     # Symmetric matrix with 2 positive, 1 negative eigenvalue
     # e.g. diag(1, 1, -1)
@@ -17,7 +14,6 @@ def test_soft_signature():
     soft_sig = _approximate_signature(matrix, temp=20.0)
     assert np.isclose(soft_sig, 1.0, atol=0.1)
 
-@pytest.mark.skipif(not HAS_JAX, reason="JAX not installed")
 def test_jax_gw():
     # Valid distance matrix (must have zero diagonal)
     # 2 points at distance 1
@@ -38,7 +34,6 @@ def test_jax_gw():
     assert dist_jax < 0.05
     assert np.isclose(float(dist_jax), dist_py, atol=1e-2)
 
-@pytest.mark.skipif(not HAS_JAX, reason="JAX not installed")
 def test_jax_pairwise_distance_consistency():
     points = np.random.normal(size=(50, 3))
     from pysurgery.integrations.jax_bridge import jax_pairwise_distance

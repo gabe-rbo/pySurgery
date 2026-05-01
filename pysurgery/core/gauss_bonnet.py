@@ -6,12 +6,14 @@ from .uniformization import SurfaceMesh
 
 
 def verify_gauss_bonnet_2d(
-    mesh_data: Union[SurfaceMesh, Tuple[np.ndarray, Sequence[Sequence[int]]]]
+    mesh_data: Union[SurfaceMesh, Tuple[np.ndarray, Sequence[Sequence[int]]]],
+    backend: str = "auto",
 ) -> Dict[str, Any]:
     """Verify the Gauss-Bonnet theorem for a 2D surface mesh.
 
     Args:
         mesh_data: Either a SurfaceMesh object or a tuple of (vertices, faces).
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         A dictionary with 'passed', 'euler_characteristic', 'total_curvature', and 'error'.
@@ -23,7 +25,7 @@ def verify_gauss_bonnet_2d(
         mesh = mesh_data
 
     chi = mesh.euler_characteristic
-    v_curvatures = mesh.vertex_gaussian_curvature()
+    v_curvatures = mesh.vertex_gaussian_curvature(backend=backend)
     total_curvature = float(np.sum(v_curvatures))
 
     # sum K_v = 2π χ(M)
@@ -63,7 +65,7 @@ def chern_gauss_bonnet_integral_expected(dimension: int, chi: int) -> float:
 
 
 def verify_chern_gauss_bonnet_4d(
-    chi: int, weyl_integral: float, q_integral: float
+    chi: int, weyl_integral: float, q_integral: float, backend: str = "auto"
 ) -> Dict[str, Any]:
     """Verify the Chern-Gauss-Bonnet theorem for a 4D manifold.
 
@@ -71,11 +73,17 @@ def verify_chern_gauss_bonnet_4d(
         chi: The Euler characteristic.
         weyl_integral: The integral of the Weyl curvature component.
         q_integral: The integral of the Q-curvature component.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         A dictionary with 'passed', 'calculated_chi', and 'error'.
     """
     # chi = 1/(4pi^2) * (1/8 * weyl_integral + q_integral)
+    backend_norm = str(backend).lower().strip()
+    if backend_norm == "julia":
+        from ..bridge.julia_bridge import julia_engine
+        julia_engine.require_julia()
+
     factor = 1.0 / (4.0 * math.pi**2)
     calculated_chi = factor * (0.125 * weyl_integral + q_integral)
     passed = math.isclose(calculated_chi, float(chi), rel_tol=1e-5, abs_tol=1e-8)

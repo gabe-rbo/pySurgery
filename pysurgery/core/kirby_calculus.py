@@ -9,6 +9,10 @@ class KirbyDiagram(BaseModel):
 
     Each component of the link represents the attachment of a 2-handle.
 
+    References:
+        Kirby, R. (1978). A calculus for framed links in S^3. 
+        Inventiones mathematicae, 45(1), 35-56.
+
     Attributes:
         framings: Diagonal of the linking matrix.
         linking_matrix: The symmetric linking numbers Lk(K_i, K_j).
