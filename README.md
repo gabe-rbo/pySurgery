@@ -98,6 +98,45 @@ pySurgery features a flexible backend architecture that allows users to prioriti
 
 ## Installation
 
+pySurgery can be installed via pip:
+
+```bash
+pip install pysurgery
+```
+
+To enable the high-performance Julia backend, ensure Julia is installed and then run:
+
+```bash
+pip install "pysurgery[all]"
+```
+
+## Development Workflow
+
+### 🚀 Local Version Management
+
+To prevent desynchronization between your local machine and the remote repository, pySurgery uses a **local-first versioning workflow**. Instead of GitHub Actions creating "hidden" commits on the server, the versioning logic is handled directly on your machine via a Git hook.
+
+#### How it works:
+1. When you run `git push`, an interactive prompt will appear.
+2. It will display your current version and calculate the next available versions for **Patch**, **Minor**, and **Major** bumps.
+3. If you choose to bump, the hook runs `bump-my-version` locally, creates a "Bump version" commit and tag, and then pushes everything to GitHub in one atomic operation.
+4. The GitHub Action only triggers on the resulting version tag to build and publish the release.
+
+#### Initial Setup:
+After cloning the repository, you must install the local Git hook once:
+
+```bash
+# Make the setup script executable
+chmod +x scripts/setup_hooks.sh
+
+# Run the setup script
+./scripts/setup_hooks.sh
+```
+
+> **Developer Note:** This hook ensures you never have to `git pull` just to sync a version bump created by a remote bot. All mathematical and versioning state remains strictly under your local control.
+
+---
+
 **Requirements:** Python $\ge 3.12$.
 
 ### 1. Python Package
