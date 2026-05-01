@@ -82,6 +82,7 @@ class JuliaBridge:
             from juliacall import Main as jl_main
 
             self.jl = jl_main
+            self._ensure_julia_packages()
             backend_script = os.path.join(
                 os.path.dirname(__file__), "surgery_backend.jl"
             )
@@ -98,6 +99,48 @@ class JuliaBridge:
             self._initialized = True
         finally:
             self._initialized = True
+
+    def _ensure_julia_packages(self) -> None:
+        """Install missing Julia packages in the active juliacall environment.
+
+        This is a CI-safe bootstrap: it only runs automatically when CI is set
+        or when explicitly enabled with ``PYSURGERY_JULIA_AUTO_INSTALL=1``.
+        """
+        if os.getenv("CI", "").strip().lower() not in {"1", "true", "yes"} and os.getenv(
+            "PYSURGERY_JULIA_AUTO_INSTALL", ""
+        ).strip().lower() not in {"1", "true", "yes"}:
+            return
+
+        required_packages = [
+            "Combinatorics",
+            "PrecompileTools",
+            "AbstractAlgebra",
+            "IntegerSmithNormalForm",
+            "Graphs",
+            "SimpleWeightedGraphs",
+            "DelaunayTriangulation",
+        ]
+
+        missing = []
+        for pkg in required_packages:
+            try:
+                is_missing = bool(self.jl.eval(f'Base.find_package("{pkg}") === nothing'))
+            except Exception:
+                is_missing = True
+            if is_missing:
+                missing.append(pkg)
+
+        if not missing:
+            return
+
+        self.jl.eval("import Pkg")
+        pkg_expr = ", ".join(f'\"{pkg}\"' for pkg in missing)
+        self.jl.eval(f"Pkg.add([{pkg_expr}])")
+        try:
+            self.jl.eval("Pkg.precompile()")
+        except Exception:
+            # Precompilation is best-effort; package installation is what matters.
+            pass
 
     def _warm_up_compilers(self) -> None:
         """Best-effort automatic warm-up on first Julia initialization.

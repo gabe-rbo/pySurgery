@@ -11,7 +11,7 @@
 
 </div>
 
-pySurgery is a high-performance Python library for exact computational algebraic topology, computational surgery theory, and geometric analysis. It is designed to compute discrete topological invariants—such as integer homology (including exact torsion), intersection forms, cup products, L-group obstructions, and homeomorphism certificates—at massive scale. The library leverages a tri-language architecture (**Python**, **Julia**, and **JAX/XLA**) to rigorously evaluate complex topological structures, scaling to point clouds exceeding 100,000 points while operating within strict memory bounds.
+pySurgery is a high-performance Python library for exact computational algebraic topology, computational surgery theory, and geometric analysis. It is designed to compute discrete topological invariants—such as integer homology (including exact torsion), intersection forms, cup products, **characteristic classes for vector bundles**, L-group obstructions, and homeomorphism certificates—at massive scale. The library leverages a tri-language architecture (**Python**, **Julia**, and **JAX/XLA**) to rigorously evaluate complex topological structures, scaling to point clouds exceeding 100,000 points while operating within strict memory bounds.
 
 <div align="center">
 
@@ -46,7 +46,7 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 ### 1. Combinatorial Topology & Complex Generation
 * **Discrete Spaces:** Robust native classes for `SimplicialComplex`, `CWComplex`, and `ChainComplex` with lazy-evaluated, cached topological properties (f-vectors, boundaries).
 * **Topological Simplification:** Rigorous `.simplify()` method for homotopy-equivalent reduction via Link Condition edge contractions and high-performance `.quick_mapper()` for modularity-based structural summarization.
-* **Homotopy Equivalence:** Systematic reduction via simplicial **Collapses** (free face removal) and **Discrete Morse Theory** (Forman matching), yielding minimal chain complexes while preserving mathematical integrity.
+* **Homotopy Equivalence:** Systematic reduction via simplicial **Collapses** (free face removal) and **Discrete Morse Theory** (Forman matching), yielding minimal chain complexes while preserving mathematical integrity. Includes rigorous `.is_homology_isomorphic()` checks via SNF.
 * **Massive Point Clouds:** Native construction of memory-efficient **Alpha Complexes** (2D/3D/ND with EMST connectivity heuristics), **Vietoris-Rips** (via sparse clique enumeration), and **Witness Complexes**.
 * **Parameter-Free Reconstruction:** Implementation of the **Crust Algorithm** for adaptive surface and curve reconstruction without distance thresholds.
 * **Homology & Cohomology:** Exact computation of Betti numbers and torsion coefficients over $\mathbb{Z}$, $\mathbb{Q}$, and $\mathbb{Z}/p\mathbb{Z}$. Includes Universal Coefficient Theorem (UCT) decompositions for composite moduli.
@@ -54,9 +54,9 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 
 ### 2. Algebraic Topology & Cohomological Operations
 * **Cup Products:** Full simplicial implementation of the Alexander-Whitney diagonal approximation to evaluate $\alpha \smile \beta$, exposing the ring structure of cohomology.
-* **Characteristic Classes:** Extraction of Stiefel-Whitney classes ($w_i$) and Euler classes ($e$) for manifold tangent bundles and general **Combinatorial Vector Bundles**. Features a local Whitney-Steenrod fast-path for massive manifold meshes.
+* **Characteristic Classes:** Extraction of Stiefel-Whitney classes ($w_i$) and Euler classes ($e$) for manifold tangent bundles and general **Combinatorial Vector Bundles**. Features a local Whitney-Steenrod fast-path for massive manifold meshes and robust transition matrix generation via discrete parallel transport.
 * **Steenrod Squares:** Cohomology operations $Sq^k: H^p(X; \mathbb{Z}_2) \to H^{p+k}(X; \mathbb{Z}_2)$ implemented via optimized cup-i products.
-* **Fundamental Group** ($\pi_1$): Extraction of group presentations via spanning-tree retractions, supporting both raw and optimized (reduced trace) generator modes.
+* **Fundamental Group** ($\pi_1$): Extraction of group presentations via spanning-tree retractions, supporting both raw and optimized (reduced trace) generator modes. Includes **Orientation Character** ($\omega_1: \pi_1 \to \mathbb{Z}_2$) detection.
 * **Whitehead Torsion:** $K$-theoretic heuristics for evaluating Whitehead groups ($Wh(\pi_1)$) and s-cobordism obstructions.
 
 ### 3. 4-Manifold Topology & Intersection Forms
