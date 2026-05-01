@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysurgery"
-version = "1.7.2"
+version = "1.7.3"
 description = "A high-performance Python library for Computational Surgery Theory."
 dependencies = [
     "numpy>=2.4.4",
