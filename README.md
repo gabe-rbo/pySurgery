@@ -117,10 +117,10 @@ pip install "pysurgery[all]"
 To prevent desynchronization between your local machine and the remote repository, pySurgery uses a **local-first versioning workflow**. Instead of GitHub Actions creating "hidden" commits on the server, the versioning logic is handled directly on your machine via a Git hook.
 
 #### How it works:
-1. When you run `git push`, an interactive prompt will appear.
-2. It will display your current version and calculate the next available versions for **Patch**, **Minor**, and **Major** bumps.
-3. If you choose to bump, the hook runs `bump-my-version` locally, creates a "Bump version" commit and tag, and then pushes everything to GitHub in one atomic operation.
-4. The GitHub Action only triggers on the resulting version tag to build and publish the release.
+1. When you run `git commit`, an interactive prompt will appear asking if you want to update the version.
+2. If you choose to bump, it displays the next available versions for **Patch**, **Minor**, and **Major**. The update is then bundled directly into your current commit.
+3. When you run `git push`, a silent hook ensures the correct version tag exists and pushes it automatically.
+4. The GitHub Action only triggers on version tags to build and publish the release.
 
 #### Initial Setup:
 After cloning the repository, you must install the local Git hook once:

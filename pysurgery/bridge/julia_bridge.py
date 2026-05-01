@@ -53,6 +53,13 @@ class JuliaBridge:
     def _initialize(self):
         """Initialize Julia runtime and load backend module lazily.
 
+        This method:
+        1. Sets environment variables (JULIA_NUM_THREADS, signal handling)
+        2. Loads the Julia runtime via juliacall
+        3. Auto-installs missing Julia packages (in CI or when enabled)
+        4. Loads the SurgeryBackend module
+        5. Runs warm-up compilation workloads
+
         Returns:
             None
         """
@@ -82,7 +89,15 @@ class JuliaBridge:
             from juliacall import Main as jl_main
 
             self.jl = jl_main
-            self._ensure_julia_packages()
+            
+            # CRITICAL: Install missing packages BEFORE loading backend module.
+            # This prevents LoadError when surgery_backend.jl tries to 'using Combinatorics' etc.
+            in_ci = os.getenv("CI", "").strip().lower() in {"1", "true", "yes"}
+            if in_ci:
+                self._ensure_julia_packages(verbose=True)
+            else:
+                self._ensure_julia_packages(verbose=False)
+            
             backend_script = os.path.join(
                 os.path.dirname(__file__), "surgery_backend.jl"
             )
@@ -100,47 +115,122 @@ class JuliaBridge:
         finally:
             self._initialized = True
 
-    def _ensure_julia_packages(self) -> None:
+    def _ensure_julia_packages(self, verbose: bool = False) -> None:
         """Install missing Julia packages in the active juliacall environment.
 
-        This is a CI-safe bootstrap: it only runs automatically when CI is set
-        or when explicitly enabled with ``PYSURGERY_JULIA_AUTO_INSTALL=1``.
+        Automatically ensures all required packages are installed whenever:
+        1. Running in CI (CI=true in environment)
+        2. Explicitly enabled with PYSURGERY_JULIA_AUTO_INSTALL=1
+        3. Running for the first time (PYSURGERY_JULIA_SKIP_INSTALL != 1)
+        
+        This prevents LoadError failures when surgery_backend.jl tries to import
+        packages that aren't installed in the Julia environment.
+        
+        Args:
+            verbose: If True, print status messages during installation.
         """
-        if os.getenv("CI", "").strip().lower() not in {"1", "true", "yes"} and os.getenv(
-            "PYSURGERY_JULIA_AUTO_INSTALL", ""
-        ).strip().lower() not in {"1", "true", "yes"}:
+        # Respect explicit disable flag (for testing or locked environments)
+        if os.getenv("PYSURGERY_JULIA_SKIP_INSTALL", "").strip().lower() in {"1", "true", "yes"}:
+            if verbose:
+                print("[pySurgery] Julia package auto-install disabled (PYSURGERY_JULIA_SKIP_INSTALL=1)")
             return
 
+        # Automatic install enabled in CI or when explicitly requested
+        auto_install_ci = os.getenv("CI", "").strip().lower() in {"1", "true", "yes"}
+        auto_install_explicit = os.getenv("PYSURGERY_JULIA_AUTO_INSTALL", "").strip().lower() in {"1", "true", "yes"}
+        
+        if not (auto_install_ci or auto_install_explicit):
+            if verbose:
+                print("[pySurgery] Julia package auto-install disabled (set CI=true or PYSURGERY_JULIA_AUTO_INSTALL=1 to enable)")
+            return
+
+        if verbose:
+            print("[pySurgery] Checking Julia package dependencies...")
+
+        # Core packages required for surgery_backend.jl to load
         required_packages = [
             "Combinatorics",
             "PrecompileTools",
             "AbstractAlgebra",
             "IntegerSmithNormalForm",
+            "Statistics",
+            "Random",
+            "LinearAlgebra",
+            "SparseArrays",
+            "JSON",
+        ]
+        
+        # Optional packages for geometric kernels (don't fail if missing)
+        optional_packages = [
             "Graphs",
             "SimpleWeightedGraphs",
             "DelaunayTriangulation",
         ]
 
-        missing = []
+        # Detect missing packages
+        missing_required = []
+        missing_optional = []
+        
         for pkg in required_packages:
             try:
                 is_missing = bool(self.jl.eval(f'Base.find_package("{pkg}") === nothing'))
+                if is_missing:
+                    missing_required.append(pkg)
             except Exception:
-                is_missing = True
-            if is_missing:
-                missing.append(pkg)
+                # If detection fails, assume missing and try to install
+                missing_required.append(pkg)
+        
+        for pkg in optional_packages:
+            try:
+                is_missing = bool(self.jl.eval(f'Base.find_package("{pkg}") === nothing'))
+                if is_missing:
+                    missing_optional.append(pkg)
+            except Exception:
+                pass  # Silent fail for optional packages
 
-        if not missing:
-            return
+        # Install required packages
+        if missing_required:
+            if verbose:
+                print(f"[pySurgery] Installing missing required packages: {', '.join(missing_required)}")
+            try:
+                self.jl.eval("import Pkg")
+                pkg_expr = ", ".join(f'\"{pkg}\"' for pkg in missing_required)
+                self.jl.eval(f"Pkg.add([{pkg_expr}])")
+                if verbose:
+                    print(f"[pySurgery] Successfully installed required packages")
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to install required Julia packages {missing_required}: {e!r}. "
+                    f"Install manually via: julia -e 'using Pkg; Pkg.add({missing_required})'"
+                )
 
-        self.jl.eval("import Pkg")
-        pkg_expr = ", ".join(f'\"{pkg}\"' for pkg in missing)
-        self.jl.eval(f"Pkg.add([{pkg_expr}])")
-        try:
-            self.jl.eval("Pkg.precompile()")
-        except Exception:
-            # Precompilation is best-effort; package installation is what matters.
-            pass
+        # Install optional packages (best-effort)
+        if missing_optional:
+            if verbose:
+                print(f"[pySurgery] Attempting to install optional packages: {', '.join(missing_optional)}")
+            try:
+                self.jl.eval("import Pkg")
+                pkg_expr = ", ".join(f'\"{pkg}\"' for pkg in missing_optional)
+                self.jl.eval(f"Pkg.add([{pkg_expr}])")
+                if verbose:
+                    print(f"[pySurgery] Successfully installed optional packages")
+            except Exception as e:
+                if verbose:
+                    print(f"[pySurgery] Optional packages failed (non-critical): {e!r}")
+
+        # Precompile (best-effort, improves startup time)
+        if missing_required or missing_optional:
+            try:
+                if verbose:
+                    print("[pySurgery] Precompiling Julia packages (may take a minute)...")
+                self.jl.eval("Pkg.precompile()")
+                if verbose:
+                    print("[pySurgery] Precompilation complete")
+            except Exception:
+                if verbose:
+                    print("[pySurgery] Precompilation skipped or failed (non-critical)")
+        elif verbose:
+            print("[pySurgery] All Julia packages already installed")
 
     def _warm_up_compilers(self) -> None:
         """Best-effort automatic warm-up on first Julia initialization.
