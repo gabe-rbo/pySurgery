@@ -1,4 +1,0 @@
-# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/utils/tutorial_coverage_validator.py
-# hypothesis_version: 6.151.10
-
-[', ', '__main__', 'contract_version', 'docs', 'id', 'ignore', 'items', 'kind', 'notebooks', 'required_snippets', 'target', 'theorem_tag', 'utf-8']

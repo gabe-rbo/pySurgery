@@ -1,4 +1,0 @@
-# file: /home/gabriel/Desktop/SurgeryTheory/pysurgery/core/foundations.py
-# hypothesis_version: 6.151.10
-
-['2026.04-phase10', '2D', '3D', '4D', 'H_1', 'H_2', 'closed surfaces', 'exact', 'n>=5', 'partial', 'pi=1', 'pi_1 witness', 'simply connected', 'unsupported']
