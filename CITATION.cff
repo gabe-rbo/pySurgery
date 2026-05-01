@@ -4,8 +4,8 @@ authors:
   - family-names: "Ribeiro"
     given-names: "Gabriel"
     email: "gabriel.ribeiro@dcc.ufmg.br"
-title: "pysurgery: Computational Surgery Theory in Python"
-version: 1.7.12
+title: "pySurgery: Computational Surgery Theory in Python"
+version: 1.7.13
 date-released: 01-05-2026
 url: "https://github.com/gabe-rbo/pysurgery"
 repository-code: "https://github.com/gabe-rbo/pysurgery"
