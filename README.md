@@ -133,6 +133,8 @@ Pkg.add(["AbstractAlgebra", "PrecompileTools", "Combinatorics", "SparseArrays", 
 ```
 *Optional but recommended for geometric kernels:* `Pkg.add(["Graphs", "SimpleWeightedGraphs", "DelaunayTriangulation"])`.
 
+These manual `Pkg.add(...)` commands remain the recommended setup for local environments. In CI, and at runtime when Julia auto-install is enabled, the bridge can automatically install any missing required Julia packages when needed.
+
 The bridge will automatically detect the Julia environment and distribute SNF and multisignature kernels across available CPU threads.
 
 ---
