@@ -1,0 +1,45 @@
+{
+  "julia": "1.11",
+  "packages": {
+    "Combinatorics": {
+      "uuid": "861a8166-3701-5b0c-9a16-15d98fcdc6aa",
+      "version": "1"
+    },
+    "PrecompileTools": {
+      "uuid": "aea7be01-6a6a-4083-8856-8a6e6704d82a",
+      "version": "1"
+    },
+    "AbstractAlgebra": {
+      "uuid": "c3fe647b-3220-5bb0-a1ea-a7954cac585d",
+      "version": "0.47"
+    },
+    "IntegerSmithNormalForm": {
+      "uuid": "17272adc-a42e-4be8-afd0-5a751f607cdd",
+      "version": "0.1"
+    },
+    "Graphs": {
+      "uuid": "86223c79-3864-5bf0-83f7-82e725a168b6",
+      "version": "1"
+    },
+    "SimpleWeightedGraphs": {
+      "uuid": "47aef6b3-ad0c-573a-a1e2-d07658019622",
+      "version": "1"
+    },
+    "DelaunayTriangulation": {
+      "uuid": "927a84f5-c5f4-47a5-9785-b46e178433df",
+      "version": "1"
+    },
+    "LinearAlgebra": {
+      "uuid": "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+    },
+    "SparseArrays": {
+      "uuid": "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+    },
+    "Statistics": {
+      "uuid": "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+    },
+    "Random": {
+      "uuid": "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+    }
+  }
+}

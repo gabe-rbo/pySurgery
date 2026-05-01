@@ -32,22 +32,6 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install .[test,all]
 
-    - name: Bootstrap Julia dependencies for juliacall
-      run: |
-        python - <<'PY'
-        import os
-        os.environ.setdefault("PYTHON_JULIACALL_HANDLE_SIGNALS", "yes")
-        from juliacall import Main as jl
-
-        jl.eval("import Pkg")
-        jl.eval('Pkg.add(["SparseArrays", "LinearAlgebra", "JSON", "IntegerSmithNormalForm", "AbstractAlgebra", "Statistics", "Combinatorics", "PrecompileTools", "Random", "Graphs", "SimpleWeightedGraphs", "DelaunayTriangulation"])')
-        try:
-            jl.eval("Pkg.precompile()")
-        except Exception:
-            pass
-        jl.eval("using Combinatorics, AbstractAlgebra, IntegerSmithNormalForm, PrecompileTools, Graphs, SimpleWeightedGraphs, DelaunayTriangulation")
-        PY
-
     - name: Test with pytest
       run: |
         pytest tests/
