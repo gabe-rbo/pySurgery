@@ -10,11 +10,32 @@ from ..bridge.julia_bridge import julia_engine
 def euler_totient(n: int) -> int:
     """Compute Euler's totient function φ(n) by prime-factor stripping.
 
+    What is Being Computed?:
+        Computes the number of positive integers up to n that are relatively prime to n.
+        Mathematically, φ(n) = n * Π_{p|n} (1 - 1/p) where p are distinct prime factors.
+
+    Algorithm:
+        1. Initialize result with n.
+        2. Iterate through p starting from 2 up to sqrt(n).
+        3. For each prime factor p, divide out all occurrences and update result -= result // p.
+        4. If the remaining n is greater than 1, it is a prime factor; update result -= result // n.
+
+    Preserved Invariants:
+        - Multiplicative property: φ(mn) = φ(m)φ(n) if gcd(m, n) = 1.
+        - Relates to the order of the unit group (ℤ/nℤ)*.
+
     Args:
-        n (int): The integer to compute the totient for.
+        n: The integer to compute the totient for.
 
     Returns:
         int: The value of φ(n).
+
+    Use When:
+        - Computing the rank of Whitehead groups of cyclic groups.
+        - Number-theoretic calculations involving units in ℤ/nℤ.
+
+    Example:
+        phi_10 = euler_totient(10)  # Returns 4 ({1, 3, 7, 9})
     """
     result = n
     p = 2
@@ -33,11 +54,21 @@ def euler_totient(n: int) -> int:
 def _num_divisors(n: int) -> int:
     """Return the divisor-count function d(n) in O(sqrt(n)).
 
+    What is Being Computed?:
+        The number of positive divisors of an integer n.
+
+    Algorithm:
+        Iterates from 1 to floor(sqrt(n)), checking for divisibility.
+        If i divides n, both i and n/i are counted (if distinct).
+
     Args:
-        n (int): The integer to count divisors for.
+        n: The integer to count divisors for.
 
     Returns:
-        int: The number of divisors of n.
+        int: The number of divisors d(n).
+
+    Use When:
+        - Internal helper for Whitehead group rank formulas of cyclic groups.
     """
     if n <= 0:
         return 0
@@ -54,11 +85,30 @@ def _num_divisors(n: int) -> int:
 def cyclic_whitehead_rank(n: int) -> int:
     """Rank formula for Wh(C_n) (n > 1): floor(n/2) + 1 - d(n).
 
+    What is Being Computed?:
+        The free abelian rank of the Whitehead group Wh(C_n) for a cyclic group of order n.
+
+    Algorithm:
+        Evaluates the closed-form formula: rank = floor(n/2) + 1 - d(n), where d(n) is the 
+        number of positive divisors of n.
+
+    Preserved Invariants:
+        - The rank is a property of the group ring ℤ[C_n] and is invariant under 
+          isomorphisms of C_n.
+
     Args:
-        n (int): The order of the cyclic group.
+        n: The order of the cyclic group.
 
     Returns:
         int: The rank of the Whitehead group Wh(C_n).
+
+    Use When:
+        - Computing obstructions for the s-Cobordism theorem in the presence of 
+          cyclic fundamental groups.
+        - Studying K-theory of cyclic group rings.
+
+    Example:
+        rank_C5 = cyclic_whitehead_rank(5) # Returns 1
     """
     if n <= 1:
         return 0
@@ -68,11 +118,26 @@ def cyclic_whitehead_rank(n: int) -> int:
 def _relation_exponent_matrix(pi1: FundamentalGroup) -> sp.Matrix:
     """Build the integer relator exponent matrix for abelianization.
 
+    What is Being Computed?:
+        The presentation matrix (or relation matrix) of the abelianization of π₁.
+        This is an m x n matrix where rows correspond to relations and columns to 
+        generators. The entry (i, j) is the sum of the exponents of generator j in relation i.
+
+    Algorithm:
+        1. Map each generator to a column index.
+        2. For each relation, iterate through tokens (generators or their inverses).
+        3. Increment/decrement the corresponding column based on the exponent.
+        4. Return a SymPy integer matrix.
+
     Args:
-        pi1 (FundamentalGroup): The fundamental group.
+        pi1: The fundamental group to analyze.
 
     Returns:
-        sp.Matrix: The exponent matrix.
+        sp.Matrix: The m x n integer exponent matrix.
+
+    Use When:
+        - Internal step for computing abelianization (H₁) via Smith Normal Form.
+        - Analyzing relations in a group presentation.
     """
     gens = list(pi1.generators)
     g_to_idx = {g: i for i, g in enumerate(gens)}
@@ -91,14 +156,30 @@ def _relation_exponent_matrix(pi1: FundamentalGroup) -> sp.Matrix:
 
 
 def _abelianization_from_snf(pi1: FundamentalGroup) -> tuple[int, list[int]]:
-    """Exact abelianization G_ab = Z^r ⊕ ⊕ Z_{d_i} from presentation relator exponents.
+    """Exact abelianization G_ab = ℤ^r ⊕ ⊕ ℤ_{d_i} from presentation relator exponents.
+
+    What is Being Computed?:
+        The structure of the abelianization of a finitely presented group, 
+        represented as a free rank and a list of torsion coefficients.
+
+    Algorithm:
+        1. Construct the relator exponent matrix M.
+        2. Compute the Smith Normal Form (SNF) of M over ℤ.
+        3. The non-zero diagonal entries d_i (greater than 1) are the torsion coefficients.
+        4. The free rank is the number of generators minus the number of non-zero diagonal entries.
+
+    Preserved Invariants:
+        - The abelianization H₁(G; ℤ) is an invariant of the group G.
 
     Args:
-        pi1 (FundamentalGroup): The fundamental group.
+        pi1: The fundamental group to abelianize.
 
     Returns:
-        tuple[int, list[int]]: A tuple containing the free rank and a list of
-            torsion coefficients.
+        tuple[int, list[int]]: A tuple (free_rank, torsion_coefficients).
+
+    Use When:
+        - Computing the first homology group H₁ from π₁.
+        - Identifying groups that are definitely not isomorphic due to different abelianizations.
     """
     m = len(pi1.generators)
     if m == 0:
@@ -116,21 +197,37 @@ def _abelianization_from_snf(pi1: FundamentalGroup) -> tuple[int, list[int]]:
 
 
 class WhiteheadGroup(BaseModel):
-    """Representation of the Whitehead group Wh(pi_1) = K_1(Z[pi_1]) / (+- pi_1).
+    """Representation of the Whitehead group Wh(π₁) = K₁(ℤ[π₁]) / (± π₁).
 
-    Used as the obstruction to the s-Cobordism theorem.
+    Overview:
+        The Whitehead group Wh(π₁) is a fundamental invariant in high-dimensional 
+        manifold topology. It serves as the home for the Whitehead torsion, which 
+        is the primary obstruction to the s-Cobordism theorem. If Wh(π₁) = 0, 
+        every h-cobordism with fundamental group π₁ is an s-cobordism (and hence 
+        is trivial/a product).
 
-    References:
-        Milnor, J. W. (1966). Whitehead torsion. 
-        Bulletin of the American Mathematical Society, 72(3), 358-426.
+    Key Concepts:
+        - **Whitehead Torsion**: An element τ(W, M) ∈ Wh(π₁) that vanishes if and 
+          only if the h-cobordism W is a product.
+        - **s-Cobordism Theorem**: Generalizes the h-cobordism theorem to 
+          non-simply connected manifolds.
+        - **Bass-Heller-Swan**: Theorem stating Wh(ℤ) = 0.
+        - **Farrell-Jones Conjecture**: Predicts Wh(G) = 0 for torsion-free groups G.
+
+    Common Workflows:
+        1. **Computation** → Call compute_whitehead_group(pi1)
+        2. **Obstruction Check** → Check if WhiteheadGroup.rank == 0 and if it's computable/exact
+        3. **Assumption Analysis** → Review assumptions (e.g., Farrell-Jones) made during computation
 
     Attributes:
-        rank (int): The free rank of the Whitehead group.
-        description (str): A human-readable description of the group.
-        computable (bool): Whether the group was computable. Defaults to True.
-        exact (bool): Whether the computation was exact. Defaults to True.
-        assumptions (List[str]): List of assumptions made during computation.
-        method (str): The method used for computation.
+        rank (int): The free abelian rank of the Whitehead group.
+        description (str): Human-readable summary of the group structure and implications.
+        computable (bool): Indicates if the algorithm successfully reached a result.
+        exact (bool): True if the result is theoretically exact, False if it relies 
+                      on conjectures or approximations.
+        assumptions (List[str]): List of mathematical conjectures (e.g., Farrell-Jones) 
+                                 invoked during computation.
+        method (str): Identifier for the specific theorem or algorithm used.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -146,19 +243,38 @@ class WhiteheadGroup(BaseModel):
 def compute_whitehead_group(pi1: FundamentalGroup, backend: str = "auto") -> WhiteheadGroup:
     """Computes or approximates the Whitehead group for the given fundamental group.
 
-    References:
-        Bass, H., Heller, A., & Swan, R. G. (1964). The Whitehead group of a polynomial extension. 
-        Publications Mathématiques de l'IHÉS, 22, 61-79.
-        
-        Farrell, F. T., & Jones, L. E. (1993). Isomorphism conjectures in algebraic K-theory. 
-        Journal of the American Mathematical Society, 6(2), 249-297.
+    What is Being Computed?:
+        Determines the structure (specifically the rank) of Wh(π₁) using known 
+        theorems for specific group families (cyclic, free, etc.) and abelianization 
+        heuristics for more complex groups.
+
+    Algorithm:
+        1. Infer the group type (trivial, cyclic, free) using descriptor heuristics.
+        2. If trivial or ℤ, return rank 0 (Bass-Heller-Swan).
+        3. If cyclic ℤ_n, use the analytic rank formula: floor(n/2) + 1 - d(n).
+        4. If free group, return rank 0 (assuming Farrell-Jones).
+        5. For general groups, compute the abelianization and decompose into cyclic factors.
+        6. Approximate the total rank by summing ranks of Wh(C_n) for each torsion factor.
+
+    Preserved Invariants:
+        - Wh(π₁) is an invariant of the group π₁.
+        - Isomorphism of groups π₁ ≅ π₁' implies Wh(π₁) ≅ Wh(π₁').
 
     Args:
-        pi1 (FundamentalGroup): The fundamental group.
-        backend (str): 'auto', 'julia', or 'python'.
+        pi1: The fundamental group (FundamentalGroup object).
+        backend: 'auto', 'julia', or 'python'. Julia is recommended for large presentations.
 
     Returns:
-        WhiteheadGroup: The computed Whitehead group representation.
+        WhiteheadGroup: Object containing the rank, description, and computation metadata.
+
+    Use When:
+        - Deciding if an h-cobordism is an s-cobordism.
+        - Computing the L-groups or other surgery invariants that depend on Wh.
+
+    Example:
+        pi1 = FundamentalGroup(generators=['a'], relations=[]) # Z
+        wh = compute_whitehead_group(pi1)
+        print(wh.rank) # 0
     """
     descriptor = infer_standard_group_descriptor(pi1, backend=backend)
 

@@ -120,6 +120,27 @@ _JULIA_RESIDUAL_BATCH_THRESHOLD = 32
 class Triangulated3Manifold:
     """A finite triangulated 3-manifold encoded by tetrahedra and a simplicial closure.
 
+    Overview:
+        A Triangulated3Manifold represents a 3-dimensional manifold via a 
+        collection of tetrahedra (3-simplices) and their gluing information. 
+        It provides high-level topological tools specific to 3-manifold theory, 
+        including normal surface candidate generation and prime/JSJ 
+        decomposition heuristics.
+
+    Key Concepts:
+        - **Tetrahedra**: The fundamental 3-dimensional building blocks.
+        - **Normal Surfaces**: Surfaces embedded in the manifold that intersect 
+          each tetrahedron in a collection of elementary discs (triangles or quads).
+        - **Prime Decomposition**: Breaking a 3-manifold into pieces that 
+          cannot be further decomposed via connected sums.
+        - **JSJ Decomposition**: A canonical decomposition of irreducible 
+          3-manifolds along incompressible tori.
+
+    Common Workflows:
+        1. **Creation** → `from_tetrahedra()` or `from_simplicial_complex()`.
+        2. **Analysis** → `homology()`, `euler_characteristic()`.
+        3. **Geometrization** → Pass to `analyze_geometrization()` for recognition.
+
     Attributes:
         tetrahedra (tuple[tuple[int, int, int, int], ...]): List of tetrahedra.
         simplicial_complex (SimplicialComplex): The underlying simplicial complex.
@@ -1446,18 +1467,46 @@ def analyze_geometrization(
 ) -> GeometrizationResult:
     """Analyze a triangulated 3-manifold using conservative combinatorial heuristics.
 
+    What is Being Computed?:
+        An automated classification of the 3-manifold's geometry (e.g., spherical, 
+        JSJ-decomposed, hyperbolic candidate) by evaluating homology, 
+        fundamental group cues, and normal surface candidates.
+
+    Algorithm:
+        1. Coerce input into a Triangulated3Manifold.
+        2. Compute homology groups across all degrees (0 to 3).
+        3. Generate and validate canonical normal surface candidates (vertex/edge links).
+        4. Perform heuristic prime and JSJ decompositions using graph-cut crushing.
+        5. Infer geometric status based on homology and detected surfaces.
+        6. Assemble results into a GeometrizationResult.
+
+    Preserved Invariants:
+        - Homology groups — Computed exactly or via Julia backend.
+        - Euler characteristic — Fundamental 3-manifold invariant (usually 0).
+        - Geometric type — Infers the Thurston geometry class if evidence is conclusive.
+
     Args:
-        manifold (Triangulated3Manifold | SimplicialComplex | Sequence[Sequence[int]]):
-            The manifold to analyze.
-        pi1_descriptor (Optional[str]): Known fundamental group descriptor.
-        embedding_certificate (Optional[object]): Supporting embedding certificate.
-        allow_approx (bool): Whether to allow heuristic/approximate success.
-            Defaults to False.
-        name (str): Name of the manifold. Defaults to "triangulated_3_manifold".
-        backend: 'auto', 'julia', or 'python'.
+        manifold: The manifold data (tetrahedra, complex, or object).
+        pi1_descriptor: Known fundamental group info (e.g., "1" for trivial).
+        embedding_certificate: Optional evidence of embedding.
+        allow_approx: If True, allow success status even for heuristic decompositions.
+        name: Name for the manifold.
+        backend: Computation backend ('auto', 'julia', 'python').
 
     Returns:
-        GeometrizationResult: The result of the geometrization analysis.
+        GeometrizationResult: Comprehensive analysis containing classification, 
+                             evidence, and decomposition pieces.
+
+    Use When:
+        - You have a 3D triangulation and want to identify its topological type.
+        - Checking if a manifold is a homology sphere or has an S^3 branch.
+        - Preparing data for a 3-manifold homeomorphism certificate.
+
+    Example:
+        # Analyze a simple sphere triangulation
+        result = analyze_geometrization(tetrahedra_list, pi1_descriptor="1")
+        if result.status == "success":
+            print(f"Manifold classified as: {result.classification}")
     """
 
     tri = _coerce_manifold(manifold, name=name)

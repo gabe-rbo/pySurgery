@@ -7,21 +7,43 @@ HAS_TORCH = importlib.util.find_spec("torch") is not None
 
 
 def pyg_to_cw_complex(data) -> CWComplex:
-    """Converts a PyTorch Geometric (PyG) Graph Data object into a 1-dimensional CW Complex.
+    """Converts a PyTorch Geometric (PyG) Graph Data object into a CW Complex.
 
-    This enables topological surgery analysis on graph data structures, computing
-    homology and identifying fundamental cycles for graph simplification.
+    What is Being Computed?:
+        Translates a graph-structured PyG Data object (optionally with faces) 
+        into a CWComplex representation. This enables the application of 
+        algebraic surgery, homology computation, and persistent cycle analysis 
+        directly on Graph Neural Network (GNN) inputs.
+
+    Algorithm:
+        1. Extract `edge_index` and node counts from the PyG object.
+        2. Symmetrize edges and select a canonical orientation (u < v).
+        3. Assemble the d1 boundary matrix mapping edges to their endpoint vertices.
+        4. If faces are present:
+           a. Map each face to its constituent oriented edges.
+           b. Assemble the d2 boundary matrix.
+           c. Validate the chain complex condition ∂₁ ∘ ∂₂ = 0.
+        5. Initialize and return a CWComplex with these attaching maps.
+
+    Preserved Invariants:
+        - Preserves the connectivity (π₀) and cycle structure (H₁) of the graph.
+        - Preserves higher-order topology if the PyG object includes face definitions.
 
     Args:
-        data: A PyG Data object. Should have an 'edge_index' attribute.
+        data: A PyG `Data` object containing at least an `edge_index` tensor.
 
     Returns:
-        The 1-dimensional CW complex representation.
+        CWComplex: The equivalent cell complex representation.
 
-    Raises:
-        ImportError: If PyTorch is not installed.
-        TypeError: If input lacks an 'edge_index' attribute.
-        ValueError: If 'edge_index' or 'face' attributes are malformed.
+    Use When:
+        - Applying topological denoising to graph datasets.
+        - Computing homology groups of meshes represented as PyG objects.
+        - Performing surgery to simplify graph topology while preserving invariants.
+
+    Example:
+        cw = pyg_to_cw_complex(pyg_data)
+        h1 = cw.homology(1)
+        print(f"Number of fundamental cycles: {h1.rank}")
     """
     if not HAS_TORCH:
         raise ImportError("PyTorch is required. Install via 'pip install torch'.")

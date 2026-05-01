@@ -1,3 +1,17 @@
+"""Validation logic for tutorial documentation coverage.
+
+Overview:
+    This module provides tools to verify that the library's theoretical results 
+    (theorems, lemmas, etc.) are properly documented with functional code examples 
+    in Jupyter notebooks. It cross-references a coverage JSON file against 
+    the actual contents of the examples directory.
+
+Key Concepts:
+    - **Coverage Item**: A mapping between a theorem ID and its notebook location.
+    - **Snippet Verification**: Ensuring specific code patterns exist in the target notebooks.
+    - **Contract Version**: Ensuring the metadata format matches the library version.
+"""
+
 from __future__ import annotations
 
 import json
@@ -11,12 +25,59 @@ REQUIRED_ITEM_KEYS = {"id", "kind", "target", "notebooks", "required_snippets"}
 
 
 def _read_text(path: Path) -> str:
+    """Read and return the content of a text file.
+
+    Algorithm:
+        Reads file content using UTF-8 encoding, ignoring decoding errors.
+
+    Args:
+        path: Path to the file to be read.
+
+    Returns:
+        str: The full text content of the file.
+    """
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
 def validate_tutorial_coverage(
     coverage_path: str | Path, workspace_root: str | Path
 ) -> list[str]:
+    """Validate that the tutorial coverage JSON file correctly maps theorem tags to snippets.
+
+    What is Being Computed?:
+        Validates the integrity and completeness of the tutorial coverage metadata, ensuring that
+        every documented theorem tag corresponds to actual code snippets within the tutorial notebooks.
+
+    Algorithm:
+        1. Load and parse the coverage JSON file.
+        2. Verify `contract_version` against the current library version.
+        3. For each coverage item:
+           a. Validate schema (required keys like 'id', 'kind', 'target', etc.).
+           b. Verify that referenced Jupyter notebooks exist on disk.
+           c. Scan notebook content to ensure all 'required_snippets' are present.
+        4. Cross-reference the identified theorem tags against the global `COVERAGE_MATRIX`
+           to identify any uncovered theoretical results.
+
+    Preserved Invariants:
+        - None (This is a validation utility and does not modify topological data).
+
+    Args:
+        coverage_path: Path to the tutorial_coverage.json file.
+        workspace_root: Path to the root of the repository containing the 'examples' directory.
+
+    Returns:
+        list[str]: A list of descriptive error messages. If empty, validation passed.
+
+    Use When:
+        - Running CI/CD pipelines to ensure documentation does not drift from implementation.
+        - Auditing tutorial coverage after adding new theoretical features or theorem tags.
+        - Verifying that notebook refactoring hasn't broken the documentation links.
+
+    Example:
+        errors = validate_tutorial_coverage("docs/tutorial_coverage.json", ".")
+        if not errors:
+            print("Documentation is synchronized with examples.")
+    """
     coverage_file = Path(coverage_path)
     root = Path(workspace_root)
     errors: list[str] = []
@@ -101,6 +162,22 @@ def validate_tutorial_coverage(
 
 
 def main() -> int:
+    """Execute the tutorial coverage validation suite.
+
+    Overview:
+        Locates the project's tutorial coverage metadata and repository root, then executes
+        the validation logic to ensure all theorem tags are properly documented in notebooks.
+
+    Algorithm:
+        1. Resolve the workspace root relative to this script's location.
+        2. Define the expected path for 'docs/tutorial_coverage.json'.
+        3. Invoke `validate_tutorial_coverage`.
+        4. Print any discovered errors to stdout.
+        5. Return a non-zero exit code if validation fails.
+
+    Returns:
+        int: 0 if validation passes, 1 if any errors or mismatches are found.
+    """
     root = Path(__file__).resolve().parents[2]
     coverage = root / "docs" / "tutorial_coverage.json"
     errors = validate_tutorial_coverage(coverage, root)

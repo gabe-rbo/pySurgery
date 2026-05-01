@@ -1,23 +1,22 @@
 """Intrinsic-dimension estimators for point clouds and latent embeddings.
 
-The estimators in this module are numerical diagnostics rather than exact
-certificates. They are designed to fit pySurgery's exact-first architecture by
-returning explicit status/diagnostic metadata and by isolating approximation in a
-separate layer.
+Overview:
+    This module provides a suite of estimators to determine the intrinsic 
+    dimensionality of a dataset. It bridges the gap between approximate 
+    point-cloud-based diagnostics and exact homology-based manifold 
+    certification. The estimators are designed to fit pySurgery's 
+    exact-first architecture by returning explicit diagnostic metadata.
 
-Implemented estimators
-----------------------
-- Levina--Bickel maximum-likelihood estimator
-- TwoNN estimator
-- Local PCA / tangent-space dimension estimation
-- Bootstrap aggregation / ensemble reporting
+Key Concepts:
+    - **Approximate Estimators**: Statistical methods (MLE, TwoNN) for raw point data.
+    - **Geometric Estimators**: Local PCA for tangent space dimension.
+    - **Exact Certificates**: Homology manifold verification for SimplicialComplexes.
+    - **Ensemble Aggregation**: Combining multiple methods for robust consensus.
 
-References
-----------
-- Levina & Bickel, "Maximum Likelihood Estimation of Intrinsic Dimension".
-- Facco et al., "Estimating the intrinsic dimension of datasets by a minimal
-  neighborhood information".
-- Local PCA / tangent-space dimension estimation from manifold learning literature.
+Common Workflows:
+    1. **Point Cloud Analysis** -> `estimate_intrinsic_dimension()` with 'mle' or 'twonn'.
+    2. **Manifold Verification** -> `exact_intrinsic_dimension()` on a `SimplicialComplex`.
+    3. **Dimension-Aware Surgery** -> Use estimated dimension to parameterize surgery obstructions.
 """
 
 from __future__ import annotations
@@ -37,18 +36,28 @@ _EPS = 1e-12
 class IntrinsicDimensionMethodResult(BaseModel):
     """Result for one intrinsic-dimension estimator.
 
+    Overview:
+        Encapsulates the output of a single intrinsic-dimension estimation method,
+        providing global and local estimates along with diagnostic metadata and 
+        confidence scores.
+
+    Key Concepts:
+        - **Global Dimension**: A single scalar representing the estimated dimension of the entire dataset.
+        - **Local Dimension**: Point-wise estimates revealing variations in manifold dimension.
+        - **Confidence**: Heuristic scoring based on valid point coverage and method stability.
+
     Attributes:
-        method: Name of the estimation method.
-        global_dimension: The estimated global intrinsic dimension.
-        local_dimensions: List of local dimension estimates for each point.
-        neighborhood_size: Size of the neighborhood (k) used for estimation.
-        valid_points: Number of points that yielded a valid estimate.
-        ambient_dim: Dimension of the ambient space.
-        exact: Whether the estimate is theoretically exact.
-        status: Status of the estimation ('success', 'inconclusive', etc.).
-        scale: Characteristic scale of the estimation.
-        confidence: A heuristic confidence score [0, 1].
-        diagnostics: List of diagnostic messages.
+        method (str): Name of the estimation method (e.g., 'twonn', 'levina_bickel_mle').
+        global_dimension (float): The estimated global intrinsic dimension.
+        local_dimensions (list[float]): Local dimension estimates for each point.
+        neighborhood_size (int): Size of the neighborhood (k) used for estimation.
+        valid_points (int): Number of points that yielded a valid estimate.
+        ambient_dim (int): Dimension of the ambient space.
+        exact (bool): Whether the estimate is theoretically exact (e.g., homology manifold).
+        status (str): Status of the estimation ('success', 'inconclusive', etc.).
+        scale (float): Characteristic scale of the estimation.
+        confidence (float): A heuristic confidence score [0, 1].
+        diagnostics (list[str]): List of diagnostic messages.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -69,7 +78,10 @@ class IntrinsicDimensionMethodResult(BaseModel):
         """Check if the result is conclusive and usable for decisions.
 
         Returns:
-            True if status is 'success', there are valid points, and the dimension is finite.
+            bool: True if status is 'success', there are valid points, and the dimension is finite.
+
+        Use When:
+            - You need to programmatically decide if the estimation should be trusted.
         """
         return self.status == "success" and self.valid_points > 0 and np.isfinite(self.global_dimension)
 
@@ -77,20 +89,30 @@ class IntrinsicDimensionMethodResult(BaseModel):
 class IntrinsicDimensionResult(BaseModel):
     """Aggregated intrinsic-dimension estimate for a point cloud.
 
+    Overview:
+        Provides a consolidated view of multiple intrinsic-dimension estimates,
+        typically from an ensemble of different methods. It supports bootstrap
+        confidence intervals and aggregated diagnostic reporting.
+
+    Common Workflows:
+        1. **Estimation** -> `estimate_intrinsic_dimension()` returns this object.
+        2. **Validation** -> Check `.decision_ready()` before using the dimension in downstream tasks.
+        3. **Ensemble Analysis** -> Compare `.method_estimates` to check for consensus.
+
     Attributes:
-        method: Name of the aggregation method (usually 'ensemble').
-        global_dimension: The aggregated global intrinsic dimension.
-        method_estimates: Dictionary mapping method names to their global estimates.
-        method_results: Dictionary mapping method names to their full results.
-        local_dimensions: Combined list of local dimension estimates.
-        n_samples: Total number of points in the dataset.
-        ambient_dim: Dimension of the ambient space.
-        exact: Whether the result is theoretically exact.
-        status: Aggregated status of the estimation.
-        confidence_interval: Optional (low, high) bootstrap confidence interval.
-        confidence: Aggregated confidence score.
-        bootstrap_samples: Number of bootstrap samples used.
-        diagnostics: Combined list of diagnostic messages.
+        method (str): Name of the aggregation method (usually 'ensemble').
+        global_dimension (float): The aggregated global intrinsic dimension.
+        method_estimates (dict[str, float]): Dictionary mapping method names to their global estimates.
+        method_results (dict[str, IntrinsicDimensionMethodResult]): Dictionary mapping method names to their full results.
+        local_dimensions (list[float]): Combined list of local dimension estimates.
+        n_samples (int): Total number of points in the dataset.
+        ambient_dim (int): Dimension of the ambient space.
+        exact (bool): Whether the result is theoretically exact.
+        status (str): Aggregated status of the estimation.
+        confidence_interval (Optional[tuple[float, float]]): (low, high) bootstrap confidence interval.
+        confidence (float): Aggregated confidence score.
+        bootstrap_samples (int): Number of bootstrap samples used.
+        diagnostics (list[str]): Combined list of diagnostic messages.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -113,7 +135,10 @@ class IntrinsicDimensionResult(BaseModel):
         """Check if the aggregated result is conclusive.
 
         Returns:
-            True if status is 'success' and the global dimension is finite.
+            bool: True if status is 'success' and the global dimension is finite.
+
+        Use When:
+            - You need to verify the overall ensemble consensus before proceeding.
         """
         return self.status == "success" and np.isfinite(self.global_dimension)
 
@@ -122,11 +147,15 @@ class IntrinsicDimensionResult(BaseModel):
 class _NeighborhoodCache:
     """Internal cache for nearest-neighbor data.
 
+    Overview:
+        Stores precomputed distances and indices for nearest neighbors to avoid 
+        redundant computations during multiple estimation passes.
+
     Attributes:
-        distances: (n_points, k) array of distances to neighbors.
-        indices: (n_points, k) array of neighbor indices.
-        points: The original point cloud coordinates.
-        ambient_dim: Dimension of the ambient space.
+        distances (np.ndarray): (n_points, k) array of distances to neighbors.
+        indices (Optional[np.ndarray]): (n_points, k) array of neighbor indices.
+        points (Optional[np.ndarray]): The original point cloud coordinates.
+        ambient_dim (int): Dimension of the ambient space.
     """
     distances: np.ndarray
     indices: Optional[np.ndarray]
@@ -140,12 +169,17 @@ def _coerce_point_cloud(
 ) -> np.ndarray:
     """Coerce a point-cloud-like input to a dense float array.
 
+    Algorithm:
+        1. Checks if input is already a numpy array.
+        2. If not, attempts to extract `.coordinates` or uses provided coordinates.
+        3. Validates dimensions and minimum sample size.
+
     Args:
         data: Point cloud data or object with coordinates.
         coordinates: Optional explicit coordinates.
 
     Returns:
-        A dense (n_samples, ambient_dim) float64 array.
+        np.ndarray: A dense (n_samples, ambient_dim) float64 array.
 
     Raises:
         TypeError: If the input type is not supported.
@@ -177,13 +211,21 @@ def _compute_knn_cache(
 ) -> _NeighborhoodCache:
     """Compute nearest-neighbor distances (and indices when available).
 
+    What is Being Computed?:
+        A cache of distances and indices for the k nearest neighbors of each point.
+
+    Algorithm:
+        1. If a distance matrix is provided, it sorts and extracts neighbors.
+        2. Otherwise, it uses a cKDTree for efficient spatial querying.
+        3. Returns a `_NeighborhoodCache` containing the results.
+
     Args:
         points: (n_samples, ambient_dim) point cloud.
         k: Number of nearest neighbors.
         distance_matrix: Optional precomputed (n_samples, n_samples) distance matrix.
 
     Returns:
-        A _NeighborhoodCache instance.
+        _NeighborhoodCache: A cache containing distances and indices.
 
     Raises:
         ValueError: If inputs are inconsistent or invalid.
@@ -244,6 +286,11 @@ def _bootstrap_interval(
 ) -> Optional[tuple[float, float]]:
     """Compute a bootstrap confidence interval for the mean.
 
+    Algorithm:
+        1. Resample the input values with replacement `n_bootstrap` times.
+        2. Compute the mean of each bootstrap sample.
+        3. Extract the quantiles corresponding to the desired confidence level.
+
     Args:
         values: Sequence of numeric values.
         n_bootstrap: Number of bootstrap samples.
@@ -251,7 +298,7 @@ def _bootstrap_interval(
         random_state: Optional seed for the random generator.
 
     Returns:
-        A tuple (low, high) representing the interval, or None if input is empty.
+        Optional[tuple[float, float]]: A tuple (low, high) representing the interval, or None if input is empty.
     """
     vals = np.asarray([v for v in values if np.isfinite(v)], dtype=np.float64)
     if vals.size == 0:
@@ -280,6 +327,11 @@ def _aggregate_method_result(
 ) -> IntrinsicDimensionMethodResult:
     """Aggregate local estimates into a method result.
 
+    Algorithm:
+        1. Filters out non-finite local estimates.
+        2. Computes the median as the global dimension.
+        3. Calculates a heuristic confidence score based on coverage.
+
     Args:
         method: Name of the estimation method.
         local_dimensions: Sequence of local estimates.
@@ -289,7 +341,7 @@ def _aggregate_method_result(
         exact: Whether the method is exact.
 
     Returns:
-        An IntrinsicDimensionMethodResult instance.
+        IntrinsicDimensionMethodResult: An aggregated method result.
     """
     vals = np.asarray([v for v in local_dimensions if np.isfinite(v)], dtype=np.float64)
     if vals.size == 0:
@@ -329,6 +381,20 @@ def levina_bickel_mle(
 ) -> IntrinsicDimensionMethodResult:
     """Estimate intrinsic dimension with the Levina--Bickel MLE.
 
+    What is Being Computed?:
+        The maximum likelihood estimate of the intrinsic dimension based on the 
+        distribution of distances to nearest neighbors, assuming a local Poisson 
+        process in a k-dimensional ball.
+
+    Algorithm:
+        1. Compute distances to the k nearest neighbors for each point.
+        2. Apply the MLE formula based on the ratio of distances to the k-th neighbor.
+        3. Average local estimates to produce a global dimension.
+
+    Preserved Invariants:
+        - Approximates the local Hausdorff dimension.
+        - Sensitive to noise and sampling density; not a strict topological invariant.
+
     Args:
         data: Point cloud data, or an object exposing `.coordinates`.
         k: Number of nearest neighbors to use. Must be at least 2.
@@ -336,7 +402,16 @@ def levina_bickel_mle(
         distance_matrix: Optional precomputed distance matrix.
 
     Returns:
-        The result of the Levina-Bickel estimation.
+        IntrinsicDimensionMethodResult: The result of the Levina-Bickel estimation.
+
+    Use When:
+        - Fast estimation for large point clouds is required.
+        - Data is expected to lie on a single manifold with uniform density.
+        - You need a baseline MLE estimate.
+
+    Example:
+        result = levina_bickel_mle(points, k=10)
+        print(f"ID: {result.global_dimension:.2f}")
 
     Raises:
         ValueError: If k is less than 2.
@@ -372,8 +447,19 @@ def twonn(
 ) -> IntrinsicDimensionMethodResult:
     """Estimate intrinsic dimension using the TwoNN method.
 
-    The global estimate is obtained from the slope of log(1-F(mu)) vs log(mu),
-    where mu = r2 / r1.
+    What is Being Computed?:
+        Intrinsic dimension via the distribution of the ratio of distances to the 
+        first and second nearest neighbors.
+
+    Algorithm:
+        1. Compute distances to the two nearest neighbors (r1, r2) for each point.
+        2. Compute mu = r2 / r1.
+        3. Perform linear regression on the empirical cumulative distribution of mu 
+           to find the slope, which corresponds to the intrinsic dimension.
+
+    Preserved Invariants:
+        - Dimension is invariant to local density variations (scale-invariant).
+        - Robust against non-uniform sampling on the manifold.
 
     Args:
         data: Point cloud data or object with coordinates.
@@ -381,7 +467,16 @@ def twonn(
         distance_matrix: Optional precomputed distance matrix.
 
     Returns:
-        The result of the TwoNN estimation.
+        IntrinsicDimensionMethodResult: The result of the TwoNN estimation.
+
+    Use When:
+        - Data density is highly non-uniform.
+        - You want an estimate robust to varying sampling rates.
+        - Quick estimation with only 2 neighbors is preferred.
+
+    Example:
+        result = twonn(points)
+        print(f"ID: {result.global_dimension:.2f}")
     """
     points = None if distance_matrix is not None else _coerce_point_cloud(data, coordinates=coordinates)
     cache = _compute_knn_cache(points, k=2, distance_matrix=distance_matrix)
@@ -440,6 +535,20 @@ def local_pca_tangent_space_dimension(
 ) -> IntrinsicDimensionMethodResult:
     """Estimate local tangent dimension via PCA on k-neighborhoods.
 
+    What is Being Computed?:
+        Local intrinsic dimension by analyzing the spectrum of the covariance 
+        matrix of local neighborhoods.
+
+    Algorithm:
+        1. For each point, find its k-nearest neighbors.
+        2. Centering the neighborhood and compute the local covariance matrix.
+        3. Perform Eigenvalue decomposition or use SVD (accelerated by JAX if available).
+        4. Count the number of eigenvalues required to reach a cumulative variance threshold.
+
+    Preserved Invariants:
+        - Estimates the dimension of the tangent space at each point.
+        - Captures the dimension of the linear subspace locally approximating the manifold.
+
     Args:
         data: Point cloud data or object with coordinates.
         k: Number of neighbors for local PCA.
@@ -449,7 +558,15 @@ def local_pca_tangent_space_dimension(
         max_dimension: Optional cap on the estimated dimension.
 
     Returns:
-        The result of the local PCA estimation.
+        IntrinsicDimensionMethodResult: The result of the local PCA estimation.
+
+    Use When:
+        - You need a clear geometric interpretation (tangent space dimension).
+        - Analyzing data with noise where a variance threshold is a natural way to separate signal.
+        - JAX is available for high-performance batch PCA.
+
+    Example:
+        result = local_pca_tangent_space_dimension(points, k=15, variance_threshold=0.95)
 
     Raises:
         ValueError: If k is less than 2.
@@ -528,15 +645,35 @@ def exact_intrinsic_dimension(
 ) -> IntrinsicDimensionMethodResult:
     """Calculate the exact intrinsic dimension of a manifold using link homology.
     
-    This method requires the input to be a SimplicialComplex or expose a 
-    compatible interface. It verifies if the complex is a homology manifold 
-    and returns its dimension with 100% certainty (within the homology regime).
+    What is Being Computed?:
+        Determines if a simplicial complex is a homology manifold and, if so, 
+        extracts its exact topological dimension.
+
+    Algorithm:
+        1. Iterate over all vertices (0-simplices).
+        2. For each vertex, compute the homology of its link.
+        3. Verify if the links are homology spheres of the same dimension.
+        4. Return the unique dimension n such that the complex is locally like R^n.
+
+    Preserved Invariants:
+        - **Topological Dimension**: The exact dimension of the manifold.
+        - **Homology Manifold Property**: Verified for all local neighborhoods.
 
     Args:
         data: A SimplicialComplex or object exposing one.
 
     Returns:
-        The result of the exact homology-based calculation.
+        IntrinsicDimensionMethodResult: The result of the exact homology-based calculation.
+
+    Use When:
+        - You have a combinatorial structure (SimplicialComplex) and need a certificate.
+        - Exact dimension is required for subsequent surgery theory obstructions.
+        - You need to verify if the space is actually a manifold.
+
+    Example:
+        result = exact_intrinsic_dimension(sc)
+        if result.status == 'success':
+            print(f"Certified {int(result.global_dimension)}-manifold")
     """
     if not isinstance(data, SimplicialComplex):
         if hasattr(data, "simplicial_complex"):
@@ -588,6 +725,19 @@ def estimate_intrinsic_dimension(
 ) -> IntrinsicDimensionResult:
     """Estimate intrinsic dimension using a small ensemble of estimators.
 
+    What is Being Computed?:
+        An aggregated intrinsic dimension estimate by combining multiple numerical 
+        and (optionally) exact methods.
+
+    Algorithm:
+        1. Run requested estimators (MLE, TwoNN, PCA, Exact).
+        2. Collect local and global estimates.
+        3. Compute an aggregated global dimension (median of methods).
+        4. Perform bootstrap sampling on the local pool to generate confidence intervals.
+
+    Preserved Invariants:
+        - Attempts to converge on the true topological dimension of the underlying manifold.
+
     Args:
         data: Point cloud data or object with coordinates.
         k: Number of neighbors for MLE and PCA methods.
@@ -602,7 +752,16 @@ def estimate_intrinsic_dimension(
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        An aggregated IntrinsicDimensionResult.
+        IntrinsicDimensionResult: An aggregated IntrinsicDimensionResult.
+
+    Use When:
+        - You need a robust, multi-method consensus on the intrinsic dimension.
+        - Confidence intervals are required for statistical significance.
+        - You want to automatically use exact methods if the input is a complex.
+
+    Example:
+        res = estimate_intrinsic_dimension(data, methods=['mle', 'twonn'])
+        print(f"Consensus ID: {res.global_dimension}")
     """
     points = None if distance_matrix is not None else _coerce_point_cloud(data, coordinates=coordinates)
     method_results: dict[str, IntrinsicDimensionMethodResult] = {}

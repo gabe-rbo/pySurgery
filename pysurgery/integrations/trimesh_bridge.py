@@ -15,22 +15,41 @@ except ImportError:
 def trimesh_to_cw_complex(mesh) -> CWComplex:
     """Converts a Trimesh object (3D geometric mesh) into a topological CW Complex.
 
-    This extracts the 0-cells (vertices), 1-cells (edges), and 2-cells (faces)
-    and constructs the exact boundary operators (attaching maps) over Z.
+    What is Being Computed?:
+        Translates a geometric mesh (vertices and faces) into a symbolic CWComplex. 
+        This involves extracting unique edges from polygonal faces and assembling 
+        exact integer boundary operators ∂₁ and ∂₂.
 
-    Uses Julia acceleration for large face meshes, with pure-Python fallback.
+    Algorithm:
+        1. Extract vertices and faces from the `trimesh` object.
+        2. If Julia is available and the mesh is large, delegate boundary 
+           assembly to `julia_engine`.
+        3. Otherwise, use pure-Python assembly:
+           a. Enumerate all unique edges from face cycles.
+           b. Build ∂₁ (Edges → Vertices) with signs -1, 1.
+           c. Build ∂₂ (Faces → Edges) with signs reflecting face orientation.
+        4. Validate the fundamental chain complex condition ∂₁ ∘ ∂₂ = 0.
+
+    Preserved Invariants:
+        - Homotopy type of the simplicial/polygonal complex.
+        - Connectivity (π₀), fundamental group (π₁), and homology (H_k).
+        - Euler characteristic.
 
     Args:
         mesh (trimesh.Trimesh): A loaded Trimesh object.
 
     Returns:
-        CWComplex: The abstract topological representation of the mesh.
+        CWComplex: The abstract topological 2-skeleton of the mesh.
 
-    Raises:
-        ImportError: If 'trimesh' library is not installed.
-        TypeError: If input is not a trimesh.Trimesh object.
-        ValueError: If faces are invalid or missing.
-        DimensionError: If boundary operator d_1 o d_2 != 0.
+    Use When:
+        - Transitioning from 3D geometry/rendering to topological invariant analysis.
+        - Computing the genus of a mesh via H₁.
+        - Preparing a mesh for topological surgery (e.g., handle removal).
+
+    Example:
+        mesh = trimesh.load("torus.obj")
+        cw = trimesh_to_cw_complex(mesh)
+        print(f"Betti numbers: {cw.betti_numbers()}")
     """
     if not HAS_TRIMESH:
         raise ImportError(

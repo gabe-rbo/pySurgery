@@ -6,18 +6,38 @@ from .core.exceptions import DimensionError
 
 
 class AlgebraicPoincareComplex(BaseModel):
-    """Representation of an Algebraic Poincare complex (C_*, psi).
+    """An algebraic representation of a Poincaré complex (C_*, psi).
+
+    Overview:
+        An AlgebraicPoincareComplex represents a chain complex equipped with a chain 
+        homotopy equivalence between its chains and cochains, modeling the duality 
+        properties of a compact manifold without a choice of triangulation. It 
+        encapsulates the data (C_*, psi) where psi represents the higher diagonal 
+        maps involved in Poincaré duality.
+
+    Key Concepts:
+        - **Chain Complex (C_*)**: The underlying sequence of modules and boundaries.
+        - **Fundamental Class ([X])**: A cycle in the top-dimensional homology H_n(C).
+        - **Poincaré Duality**: The isomorphism H^k(X) ≅ H_{n-k}(X) induced by capping with [X].
+        - **Psi (ψ)**: A collection of maps ψ_k: C^k → C_{n-k} that induce the duality isomorphism.
+
+    Common Workflows:
+        1. **Initialization** → Provide ChainComplex, fundamental_class, and psi maps.
+        2. **Duality Analysis** → Use dual_complex() to get the cochain complex.
+        3. **Product Computation** → Use cap_product() to evaluate duality on specific classes.
+
+    Coefficient Ring:
+        Inherited from the underlying ChainComplex (typically 'Z' or 'Q').
+
+    Attributes:
+        chain_complex (ChainComplex): The underlying chain complex C_*.
+        fundamental_class (np.ndarray): The fundamental class [X] in H_n(C).
+        dimension (int): The topological dimension n.
+        psi (Dict[int, np.ndarray]): The higher-order diagonal map components.
 
     References:
         Ranicki, A. (1980). Exact sequences in the algebraic theory of surgery. 
         Princeton University Press.
-
-    Attributes:
-        chain_complex: The underlying chain complex C_*.
-        fundamental_class: The fundamental class [X] in H_n(C).
-        dimension: The dimension of the complex.
-        psi: The higher-order diagonal map components representing the chain homotopy
-            equivalence between C^* and C_{n-*}.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -28,21 +48,41 @@ class AlgebraicPoincareComplex(BaseModel):
     psi: Dict[int, np.ndarray] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
-        """Validate Poincare data after initialization.
+        """Perform post-initialization validation of Poincaré duality data.
+
+        What is Being Computed?:
+            Validates that the fundamental class is a cycle and that all psi matrices 
+            have dimensions consistent with the chain groups.
+
+        Algorithm:
+            1. Flatten and validate fundamental_class dimensions.
+            2. Verify [X] is a cycle: d_n([X]) = 0.
+            3. Check each psi_k matrix for correct domain (C^k) and codomain (C_{n-k}).
 
         Args:
-            __context: Initialization context.
+            __context: Pydantic initialization context.
+
+        Raises:
+            DimensionError: If any consistency check fails.
         """
         self._validate_poincare_data()
 
     def _chain_group_size(self, k: int) -> Optional[int]:
-        """Get the size of the chain group C_k.
+        """Determine the rank/dimension of the k-th chain group C_k.
+
+        What is Being Computed?:
+            Extracts the size of the module C_k from boundaries or explicit cell counts.
+
+        Algorithm:
+            1. Return 0 if k < 0.
+            2. Check self.chain_complex.cells for explicit count.
+            3. Infer from boundaries[k] (columns) or boundaries[k+1] (rows).
 
         Args:
-            k: The degree.
+            k: The dimension degree.
 
         Returns:
-            Optional[int]: The size of C_k, or None if not determinable.
+            Optional[int]: The number of generators in C_k, or None if unknown.
         """
         if k < 0:
             return 0
@@ -57,10 +97,21 @@ class AlgebraicPoincareComplex(BaseModel):
         return None
 
     def _validate_poincare_data(self) -> None:
-        """Internal validation for Poincare complex data.
+        """Internal mathematical consistency check for Poincaré data.
+
+        What is Being Computed?:
+            Verifies cycle condition and matrix compatibility.
+
+        Algorithm:
+            1. Ensure fundamental_class is 1D.
+            2. Check d_n(fund) == 0.
+            3. Verify psi_k dimensions against chain group sizes C_k and C_{n-k}.
+
+        Preserved Invariants:
+            - Cycle condition: ensures [X] defines a valid homology class.
 
         Raises:
-            DimensionError: If data dimensions are inconsistent.
+            DimensionError: If invariants or dimensions are violated.
         """
         fund = np.asarray(self.fundamental_class).flatten()
         if fund.ndim != 1:
@@ -97,10 +148,27 @@ class AlgebraicPoincareComplex(BaseModel):
                 )
 
     def dual_complex(self) -> ChainComplex:
-        """Compute the dual chain complex C^* = Hom(C, Z).
+        """Construct the dual cochain complex C^* = Hom(C, Z).
+
+        What is Being Computed?:
+            Generates a new ChainComplex where boundary operators are the 
+            transposes of the original, representing coboundaries.
+
+        Algorithm:
+            1. Iterate over all boundary matrices in the original complex.
+            2. Transpose each matrix to obtain the coboundary operator.
+            3. Return a new ChainComplex instance with these operators.
+
+        Preserved Invariants:
+            - Duality relationship: (C^*)^* is isomorphic to C.
+            - Cohomology H^k(C) is computed as homology of the dual complex.
 
         Returns:
-            ChainComplex: The dual ChainComplex instance.
+            ChainComplex: The dual complex representing the cochain structure.
+
+        Example:
+            cc_dual = poincare_complex.dual_complex()
+            print(cc_dual.homology(1))  # Computes H^1(X)
         """
         # Transpose the boundary operators to get coboundary operators.
         # Store δ^n at key n+1 so that boundaries[k] means "map going into degree k-1"
@@ -120,23 +188,42 @@ class AlgebraicPoincareComplex(BaseModel):
         k: int,
         simplices: Optional[Dict[int, List[Tuple[int, ...]]]] = None,
     ) -> np.ndarray:
-        r"""Compute the cap product [X] \cap \alpha.
+        r"""Compute the cap product [X] ∩ α.
 
-        If self.psi[k] is available, applies it directly. 
-        Otherwise, if 'simplices' (the simplicial structure) is provided,
-        it evaluates the cap product using the Alexander-Whitney diagonal:
-        (sigma \cap alpha) = alpha(front k-face of sigma) * (back (n-k)-face of sigma).
+        What is Being Computed?:
+            The cap product map - ∩ [X]: H^k(X) → H_{n-k}(X). This is the 
+            fundamental operation of Poincaré duality.
+
+        Algorithm:
+            1. If self.psi[k] is defined, return psi[k] @ cohomology_class (Algebraic path).
+            2. Otherwise, if 'simplices' is provided, evaluate via Alexander-Whitney diagonal (Geometric path):
+               (σ ∩ α) = α(front k-face of σ) * (back (n-k)-face of σ).
+            3. Sum contributions over the fundamental class chain.
+
+        Preserved Invariants:
+            - Poincaré Duality: For a valid Poincaré complex, this map induces an isomorphism on (co)homology.
+            - Naturality: The cap product is natural with respect to maps of Poincaré complexes.
 
         Args:
-            cohomology_class: The cohomology class alpha to cap with.
-            k: The degree of the cohomology class.
-            simplices: Optional simplicial structure for AW diagonal evaluation.
+            cohomology_class: The cohomology class α (as a vector) to cap with.
+            k: The dimension degree of the cohomology class.
+            simplices: Optional simplicial structure (needed if psi is missing).
 
         Returns:
             np.ndarray: The resulting chain in C_{n-k}.
 
+        Use When:
+            - Implementing Poincaré duality isomorphisms.
+            - Computing intersection forms (via cap and cup product relationship).
+            - Analyzing surgery obstructions.
+
+        Example:
+            alpha = np.array([1, 0, 0])  # H^1 generator
+            chain = poincare.cap_product(alpha, k=1)
+            # 'chain' is the dual cycle in C_{n-1}
+
         Raises:
-            DimensionError: If dimensions are inconsistent or required data is missing.
+            DimensionError: If neither psi nor simplicial data is sufficient.
         """
         n = self.dimension
         alpha = np.asarray(cohomology_class)

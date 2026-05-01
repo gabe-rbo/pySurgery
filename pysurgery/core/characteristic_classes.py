@@ -7,8 +7,22 @@ from .complexes import SimplicialComplex
 def extract_stiefel_whitney_tangent(sc: SimplicialComplex, k: int, backend: str = "auto") -> np.ndarray:
     """Compute the k-th Stiefel-Whitney class w^k of the tangent bundle.
 
-    For k=1, uses orientation character propagation on the dual graph.
-    For k=n (top class), uses the Euler characteristic mod 2.
+    What is Being Computed?:
+        Computes the k-th Stiefel-Whitney class w^k(TM) in H^k(M; ℤ₂) for the tangent bundle
+        of a simplicial complex representing a homology manifold.
+
+    Algorithm:
+        1. For k=0: Returns the constant 1 cochain (the unit class).
+        2. For k=1: Checks orientability via top-dimensional homology. If non-orientable,
+           computes a representative cocycle for w₁.
+        3. For k=n (top class): Uses the Poincaré-Hopf theorem relation where the evaluation
+           on the fundamental class is the Euler characteristic mod 2.
+        4. For other k: Returns a zero cochain (placeholder for general SW classes).
+
+    Preserved Invariants:
+        - Stiefel-Whitney classes are homotopy invariants of the tangent bundle.
+        - w₁=0 if and only if the manifold is orientable.
+        - w_n evaluation matches Euler characteristic χ(M) mod 2.
 
     Args:
         sc: The simplicial complex (should be a homology manifold).
@@ -16,7 +30,17 @@ def extract_stiefel_whitney_tangent(sc: SimplicialComplex, k: int, backend: str 
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        A cochain vector (numpy array) representing w^k.
+        np.ndarray: A cochain vector representing w^k in H^k(M; ℤ₂).
+
+    Use When:
+        - Checking orientability (k=1)
+        - Computing obstructions to various bundle structures (e.g., spin structures)
+        - Verifying Poincaré duality relations mod 2
+
+    Example:
+        w1 = extract_stiefel_whitney_tangent(sc, k=1)
+        if np.any(w1 != 0):
+            print("Manifold is non-orientable")
     """
     n = sc.dimension
     if k < 0 or k > n:
@@ -54,16 +78,32 @@ def extract_stiefel_whitney_tangent(sc: SimplicialComplex, k: int, backend: str 
 def extract_euler_class(sc: SimplicialComplex) -> np.ndarray:
     """Compute the Euler class e(TM) for an oriented simplicial manifold.
 
-    The Euler class is the top Stiefel-Whitney class w^n over Z_2,
-    but here we provide the integral evaluation on the fundamental class.
-    
-    Formula: <e(TM), [M]> = chi(M).
+    What is Being Computed?:
+        Computes the evaluation of the Euler class e(TM) on the fundamental class [M].
+        This is equivalent to the Euler characteristic χ(M).
+
+    Algorithm:
+        1. Computes the Euler characteristic of the simplicial complex using its Betti numbers.
+        2. Returns this value as the integral evaluation <e(TM), [M]>.
+
+    Preserved Invariants:
+        - Euler class is a primary obstruction to having a non-vanishing section.
+        - Homotopy invariant: χ(M) is identical for homotopy equivalent spaces.
 
     Args:
         sc: The simplicial complex.
 
     Returns:
-        The Euler class evaluated on the fundamental class (the Euler characteristic).
+        int: The Euler class evaluated on the fundamental class (the Euler characteristic).
+
+    Use When:
+        - Calculating primary obstructions to vector fields
+        - Verifying Gauss-Bonnet type relations
+        - Simple characterization of the manifold's topology
+
+    Example:
+        e = extract_euler_class(torus)
+        print(e)  # 0 for a torus
     """
     return sc.euler_characteristic()
 
@@ -71,21 +111,38 @@ def extract_euler_class(sc: SimplicialComplex) -> np.ndarray:
 def extract_stiefel_whitney_w2(q: IntersectionForm) -> np.ndarray:
     """Evaluates the 2nd Stiefel-Whitney class w_2 in H^2(M; Z_2) from the intersection form.
 
-    By Wu's formula, the total Stiefel-Whitney class corresponds to the
-    Wu class v_2 under the Steenrod Square Sq^i.
-    Specifically, over a closed 4-manifold, w_2 is the characteristic element of the
-    intersection form over Z_2, meaning:
-    Q(x, w_2) = Q(x, x) mod 2  for all x in H_2(M; Z).
+    What is Being Computed?:
+        Extracts the second Stiefel-Whitney class w₂ ∈ H²(M; ℤ₂) using the intersection form
+        and Wu's formula for 4-manifolds.
+
+    Algorithm:
+        1. Verifies the intersection form is for an even-dimensional, unimodular manifold.
+        2. Solves the linear system Q * w = diag(Q) mod 2, where Q is the intersection matrix.
+        3. Returns the characteristic element w₂ such that Q(x, w₂) ≡ Q(x, x) mod 2.
+
+    Preserved Invariants:
+        - w₂ is the obstruction to having a Spin structure.
+        - w₂=0 if and only if the intersection form is Even (Type II).
 
     Args:
         q: The 4-manifold's intersection form.
 
     Returns:
-        The Z_2 coefficient vector representing the w_2 class in the H_{k} basis.
+        np.ndarray: The ℤ₂ coefficient vector representing the w₂ class in the H₂ basis.
 
     Raises:
         CharacteristicClassError: If the manifold dimension is odd, if it's not unimodular,
-            or if inversion over Z_2 fails.
+            or if inversion over ℤ₂ fails.
+
+    Use When:
+        - Determining if a 4-manifold is Spin
+        - Working with the Wu formula or Steenrod squares
+        - Classifying intersection forms (Type I vs Type II)
+
+    Example:
+        q = IntersectionForm(matrix=np.array([[0, 1], [1, 0]])) # Torus H2
+        w2 = extract_stiefel_whitney_w2(q)
+        print(w2) # [0, 0] -> Spin
     """
     if q.dimension % 2 != 0:
         raise CharacteristicClassError(
@@ -145,13 +202,31 @@ def extract_stiefel_whitney_w2(q: IntersectionForm) -> np.ndarray:
 def check_spin_structure(q: IntersectionForm) -> str:
     """Uses the 2nd Stiefel-Whitney class to mathematically prove if the manifold is Spin.
 
-    A manifold admits a Spin structure if and only if w_2 = 0.
+    What is Being Computed?:
+        Determines whether a 4-manifold admits a Spin structure by checking if its second
+        Stiefel-Whitney class w₂ is zero.
+
+    Algorithm:
+        1. Calls extract_stiefel_whitney_w2(q) to get the w₂ vector.
+        2. Checks if the vector is identically zero.
+        3. Returns a descriptive string based on the result.
+
+    Preserved Invariants:
+        - The existence of a Spin structure is a topological property of the tangent bundle.
 
     Args:
         q: The 4-manifold's intersection form.
 
     Returns:
-        A string describing the Spin structure result and w_2 coefficients.
+        str: A string describing the Spin structure result and w₂ coefficients.
+
+    Use When:
+        - Need a human-readable certificate of Spin structure status
+        - Quick diagnostic of manifold type (I or II)
+
+    Example:
+        status = check_spin_structure(q)
+        print(status)
     """
     w2 = extract_stiefel_whitney_w2(q)
 
@@ -166,19 +241,35 @@ def check_spin_structure(q: IntersectionForm) -> str:
 def extract_pontryagin_p1(q: IntersectionForm) -> int:
     """Evaluates the first Pontryagin class.
 
-    By the Hirzebruch Signature Theorem for 4-manifolds:
-    signature(M) = 1/3 * <p_1(M), [M]>.
-    Therefore, the evaluation of the first Pontryagin class on the fundamental class is:
-    p_1(M)[M] = 3 * signature(M).
+    What is Being Computed?:
+        Computes the evaluation of the first Pontryagin class p₁ on the fundamental class [M]
+        for a 4-manifold.
+
+    Algorithm:
+        1. Uses the Hirzebruch Signature Theorem: σ(M) = 1/3 * <p₁(M), [M]>.
+        2. Calculates the signature of the intersection form.
+        3. Multiplies the signature by 3 to obtain <p₁(M), [M]>.
+
+    Preserved Invariants:
+        - Pontryagin classes are invariants of the stable tangent bundle.
+        - p₁ evaluation is tied to the signature, which is an invariant of the homotopy type (for 4-manifolds).
 
     Args:
         q: The 4-manifold's intersection form.
 
     Returns:
-        The evaluation of the first Pontryagin class on the fundamental class.
+        int: The evaluation of the first Pontryagin class on the fundamental class.
 
     Raises:
         CharacteristicClassError: If the manifold is not 4-dimensional.
+
+    Use When:
+        - Verifying consistency between signature and bundle integrations
+        - Studying 4-manifold cobordism invariants
+
+    Example:
+        p1 = extract_pontryagin_p1(q)
+        print(f"p1[M] = {p1}")
     """
     if q.dimension != 4:
         raise CharacteristicClassError(
@@ -190,13 +281,28 @@ def extract_pontryagin_p1(q: IntersectionForm) -> int:
 def verify_hirzebruch_signature(q: IntersectionForm, p1_eval: int) -> bool:
     """Verifies if the intersection form matches the geometric vector bundle integrations.
 
-    Checks if 3 * signature == p1_eval.
+    What is Being Computed?:
+        Checks the consistency of the Hirzebruch Signature Theorem for a given 4-manifold.
+
+    Algorithm:
+        1. Computes the predicted p₁ evaluation from the intersection form's signature.
+        2. Compares the predicted value with the provided `p1_eval`.
+
+    Preserved Invariants:
+        - This verifies a fundamental relation between Pontryagin classes and the signature.
 
     Args:
         q: The 4-manifold's intersection form.
-        p1_eval: The integration of p_1 over the fundamental class.
+        p1_eval: The integration of p₁ over the fundamental class.
 
     Returns:
-        True if the signature theorem holds, False otherwise.
+        bool: True if the signature theorem holds, False otherwise.
+
+    Use When:
+        - Cross-validating computations from different sources (e.g., geometric vs algebraic)
+        - Asserting correctness of manifold data
+
+    Example:
+        is_consistent = verify_hirzebruch_signature(q, 3 * q.signature())
     """
     return extract_pontryagin_p1(q) == p1_eval

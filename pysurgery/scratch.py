@@ -1,3 +1,10 @@
+"""Scratchpad for verifying topological simplification workflows.
+
+Overview:
+    This script demonstrates the end-to-end workflow of generating a point cloud 
+    (sphere), constructing a SimplicialComplex, and simplifying it via QuickMapper 
+    while preserving topological invariants.
+"""
 import pysurgery as ps
 import numpy as np
 

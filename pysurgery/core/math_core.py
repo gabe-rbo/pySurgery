@@ -5,7 +5,20 @@ import sympy as sp
 
 @numba.njit
 def swap_rows(A, i, j):
-    """In-place row swap."""
+    """In-place row swap.
+
+    What is Being Computed?:
+        Exchanges two rows in a matrix in-place.
+
+    Algorithm:
+        1. Iterates through each column index k.
+        2. Swaps elements A[i, k] and A[j, k] using a temporary variable.
+
+    Args:
+        A: The matrix to modify.
+        i: Index of the first row.
+        j: Index of the second row.
+    """
     if i == j:
         return
     for k in range(A.shape[1]):
@@ -15,7 +28,20 @@ def swap_rows(A, i, j):
 
 @numba.njit
 def swap_cols(A, i, j):
-    """In-place column swap."""
+    """In-place column swap.
+
+    What is Being Computed?:
+        Exchanges two columns in a matrix in-place.
+
+    Algorithm:
+        1. Iterates through each row index k.
+        2. Swaps elements A[k, i] and A[k, j] using a temporary variable.
+
+    Args:
+        A: The matrix to modify.
+        i: Index of the first column.
+        j: Index of the second column.
+    """
     if i == j:
         return
     for k in range(A.shape[0]):
@@ -25,7 +51,23 @@ def swap_cols(A, i, j):
 
 @numba.njit
 def extended_gcd(a, b):
-    """Return `(g, x, y)` such that `ax + by = g = gcd(a, b)`."""
+    """Return `(g, x, y)` such that `ax + by = g = gcd(a, b)`.
+
+    What is Being Computed?:
+        Computes the greatest common divisor (GCD) of two integers and the coefficients
+        of Bézout's identity.
+
+    Algorithm:
+        1. Uses the extended Euclidean algorithm.
+        2. Iteratively updates remainders and Bézout coefficients until the remainder is zero.
+
+    Args:
+        a: First integer.
+        b: Second integer.
+
+    Returns:
+        Tuple[int, int, int]: (g, x, y) where g is the GCD, and ax + by = g.
+    """
     x0, x1, y0, y1 = 1, 0, 0, 1
     while b != 0:
         q, r = divmod(a, b)
@@ -36,19 +78,38 @@ def extended_gcd(a, b):
 
 
 def smith_normal_decomp(A_in: sp.Matrix | np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Computes the Smith Normal Decomposition S = U*A*V for a SymPy Matrix A.
+    """Computes the Smith Normal Decomposition S = U*A*V for a matrix A.
 
-    This implementation handles the reduction iteratively over Z using NumPy object arrays.
+    What is Being Computed?:
+        Computes the Smith Normal Form (SNF) of an integer matrix A, along with the 
+        unimodular transformation matrices U and V such that S = U * A * V.
 
-    References:
-        Smith, H. J. S. (1861). On systems of linear indeterminate equations and congruences. 
-        Philosophical Transactions of the Royal Society of London, 151, 293-326.
+    Algorithm:
+        1. Converts input to a NumPy object array for arbitrary-precision integer arithmetic.
+        2. Iteratively applies elementary row and column operations (swaps, additions, 
+           scaling, and Euclidean reductions) to zero out off-diagonal elements.
+        3. Uses the extended Euclidean algorithm to handle non-divisible pivot elements.
+        4. Tracks all operations in matrices U and V.
+
+    Preserved Invariants:
+        - The diagonal elements of S (invariant factors) are unique up to sign.
+        - The product of the first k diagonal elements is the GCD of all k×k minors of A.
+        - Unimodular transformations preserve the underlying module structure (H_n calculations).
 
     Args:
         A_in: The input integer matrix (SymPy Matrix or NumPy array).
 
     Returns:
-        A tuple (S, U, V) where S is the Smith Normal Form and U, V are unimodular matrices.
+        tuple: (S, U, V) where S is the Smith Normal Form and U, V are unimodular matrices.
+
+    Use When:
+        - Computing homology groups over ℤ (need torsion and ranks)
+        - Solving systems of linear Diophantine equations
+        - Identifying the structure of finitely generated abelian groups
+
+    Example:
+        S, U, V = smith_normal_decomp(np.array([[2, 4], [4, 8]]))
+        # S will be diag(2, 0)
     """
     # Use NumPy object arrays for speed while maintaining arbitrary precision
     if isinstance(A_in, sp.Matrix):
@@ -152,13 +213,25 @@ def smith_normal_decomp(A_in: sp.Matrix | np.ndarray) -> tuple[np.ndarray, np.nd
 def smith_normal_form(A_in: np.ndarray) -> np.ndarray:
     """Compute the Smith Normal Form of an integer matrix A exactly.
 
-    Optimized via our own SNF reduction kernel.
+    What is Being Computed?:
+        Extracts the Smith Normal Form S for an integer matrix.
+
+    Algorithm:
+        1. Delegates to `smith_normal_decomp` to perform the full reduction.
+        2. Discards the transformation matrices U and V.
 
     Args:
         A_in: The input integer matrix as a numpy array.
 
     Returns:
-        The diagonal matrix S (as a numpy array).
+        np.ndarray: The diagonal matrix S.
+
+    Use When:
+        - You only need the invariant factors, not the transformation basis
+        - Checking equivalence of linear maps over ℤ
+
+    Example:
+        S = smith_normal_form(boundary_matrix)
     """
     S, _, _ = smith_normal_decomp(A_in)
     return S
@@ -167,11 +240,27 @@ def smith_normal_form(A_in: np.ndarray) -> np.ndarray:
 def get_snf_diagonal(A: np.ndarray) -> np.ndarray:
     """Convenience wrapper to extract the invariant factors.
 
+    What is Being Computed?:
+        Extracts the non-zero invariant factors (the diagonal of the SNF) from a matrix.
+
+    Algorithm:
+        1. Computes the Smith Normal Form using `smith_normal_decomp`.
+        2. Takes the absolute values of the diagonal elements.
+        3. Filters out zeros to return only the meaningful invariant factors.
+
     Args:
         A: The input integer matrix.
 
     Returns:
-        A 1D array of non-zero invariant factors.
+        np.ndarray: A 1D array of non-zero invariant factors.
+
+    Use When:
+        - Directly computing Betti numbers and torsion coefficients
+        - Standardized summary of a boundary operator's structure
+
+    Example:
+        factors = get_snf_diagonal(d2)
+        # factors [1, 1, 2] means torsion is ℤ₂
     """
     S, _, _ = smith_normal_decomp(A)
     diag_len = min(S.shape)
@@ -189,21 +278,34 @@ def get_snf_diagonal(A: np.ndarray) -> np.ndarray:
 def get_sparse_snf_diagonal(A_sparse, allow_approx: bool = False, backend: str = "auto") -> np.ndarray:
     """Computes the SNF diagonal for sparse matrices.
 
-    This method utilizes an optimal O(V+E) graph-theoretic "leaf-peeling" 
-    pre-processor in the Julia backend to dramatically reduce the matrix size 
-    before performing the standard SNF algorithm.
+    What is Being Computed?:
+        Computes the invariant factors of a sparse integer matrix, optimized for 
+        topological boundary operators.
 
-    References:
-        Edelsbrunner, H., & Harer, J. (2010). Computational topology: An introduction. 
-        American Mathematical Society.
-        
-        Bauer, U. (2021). Ripser: efficient computation of Vietoris–Rips persistence barcodes. 
-        Journal of Applied and Computational Topology, 5, 391-423.
+    Algorithm:
+        1. If Julia is available and requested, uses a high-performance sparse engine 
+           utilizing "leaf-peeling" pre-processors.
+        2. If Python is used, warns about potential memory usage and converts to dense SNF.
+        3. Strictly forbids floating-point fallbacks to ensure mathematical integrity.
+
+    Preserved Invariants:
+        - Exact integer torsion is maintained, which is critical for surgery obstructions (L-groups).
 
     Args:
         A_sparse: The input sparse matrix (e.g., scipy.sparse).
-        allow_approx: Whether to allow approximate floating-point fallback.
+        allow_approx: Whether to allow approximate floating-point fallback (False).
         backend: 'auto', 'julia', or 'python'.
+
+    Returns:
+        np.ndarray: A 1D array of non-zero invariant factors.
+
+    Use When:
+        - Computing homology of large simplicial complexes
+        - Speed is required via the Julia bridge
+        - Exact torsion data is mandatory
+
+    Example:
+        torsion = get_sparse_snf_diagonal(sparse_boundary, backend='julia')
     """
     from ..bridge.julia_bridge import julia_engine
     import warnings

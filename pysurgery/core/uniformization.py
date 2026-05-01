@@ -39,18 +39,32 @@ _TWO_PI = 2.0 * math.pi
 class SurfaceMesh:
     """Triangulated surface with a sparse combinatorial and metric representation.
 
+    Overview:
+        SurfaceMesh provides a robust data structure for 2-manifolds (surfaces) 
+        represented by triangulations. It maintains both combinatorial incidence 
+        (vertices, edges, faces) and metric information (edge lengths, coordinates), 
+        supporting advanced geometric algorithms like discrete Ricci flow and 
+        conformal uniformization.
+
+    Key Concepts:
+        - **Piecewise-Flat Metric**: Defined by the lengths of triangle edges.
+        - **Gauss-Bonnet Theorem**: Relates the total Gaussian curvature to the Euler characteristic.
+        - **Angle Deficit**: Discrete measure of Gaussian curvature at vertices.
+        - **Cotangent Laplacian**: Discrete operator used for conformal deformations and heat flow.
+
+    Common Workflows:
+        1. **Creation** → from_vertices_faces() or from_simplicial_complex().
+        2. **Metric Analysis** → vertex_gaussian_curvature() or cotangent_laplacian().
+        3. **Conformal Scaling** → Compute new metrics via conformal_edge_lengths().
+
     Attributes:
-        faces: (m, 3) array of vertex indices for each triangle.
-        n_vertices: Total number of vertices.
-        base_edge_lengths: Initial lengths for each edge.
-        edges: (e, 2) array of vertex pairs for each edge.
-        edge_to_index: Mapping from sorted vertex pair to edge index.
-        edge_faces: List of face indices incident to each edge.
-        vertex_faces: List of face indices incident to each vertex.
-        vertex_neighbors: List of sets of neighbor vertices for each vertex.
-        boundary_vertices: Indices of vertices on the boundary.
-        coordinates: Optional (n, d) array of vertex coordinates.
-        simplicial_complex: Optional SimplicialComplex representation.
+        faces (np.ndarray): (m, 3) array of vertex indices for each triangle.
+        n_vertices (int): Total number of vertices.
+        base_edge_lengths (np.ndarray): Initial lengths for each edge.
+        edges (np.ndarray): (e, 2) array of vertex pairs for each edge.
+        edge_to_index (dict): Mapping from sorted vertex pair to edge index.
+        boundary_vertices (np.ndarray): Indices of vertices on the boundary.
+        coordinates (np.ndarray): Optional (n, d) array of vertex coordinates.
     """
 
     faces: np.ndarray
@@ -390,19 +404,28 @@ class SurfaceMesh:
 class SurfaceUniformizationResult:
     """Result object for a numerical uniformization solve.
 
+    Overview:
+        Encapsulates the output of a discrete conformal deformation process 
+        (e.g., Ricci flow). It contains the final conformal factors, the 
+        resulting metric, and convergence diagnostics, allowing for downstream 
+        verification of topological and geometric invariants.
+
+    Key Concepts:
+        - **Conformal Factors (u)**: The log-scaling factors applied to vertices.
+        - **Curvature Residual**: The difference between actual and target Gaussian curvature.
+        - **Convergence**: Whether the numerical solver reached the target tolerance.
+
+    Common Workflows:
+        1. **Validation** → Check decision_ready() to ensure high-accuracy results.
+        2. **Downstream Geometry** → Access edge_lengths or conformal_factors for further processing.
+
     Attributes:
-        method: Method used ('ricci' or 'circle_packing').
-        target_geometry: Type of target geometry ('spherical', etc.).
-        converged: Whether the solver reached the target tolerance.
-        iterations: Number of iterations performed.
-        residual_norm: Final norm of the curvature residual.
-        conformal_factors: Final log-conformal factors.
-        curvature: Final vertex Gaussian curvature.
-        target_curvature: Prescribed target curvature.
-        edge_lengths: Final edge lengths.
-        mesh: The SurfaceMesh object.
-        history: Residual norm history.
-        notes: Diagnostic messages.
+        method (str): Method used ('ricci' or 'circle_packing').
+        target_geometry (str): Type of target geometry ('spherical', etc.).
+        converged (bool): Whether the solver reached the target tolerance.
+        conformal_factors (np.ndarray): Final log-conformal factors u_i.
+        curvature (np.ndarray): Final vertex Gaussian curvature.
+        edge_lengths (np.ndarray): Final edge lengths in the uniformized metric.
     """
 
     method: str
@@ -884,19 +907,47 @@ def discrete_ricci_flow(
 ) -> SurfaceUniformizationResult:
     """Uniformize a triangulated surface using discrete Ricci flow.
 
+    What is Being Computed?:
+        Computes a conformal deformation of a surface triangulation such that 
+        the Gaussian curvature at each vertex matches a prescribed target 
+        (usually constant curvature).
+
+    Algorithm:
+        1. Initialize log-conformal factors u = 0.
+        2. Compute current vertex curvatures and the residual against the target.
+        3. Build the cotangent Laplacian matrix for the current metric.
+        4. Solve the Newton system (Laplacian * step = residual) to find the update.
+        5. Apply the update with optional backtracking line search to ensure 
+           triangle inequality is maintained.
+        6. Repeat until the curvature residual is below the tolerance.
+
+    Preserved Invariants:
+        - Topology: The triangulation connectivity remains unchanged.
+        - Conformal Class: The resulting metric is in the same discrete conformal 
+          class as the input (up to the chosen ansatz).
+        - Total Curvature: Guaranteed by Gauss-Bonnet if the target is valid.
+
     Args:
         surface: Input surface (Mesh, Complex, or (V, F) pair).
         coordinates: Optional explicit coordinates.
         target_curvature: Optional target curvature vector.
         max_iter: Maximum iterations.
         tol: Convergence tolerance.
-        pin_vertex: Index of pinned vertex.
+        pin_vertex: Index of pinned vertex to fix rigid motion.
         damping: Damping factor for Newton steps.
         line_search: Whether to use backtracking line search.
         validate: Whether to validate the mesh.
 
     Returns:
-        A SurfaceUniformizationResult instance.
+        SurfaceUniformizationResult: The convergence status and final metric.
+
+    Use When:
+        - Constructing canonical metrics on surfaces.
+        - Computing Riemann mapping or parameterizations.
+        - Surface registration and comparison.
+
+    Example:
+        res = discrete_ricci_flow(mesh, tol=1e-10)
     """
     mesh = _coerce_surface_mesh(surface, coordinates=coordinates, validate=validate)
     return _solve_uniformization(
@@ -925,6 +976,22 @@ def circle_packing_uniformization(
 ) -> SurfaceUniformizationResult:
     """Uniformize a triangulated surface via a circle-packing style metric ansatz.
 
+    What is Being Computed?:
+        Computes a conformal deformation using the circle-packing metric 
+        approximation, where edge lengths are determined by vertex radii 
+        (exp(u_i)). This is a robust combinatorial alternative to Ricci flow.
+
+    Algorithm:
+        1. Initialize vertex radii r_i = exp(u_i).
+        2. Compute edge lengths as L_ij = (r_i + r_j).
+        3. Solve for r_i such that the resulting triangle angles produce the 
+           target Gaussian curvature.
+        4. Use Newton's method with the cotangent Laplacian for convergence.
+
+    Preserved Invariants:
+        - Topology: Connectivity is fixed.
+        - Conformal Class: Approximates the conformal structure via circle packing.
+
     Args:
         surface: Input surface.
         coordinates: Optional coordinates.
@@ -937,7 +1004,14 @@ def circle_packing_uniformization(
         validate: Whether to validate.
 
     Returns:
-        A SurfaceUniformizationResult instance.
+        SurfaceUniformizationResult: The final metric and convergence stats.
+
+    Use When:
+        - High-robustness uniformization is needed for low-quality triangulations.
+        - Approximating the Riemann mapping using Thurston's circle packing theorem.
+
+    Example:
+        res = circle_packing_uniformization(mesh)
     """
     mesh = _coerce_surface_mesh(surface, coordinates=coordinates, validate=validate)
     return _solve_uniformization(

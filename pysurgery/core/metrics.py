@@ -1,19 +1,59 @@
+"""Metric computations and point cloud alignment utilities.
+
+Overview:
+    This module provides tools for comparing and aligning geometric structures, 
+    ranging from simple Euclidean distances to advanced Gromov-Wasserstein 
+    transport and Fréchet path comparisons.
+
+Key Concepts:
+    - **Point Alignment**: Rigid alignment via Procrustes.
+    - **Metric Spaces**: Pairwise distance matrices and subsampling.
+    - **Optimal Transport**: Invariant comparison of metric measure spaces.
+
+Common Workflows:
+    1. **Preprocessing** -> `compute_distance_matrix()` or `farthest_point_sampling()`.
+    2. **Alignment** -> `orthogonal_procrustes()` to align embeddings.
+    3. **Comparison** -> `gromov_wasserstein_distance()` or `frechet_distance()` for similarity.
+"""
+
 import numpy as np
 import scipy.spatial.distance as dist
 from typing import Tuple, Optional
 from ..bridge.julia_bridge import julia_engine
 
 def orthogonal_procrustes(A: np.ndarray, B: np.ndarray, backend: str = "auto") -> Tuple[np.ndarray, np.ndarray, float]:
-    """Finds orthogonal matrix R aligning B to A, returning (R, B_aligned, disparity).
+    """Find the optimal orthogonal transformation to align two point clouds.
+
+    What is Being Computed?:
+        Computes an orthogonal matrix R that minimizes the disparity (sum of 
+        squared differences) between point cloud B and target A: 
+        min_R ||A - BR||^2 such that R^T R = I.
+
+    Algorithm:
+        1. Compute the cross-covariance matrix M = B^T A.
+        2. Perform Singular Value Decomposition (SVD): M = U S V^T.
+        3. The optimal rotation matrix is R = U V^T.
+        4. Handle reflection by checking the determinant of R if necessary.
+
+    Preserved Invariants:
+        - **Relative Distances**: Preserves all pairwise distances within B (isometry).
+        - **Orientation**: Preserves or reverses orientation depending on the determinant of R.
 
     Args:
-        A (np.ndarray): The target point cloud.
-        B (np.ndarray): The point cloud to be aligned.
+        A: The target point cloud (n_samples, dim).
+        B: The point cloud to be aligned (n_samples, dim).
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray, float]: A tuple containing the orthogonal
-            matrix R, the aligned point cloud B_aligned, and the disparity (error).
+        Tuple[np.ndarray, np.ndarray, float]: (R, B_aligned, disparity) where R is the 
+            orthogonal matrix, B_aligned is the transformed B, and disparity is the error.
+
+    Use When:
+        - You need to align two representations of the same shape in a common coordinate system.
+        - Comparing different embeddings of the same topological space.
+
+    Example:
+        R, aligned, err = orthogonal_procrustes(A, B)
     """
     # Normalize backend
     backend_norm = str(backend).lower().strip()
@@ -44,18 +84,39 @@ def orthogonal_procrustes(A: np.ndarray, B: np.ndarray, backend: str = "auto") -
         return R, B_aligned, float(disparity)
 
 def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean", backend: str = "auto") -> np.ndarray:
-    """Computes pairwise distance matrix using the optimal singular implementation.
+    """Computes pairwise distance matrix using the optimal implementation.
+
+    What is Being Computed?:
+        A symmetric matrix D where D_ij = dist(x_i, x_j) for all pairs of points 
+        in the input data.
+
+    Algorithm:
+        1. Select backend based on availability (JAX > Julia > Scipy).
+        2. Compute distances using vectorized operations or optimized libraries.
+        3. Return the dense distance matrix.
+
+    Preserved Invariants:
+        - **Metric Properties**: Non-negativity, symmetry, and identity of indiscernibles.
+        - **Topology**: The induced topology remains invariant regardless of the backend.
 
     Args:
-        data (np.ndarray): The input data points.
-        metric (str): The distance metric to use. Defaults to "euclidean".
+        data (np.ndarray): The input data points (n_samples, dim).
+        metric (str): The distance metric to use ('euclidean', 'manhattan', 'chebyshev').
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        np.ndarray: The pairwise distance matrix.
+        np.ndarray: The pairwise distance matrix (n_samples, n_samples).
 
     Raises:
-        ValueError: If the metric is not supported.
+        ValueError: If the requested metric is not supported.
+
+    Use When:
+        - Constructing Vietoris-Rips complexes.
+        - Computing persistent homology.
+        - Performing manifold learning or dimensionality reduction.
+
+    Example:
+        dist_mat = compute_distance_matrix(cloud, metric='euclidean')
     """
     # Normalize backend
     backend_norm = str(backend).lower().strip()
@@ -83,15 +144,36 @@ def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean", backend
         raise ValueError(f"Unsupported metric: {metric}")
 
 def frechet_distance(curve_a: np.ndarray, curve_b: np.ndarray, backend: str = "auto") -> float:
-    """Computes Discrete Fréchet distance between two ordered sequences of points.
+    """Computes the Discrete Fréchet distance between two ordered point sequences.
+
+    What is Being Computed?:
+        The Fréchet distance d_F(A, B), which measures the similarity between curves 
+        that takes into account the location and ordering of the points. It is 
+        often called the "dog-man distance".
+
+    Algorithm:
+        Computes the discrete version via dynamic programming. The state ca[i, j] 
+        represents the Fréchet distance between the prefix curves A[:i] and B[:j].
+
+    Preserved Invariants:
+        - **Reparameterization Invariance**: Approximately preserved (exactly in the continuous limit).
+        - **Order**: Sensitive to the sequence of points, unlike Hausdorff distance.
 
     Args:
-        curve_a (np.ndarray): The first sequence of points.
-        curve_b (np.ndarray): The second sequence of points.
+        curve_a (np.ndarray): First sequence of points (n, dim).
+        curve_b (np.ndarray): Second sequence of points (m, dim).
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        float: The discrete Fréchet distance.
+        float: The discrete Fréchet distance value.
+
+    Use When:
+        - Comparing paths in a topological space.
+        - Matching trajectories or generator loops.
+        - Verifying path homotopy representatives metrically.
+
+    Example:
+        dist = frechet_distance(path1, path2)
     """
     # Normalize backend
     backend_norm = str(backend).lower().strip()
@@ -133,19 +215,42 @@ def gromov_wasserstein_distance(
     max_iter: int = 100,
     backend: str = "auto"
 ) -> float:
-    """Computes (Entropic) Gromov-Wasserstein distance.
+    """Computes the (Entropic) Gromov-Wasserstein distance between metric measure spaces.
+
+    What is Being Computed?:
+        The GW distance measures how far two metric measure spaces (X, d_X, μ_X) 
+        and (Y, d_Y, μ_Y) are from being isometric. It is invariant to rigid 
+        transformations (rotations and translations).
+
+    Algorithm:
+        1. Initialize transport plan T.
+        2. Iteratively solve the entropic-regularized optimal transport problem 
+           using the Sinkhorn algorithm or Julia/JAX acceleration.
+        3. Compute the final GW cost from the optimal coupling.
+
+    Preserved Invariants:
+        - **Isometry Invariance**: GW(X, Y) = 0 if X and Y are isometric.
+        - **Mass Conservation**: Works with probability measures p and q.
 
     Args:
-        dist_matrix_A (np.ndarray): Distance matrix of the first space.
-        dist_matrix_B (np.ndarray): Distance matrix of the second space.
-        p (Optional[np.ndarray]): Probability distribution on the first space.
-        q (Optional[np.ndarray]): Probability distribution on the second space.
-        epsilon (float): Regularization parameter. Defaults to 0.01.
-        max_iter (int): Maximum number of iterations. Defaults to 100.
+        dist_matrix_A (np.ndarray): Distance matrix of space X.
+        dist_matrix_B (np.ndarray): Distance matrix of space Y.
+        p (Optional[np.ndarray]): Weights (measure) for points in X.
+        q (Optional[np.ndarray]): Weights (measure) for points in Y.
+        epsilon (float): Entropic regularization parameter (higher = smoother/faster).
+        max_iter (int): Maximum Sinkhorn/Optimization iterations.
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        float: The (entropic) Gromov-Wasserstein distance.
+        float: The Gromov-Wasserstein distance value.
+
+    Use When:
+        - Comparing point clouds with different numbers of points or in different dimensions.
+        - Shape matching where rigid alignment is not sufficient.
+        - Analyzing metric structures without a common coordinate system.
+
+    Example:
+        gw = gromov_wasserstein_distance(D1, D2, epsilon=0.05)
     """
     # Normalize backend
     backend_norm = str(backend).lower().strip()
@@ -208,15 +313,38 @@ def gromov_wasserstein_distance(
 def farthest_point_sampling(points: np.ndarray, n_samples: int, initial_idx: int = 0) -> np.ndarray:
     """Subsample a point cloud by greedily picking points that maximize distance to the current set.
 
-    This provides a 'maximal' covering of the underlying manifold.
+    What is Being Computed?:
+        A subset of indices corresponding to landmark points that provide a 
+        maximal covering of the point cloud.
+
+    Algorithm:
+        1. Start with an initial point.
+        2. Iteratively pick the point that has the maximum "minimum distance" 
+           to the already selected set.
+        3. Update distances and repeat until n_samples are reached.
+
+    Preserved Invariants:
+        - **Density Hierarchy**: Points are picked in order of their contribution 
+          to covering the space.
+        - **Topology**: For sufficiently high n_samples, the landmarks capture 
+           the same homotopy type (Nerve Theorem).
 
     Args:
-        points (np.ndarray): The input point cloud.
-        n_samples (int): The number of landmark points to sample.
-        initial_idx (int): The index of the first point to pick. Defaults to 0.
+        points (np.ndarray): The input point cloud (n_total, dim).
+        n_samples (int): The number of landmark points to select.
+        initial_idx (int): Index of the first seed point.
 
     Returns:
-        np.ndarray: The indices of the selected landmark points.
+        np.ndarray: Array of indices of length n_samples.
+
+    Use When:
+        - Downsampling large data for faster persistent homology.
+        - Selecting centers for RBF interpolation or sparse manifold learning.
+        - Ensuring uniform coverage of a geometric object.
+
+    Example:
+        indices = farthest_point_sampling(data, n_samples=100)
+        landmarks = data[indices]
     """
     pts = np.asarray(points, dtype=np.float64)
     n = pts.shape[0]

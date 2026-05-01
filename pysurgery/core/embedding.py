@@ -54,12 +54,24 @@ _JULIA_PAIR_BATCH_THRESHOLD = 256
 class SimplexIntersectionWitness:
     """One detected geometric intersection between two simplices.
 
+    Overview:
+        A SimplexIntersectionWitness records a specific instance of a geometric 
+        intersection (or near-intersection) between two simplices in a PL map. 
+        It provides the basis for proving that a map is not an embedding.
+
+    Key Concepts:
+        - **Collision Detection**: Identifying when two simplices that are not 
+          combinatorially adjacent overlap in ambient space.
+        - **Witness**: A certificate of failure for an embedding check.
+
     Attributes:
         simplex_a: Tuple of vertex labels for the first simplex.
         simplex_b: Tuple of vertex labels for the second simplex.
-        kind: Type of intersection (e.g., 'segment_segment').
-        distance: Minimum distance between the simplices.
-        overlap_dimension: Dimension of the intersection.
+        kind: Type of intersection (e.g., 'segment_segment', 'triangle_triangle').
+        distance: Minimum distance between the simplices (zero or within tolerance 
+                  if intersecting).
+        overlap_dimension: The dimension of the intersection set (e.g., 0 for a 
+                           point, 1 for a segment).
         notes: Additional diagnostic information.
     """
 
@@ -90,20 +102,31 @@ class SimplexIntersectionWitness:
 class ImmersionResult:
     """Result for local PL immersion checks.
 
+    Overview:
+        Encapsulates the outcome of local injectivity and affine rank tests. 
+        An immersion is a map that is locally a PL homeomorphism onto its image. 
+        In the PL category, this usually means each simplex has full affine rank 
+        and the star of each vertex is mapped injectively.
+
+    Key Concepts:
+        - **Local Injectivity**: The map is injective on a neighborhood of every point.
+        - **Affine Rank**: A k-simplex must span a k-dimensional subspace to be non-degenerate.
+        - **Star/Link Condition**: Heuristics for ensuring local injectivity across simplices.
+
     Attributes:
-        status: Status of the check (e.g., 'success', 'impediment', 'inconclusive').
-        exact: Whether the check was performed using exact predicates.
-        immersed: Whether the source is locally immersed in the ambient space.
-        theorem: Name of the theorem used for the check.
-        theorem_tag: Unique tag for the theorem.
+        status: 'success', 'impediment', or 'inconclusive'.
+        exact: True if exact geometric predicates were used.
+        immersed: True if the local immersion conditions are satisfied.
+        theorem: Name of the topological theorem justifying the result.
+        theorem_tag: Unique identifier for the theorem.
         source_dimension: Dimension of the source complex.
-        ambient_dimension: Dimension of the ambient space.
-        local_failures: Details of local injectivity failures.
-        simplex_rank_failures: Details of simplices with insufficient affine rank.
-        evidence: Human-readable evidence for the result.
-        missing_data: Description of any missing data that prevented a conclusive result.
-        certificates: Machine-readable evidence for the result.
-        summary: Short summary of the check result.
+        ambient_dimension: Dimension of the ambient Euclidean space.
+        local_failures: List of vertices where local injectivity failed.
+        simplex_rank_failures: List of simplices with insufficient affine rank.
+        evidence: Human-readable proof/reasoning strings.
+        missing_data: Data gaps that prevented a 'success' or 'impediment' status.
+        certificates: Machine-readable data for external verification.
+        summary: Concise summary string.
     """
 
     status: str
@@ -156,25 +179,36 @@ class ImmersionResult:
 class EmbeddingResult:
     """Result for global PL embedding checks.
 
+    Overview:
+        Provides a comprehensive report on whether a PL map is a global embedding. 
+        A PL embedding is a map that is both a local immersion and globally injective 
+        (no self-intersections between non-adjacent simplices).
+
+    Key Concepts:
+        - **Global Injectivity**: The map is 1-to-1 across the entire source complex.
+        - **Self-Intersection**: Overlap between two simplices that are not faces of 
+          a common simplex.
+        - **Whitney Embedding**: Classical theorem relating source and ambient dimensions.
+
     Attributes:
-        status: Status of the check (e.g., 'success', 'impediment', 'inconclusive').
-        exact: Whether the check was performed using exact predicates.
-        embedded: Whether the source is globally embedded in the ambient space.
-        theorem: Name of the theorem used for the check.
-        theorem_tag: Unique tag for the theorem.
+        status: 'success' (is an embedding), 'impediment' (failed), or 'inconclusive'.
+        exact: True if the intersection checks used exact or conservative predicates.
+        embedded: True if both immersed and globally injective.
+        theorem: The theoretical framework used for the check.
+        theorem_tag: Unique identifier for the theorem.
         source_dimension: Dimension of the source complex.
-        ambient_dimension: Dimension of the ambient space.
-        immersion: The result of the local immersion check.
-        intersections: List of detected self-intersections.
-        candidate_pairs_checked: Number of simplex pairs checked for intersection.
-        pruned_pairs: Number of simplex pairs pruned by broad-phase checks.
-        projection_used: Whether a projection was used to reduce the ambient dimension.
-        projection_method: Method used for projection (e.g., 'pca', 'random').
-        projection_matrix: The matrix used for projection.
-        evidence: Human-readable evidence for the result.
-        missing_data: Description of any missing data that prevented a conclusive result.
-        certificates: Machine-readable evidence for the result.
-        summary: Short summary of the check result.
+        ambient_dimension: Dimension of the ambient Euclidean space.
+        immersion: The detailed result of the local immersion check.
+        intersections: List of SimplexIntersectionWitnesses for detected collisions.
+        candidate_pairs_checked: Count of simplex pairs that passed broad-phase.
+        pruned_pairs: Count of simplex pairs discarded by broad-phase checks.
+        projection_used: True if the check was performed after a dimension reduction.
+        projection_method: The method (e.g., 'pca') used for reduction.
+        projection_matrix: The matrix that transformed the coordinates.
+        evidence: Human-readable reasoning steps.
+        missing_data: Description of what prevented a definitive status.
+        certificates: Data for verifiable certificates.
+        summary: Final one-line conclusion.
     """
 
     status: str
@@ -237,15 +271,34 @@ class EmbeddingResult:
 class PLMap:
     """A piecewise-affine map from a simplicial source to Euclidean coordinates.
 
+    Overview:
+        A PLMap represents a continuous map f: |K| → ℝⁿ from the geometric 
+        realization of a simplicial complex K to Euclidean space, where f is 
+        affine on each simplex. This is the primary object for performing 
+        geometric checks like immersion and embedding in pySurgery.
+
+    Key Concepts:
+        - **Piecewise-Affine**: Linear on each simplex, uniquely determined by 
+          vertex images.
+        - **Source-Ambient Duality**: Maintains the relationship between 
+          topological connectivity and geometric positioning.
+        - **Coordinates**: Represented as a dense NumPy array for efficient 
+          broad-phase and narrow-phase collision detection.
+
+    Common Workflows:
+        1. **Creation** → PLMap.from_source(complex, coordinates)
+        2. **Geometric Analysis** → analyze_embedding(pl_map)
+        3. **Projection** → project_coordinates(pl_map.vertex_coordinates, ...)
+
     Attributes:
-        source: The original source object (e.g., SurfaceMesh).
-        source_complex: The underlying simplicial complex.
-        vertex_coordinates: Coordinates of each vertex in the ambient space.
-        vertex_labels: Unique labels for each vertex in the source complex.
-        ambient_dimension: Dimension of the ambient Euclidean space.
-        source_dimension: Dimension of the source simplicial complex.
-        projection_matrix: Optional matrix used to project from a higher dimension.
-        source_name: Name of the source for identification.
+        source: The original source object (e.g., SurfaceMesh, SimplicialComplex).
+        source_complex: The underlying SimplicialComplex structure.
+        vertex_coordinates: (N, D) array of images f(v) for each vertex v.
+        vertex_labels: List of unique identifiers for vertices.
+        ambient_dimension: The dimension D of the target Euclidean space.
+        source_dimension: The maximum dimension of simplices in the source.
+        projection_matrix: Optional matrix recording a prior dimension reduction.
+        source_name: Name used for reporting and certificates.
     """
 
     source: object
@@ -417,12 +470,18 @@ class PLMap:
 class ProjectionResult:
     """Result of a PCA/random projection helper.
 
+    Overview:
+        Records the transformation of a high-dimensional point cloud into a 
+        lower-dimensional space. Useful for visualizing or analyzing complexes 
+        whose natural ambient dimension is large.
+
     Attributes:
-        points: The projected vertex coordinates.
-        projection_matrix: The matrix used for the projection.
-        method: The projection method used.
-        explained_variance: Optional explained variance (for PCA).
-        summary: A short summary of the projection.
+        points: The transformed (N, k) array of vertex coordinates.
+        projection_matrix: The (D, k) matrix P such that points = original @ P.
+        method: The method used ('pca', 'random', or 'identity').
+        explained_variance: For PCA, the fraction of variance captured by each 
+                            principal component.
+        summary: Short human-readable summary of the projection.
     """
 
     points: np.ndarray
@@ -436,15 +495,27 @@ class ProjectionResult:
 class SelfIntersectionReport:
     """Broad-phase and narrow-phase self-intersection diagnostics.
 
+    Overview:
+        Contains the results of a global search for simplex-simplex collisions 
+        within a PLMap. It distinguishes between combinatorially adjacent 
+        simplices (which are allowed to share faces) and disjoint simplices 
+        (which must not overlap for an embedding).
+
+    Key Concepts:
+        - **Broad-Phase Pruning**: Using KD-Trees or Bounding Boxes to quickly 
+          discard pairs that are too far apart to intersect.
+        - **Narrow-Phase Predicates**: Exact geometric tests for segment-segment, 
+          segment-triangle, and triangle-triangle intersections.
+
     Attributes:
-        status: Status of the check.
-        exact: Whether the check used exact predicates.
-        has_intersections: Whether any self-intersections were detected.
-        witnesses: List of detected intersection witnesses.
-        candidate_pairs_checked: Number of pairs that passed broad-phase.
-        pruned_pairs: Number of pairs pruned by broad-phase.
-        max_violation: Maximum distance violation detected.
-        notes: Additional diagnostic notes.
+        status: 'success' (no intersections), 'impediment', or 'inconclusive'.
+        exact: True if the result is numerically robust.
+        has_intersections: True if any illegal collisions were detected.
+        witnesses: List of SimplexIntersectionWitnesses providing details on collisions.
+        candidate_pairs_checked: Number of pairs subjected to narrow-phase tests.
+        pruned_pairs: Number of pairs discarded by broad-phase or adjacency checks.
+        max_violation: Maximum penetration depth/distance for detected intersections.
+        notes: Additional diagnostic strings.
     """
 
     status: str
@@ -496,21 +567,46 @@ def analyze_embedding(
 ) -> EmbeddingResult:
     """High-level embedding / immersion analysis entry point.
 
+    What is Being Computed?:
+        Determines if a given PL map f: |K| → ℝⁿ is a topological embedding. 
+        This involves checking for local non-degeneracy (immersion) and global 
+        injectivity (absence of self-intersections).
+
+    Algorithm:
+        1. Coerce source and coordinates into a standard PLMap.
+        2. Perform optional dimension reduction (PCA/Random) if target_dimension 
+           is specified.
+        3. Call check_immersion() to verify local injectivity via affine rank tests.
+        4. Call detect_self_intersections() to check for global collisions using 
+           broad-phase (KDTree) and narrow-phase (exact-ish predicates).
+        5. Aggregate results into a conclusive EmbeddingResult with certificates.
+
+    Preserved Invariants:
+        - Embedding property is preserved under small perturbations (transversality).
+        - PL homeomorphisms preserve the embedding status.
+
     Args:
-        source: Source complex or mesh object.
-        coordinates: Optional explicit vertex coordinates.
-        target_dimension: Optional target ambient dimension.
-        allow_projection: Whether to allow projection to a lower dimension.
-        projection_method: Method for projection ('pca' or 'random').
-        projection_matrix: Optional custom projection matrix.
-        tol: Numerical tolerance for geometric checks.
+        source: Source complex, mesh, or list of maximal simplices.
+        coordinates: Optional explicit vertex images in ℝⁿ.
+        target_dimension: Optional dimension to project down to before checking.
+        allow_projection: If True, allow automated dimension reduction.
+        projection_method: 'pca' (default) or 'random'.
+        projection_matrix: Optional custom matrix for the projection.
+        tol: Numerical tolerance for rank and intersection predicates.
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        The result of the embedding analysis.
+        EmbeddingResult: Detailed report on the embedding status.
 
-    Raises:
-        ValueError: If target_dimension is smaller than ambient dimension and allow_projection is False.
+    Use When:
+        - Verifying that a manifold realization is not self-intersecting.
+        - Checking Whitney embedding conditions for high-dimensional surgery.
+        - Visualizing complexes while ensuring geometric integrity.
+
+    Example:
+        res = analyze_embedding(complex, coords, target_dimension=3)
+        if res.embedded:
+            print("Valid 3D embedding.")
     """
     pl_map = PLMap.from_source(
         source,
@@ -619,13 +715,38 @@ def analyze_embedding(
 def check_immersion(pl_map: PLMap, *, tol: float = _EPS, backend: str = "auto") -> ImmersionResult:
     """Check local injectivity/rank conditions for a PL map.
 
+    What is Being Computed?:
+        Verifies if the given PLMap is a local immersion. This requires each 
+        simplex to be non-degenerate (full affine rank) and the star of each 
+        vertex to be mapped such that it does not collapse dimension.
+
+    Algorithm:
+        1. Iterate through all top-dimensional simplices.
+        2. Compute the affine rank of each simplex image; fail if rank < dim.
+        3. For each vertex, analyze the incident top-dimensional simplices.
+        4. Check the rank of the combined vertex star; fail if it's lower than 
+           expected (heuristic for local injectivity).
+
+    Preserved Invariants:
+        - Local immersion is a prerequisite for being an embedding.
+        - Preserves the local structure of the simplicial complex.
+
     Args:
-        pl_map: The PL map to check.
-        tol: Numerical tolerance for rank checks.
+        pl_map: The PLMap to analyze.
+        tol: Numerical tolerance for rank computations.
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        The result of the immersion check.
+        ImmersionResult: Detailed report on local injectivity and rank.
+
+    Use When:
+        - You need to ensure a visualization or geometric realization is non-degenerate.
+        - Part of a full embedding analysis.
+
+    Example:
+        imm = check_immersion(pl_map)
+        if not imm.immersed:
+            print("Local degeneracies found:", imm.simplex_rank_failures)
     """
     backend_norm = str(backend).lower().strip()
     if backend_norm == "julia" and not julia_engine.available:
@@ -733,13 +854,37 @@ def detect_self_intersections(
 ) -> SelfIntersectionReport:
     """Detect self-intersections using broad-phase pruning and exact low-dimensional predicates.
 
+    What is Being Computed?:
+        Searches for global self-intersections in a PL map. An intersection is 
+        "illegal" if it occurs between two simplices that do not share a common 
+        face (non-adjacent).
+
+    Algorithm:
+        1. Collect all positive-dimensional simplices.
+        2. Perform broad-phase pruning using a KD-Tree of simplex centroids and 
+           bounding radii to identify candidate pairs.
+        3. Filter out combinatorially adjacent pairs (simplices sharing a vertex).
+        4. Apply narrow-phase geometric predicates (segment-segment, etc.) to 
+           remaining candidates.
+        5. Return a SelfIntersectionReport with any detected witnesses.
+
     Args:
-        pl_map: The PL map to check.
-        tol: Numerical tolerance for intersection checks.
+        pl_map: The PLMap to analyze.
+        tol: Numerical tolerance for intersection tests.
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        The self-intersection report.
+        SelfIntersectionReport: Diagnostic report on detected collisions.
+
+    Use When:
+        - Confirming global injectivity of a mesh or simplicial complex.
+        - Debugging geometric realizations that look correct but may have 
+          hidden overlaps.
+
+    Example:
+        report = detect_self_intersections(pl_map)
+        if report.has_intersections:
+            print(f"Found {len(report.witnesses)} intersections.")
     """
     backend_norm = str(backend).lower().strip()
     if backend_norm == "julia" and not julia_engine.available:
@@ -832,18 +977,33 @@ def project_coordinates(
 ) -> ProjectionResult:
     """Project a point cloud down to a lower ambient dimension.
 
+    What is Being Computed?:
+        Transforms a set of points in ℝⁿ to ℝᵏ (k < n) using linear projection.
+
+    Algorithm:
+        1. If method is 'pca', compute the SVD of the centered points and project 
+           onto the top k principal components.
+        2. If method is 'random', generate a random orthogonal basis and project.
+        3. If a custom projection_matrix is provided, apply it directly.
+
     Args:
-        points: (n_points, ambient_dim) array of coordinates.
-        target_dimension: Desired ambient dimension.
-        method: Projection method ('pca', 'random', or 'identity').
-        projection_matrix: Optional custom projection matrix.
-        random_state: Seed for random projection.
+        points: (N, D) array of input coordinates.
+        target_dimension: The desired output dimension k.
+        method: 'pca', 'random', or 'identity'.
+        projection_matrix: Optional custom (D, k) matrix.
+        random_state: Seed for reproducibility in random projections.
 
     Returns:
-        The result of the projection.
+        ProjectionResult: Object containing projected points and the projection matrix.
 
-    Raises:
-        ValueError: If inputs are invalid or method is unknown.
+    Use When:
+        - Reducing high-dimensional data for visualization.
+        - Simplifying embedding checks for complexes that live in high-dimensional 
+          ambient spaces but have low intrinsic dimension.
+
+    Example:
+        proj = project_coordinates(big_data, target_dimension=2, method='pca')
+        plt.scatter(proj.points[:, 0], proj.points[:, 1])
     """
     pts = np.asarray(points, dtype=np.float64)
     if pts.ndim != 2:

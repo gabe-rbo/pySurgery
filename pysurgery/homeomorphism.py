@@ -29,8 +29,42 @@ import sympy as sp
 
 @dataclass
 class HomeomorphismResult:
-    """Structured decision object used by dimension-aware analyzers."""
+    """Structured result object encoding homeomorphism analysis across dimensions.
 
+    Overview:
+        A HomeomorphismResult encodes the decision on whether two topological 
+        spaces X and Y are homeomorphic. It provides a definitive True/False/None 
+        status along with a detailed reasoning trail, evidence from invariants, 
+        and mathematical certificates (e.g., isometry matrices).
+
+    Key Concepts:
+        - **Homeomorphism**: A continuous bijection with a continuous inverse.
+        - **Invariants**: Mathematical properties (Homology, π₁, etc.) used to 
+          distinguish spaces.
+        - **Classification Theorems**: Geometric results (Classification of Surfaces, 
+          Freedman's Theorem) used to prove equivalence.
+        - **Certificates**: Concrete proof artifacts (e.g., isometry matrices for 
+          intersection forms).
+
+    Common Workflows:
+        1. **Analyzer Execution** → dimension-specific analyzer returns this object.
+        2. **Status Check** → Check if status is 'success' and is_homeomorphic is True.
+        3. **Evidence Review** → Inspect the 'evidence' list for invariant matches.
+        4. **Automation** → Use 'theorem_tag' for routing in larger verification pipelines.
+
+    Attributes:
+        status (str): Decision status ('success', 'impediment', 'inconclusive', 'surgery_required').
+        is_homeomorphic (bool | None): The final decision if definitive.
+        reasoning (str): Human-readable explanation.
+        theorem (str): The specific classification theorem applied.
+        evidence (list[str]): List of invariant-matching facts.
+        missing_data (list[str]): Invariants needed for a definitive answer.
+        assumptions (list[str]): Mathematical assumptions (e.g., 'simply connected').
+        certificates (dict): Proof artifacts (matrices, presentations, etc.).
+        exact (bool): Whether the decision is mathematically exact (True) or heuristic (False).
+        theorem_tag (str): Machine-readable identifier for the applied theorem.
+        contract_version (str): Version of the analyzer contract.
+    """
     status: Literal["success", "impediment", "inconclusive", "surgery_required"]
     is_homeomorphic: bool | None
     reasoning: str
@@ -1151,12 +1185,29 @@ def analyze_homeomorphism_1d_result(
     allow_approx: bool = False,
     backend: str = "auto",
 ) -> HomeomorphismResult:
-    """
-    Analyzes the potential for homeomorphism between two 1-dimensional manifolds.
-    
-    All closed 1-manifolds are disjoint unions of circles (S^1).
-    Two closed 1-manifolds are homeomorphic if and only if they have the same
-    number of components (rank of H_0).
+    """Classify 1D manifolds (circles) via homology.
+
+    What is Being Computed?:
+        Determines if two 1-dimensional manifolds are homeomorphic. All closed 1-manifolds 
+        are disjoint unions of circles (S¹).
+
+    Algorithm:
+        1. Extract H_0 and H_1 ranks.
+        2. Verify both spaces represent a union of circles (H_0 rank == H_1 rank).
+        3. Compare H_0 ranks (number of components).
+
+    Preserved Invariants:
+        - Number of components: Homeomorphic 1-manifolds must have the same number of connected components.
+        - Euler Characteristic: χ = rank(H_0) - rank(H_1) = 0 for any union of circles.
+
+    Args:
+        c1: ChainComplex for the first 1-manifold.
+        c2: ChainComplex for the second 1-manifold.
+        allow_approx: If True, allow fallback for non-exact homology.
+        backend: 'auto', 'julia', or 'python'.
+
+    Returns:
+        HomeomorphismResult: Success if H_0 ranks match.
     """
     try:
         h0_1 = c1.homology(0)
@@ -1222,26 +1273,50 @@ def analyze_homeomorphism_2d_result(
     cup_product_signature_2: dict | None = None,
     backend: str = "auto",
 ) -> HomeomorphismResult:
-    """
-    Analyzes the potential for homeomorphism between two 2D surfaces.
-
-    Based on the Classification of Closed Surfaces:
-    Two surfaces are homeomorphic if and only if they have the same:
-    1. Euler characteristic
-    2. Orientability
-
+    """Classify homeomorphism of two closed 2D surfaces using classical invariants.
+    
+    What are Surfaces?:
+        A closed (compact, without boundary) 2D surface is a 2-dimensional manifold. Examples: 
+        spheres, tori, projective planes, Klein bottles. The Classification Theorem (1925) states: 
+        Two closed surfaces are homeomorphic ⟺ they have the same orientability and genus (or Euler characteristic).
+    
+    Algorithm:
+        1. Compute H_2 (determines orientability): orientable ⟺ rank(H_2) = 1
+        2. Compute H_1 rank (determines genus/crosscap count)
+        3. Compute H_1 torsion (distinguishes orientable vs non-orientable surfaces with same genus)
+        4. Compare invariants; if all match → homeomorphic; otherwise → NOT homeomorphic
+    
+    Preserved Invariants (Complete Invariant Set for Surfaces):
+        - Orientability: Rank(H_2) = 1 (orientable) vs 0 (non-orientable)
+        - Genus (orientable surfaces): g = rank(H_1) / 2
+        - Crosscap count (non-orientable): determined by H_1 rank and torsion
+        - Euler characteristic: χ = 2 - 2g (orientable) or χ = 2 - c (non-orientable)
+        - All higher topological invariants follow from these
+    
+    Args:
+        c1, c2: ChainComplex objects representing the two surfaces (must be 2D).
+        allow_approx: If True, continue with warnings if homology computation fails.
+        backend: 'auto', 'julia', or 'python' for homology computation.
+    
+    Returns:
+        HomeomorphismResult with status, is_homeomorphic (True/False/None), reasoning, evidence.
+    
+    Use When:
+        - Classifying 2D surfaces (spheres, tori, projective planes, Klein bottles, etc.)
+        - Two complexes are known to be 2D closed surfaces
+        - Need definitive homeomorphism decision
+    
+    Example:
+        sc1 = SimplicialComplex.from_mesh(mesh1)
+        sc2 = SimplicialComplex.from_mesh(mesh2)
+        cc1 = ChainComplex.from_simplicial(sc1)
+        cc2 = ChainComplex.from_simplicial(sc2)
+        result = analyze_homeomorphism_2d_result(cc1, cc2)
+        print(result.is_homeomorphic)  # True if same surface topology
+    
     References:
         Radó, T. (1925). Über den Begriff der Riemannschen Fläche. 
         Acta Litt. Sci. Szeged, 2, 101-121.
-
-    Two closed surfaces are homeomorphic if and only if they have:
-    1. The same orientability (H_2 = Z vs H_2 = 0).
-    2. The same Euler characteristic (or genus).
-
-    Returns
-    -------
-    is_homeomorphic : bool
-    reasoning : str
     """
     try:
         r2_1, _ = c1.homology(2)
@@ -1382,12 +1457,42 @@ def analyze_homeomorphism_3d_result(
     recognition_certificate: ThreeManifoldRecognitionCertificate | dict | None = None,
     backend: str = "auto",
 ) -> HomeomorphismResult:
-    """
-    Analyzes the potential for homeomorphism between two 3-dimensional manifolds.
+    """Classify 3D manifolds using Geometrization and fundamental groups.
 
-    Warning: 3-manifolds are classified by Thurston's Geometrization (Perelman, 2003).
-    Algebraic topology alone (homology) is insufficient to prove homeomorphism in general
-    (e.g., Poincare homology spheres have the same homology as S^3 but different fundamental groups).
+    What is Being Computed?:
+        Determines if two 3-dimensional manifolds are homeomorphic. This utilizes 
+        Thurston's Geometrization Theorem (proved by Perelman).
+
+    Algorithm:
+        1. Compare homology H_n for n=0..3.
+        2. Check for fundamental group (π₁) isomorphism.
+        3. Verify homology sphere conditions (H_0=ℤ, H_1=0, H_2=0, H_3=ℤ).
+        4. Apply the Poincaré Conjecture if π₁ is trivial.
+        5. Use ThreeManifoldRecognitionCertificate for geometric classification.
+
+    Preserved Invariants:
+        - Fundamental Group (π₁): The primary invariant for 3-manifolds.
+        - Homology Groups (H_n): Necessary but not sufficient.
+        - Prime Decomposition: Unique decomposition into prime manifolds.
+
+    Args:
+        c1, c2: ChainComplex objects for the 3-manifolds.
+        allow_approx: If True, allow approximate/heuristic invariants.
+        pi1_1, pi1_2: Optional fundamental group presentations.
+        cohomology_signature_*: Optional cohomology ring data.
+        recognition_certificate: Certificate from geometric recognition engines.
+        backend: 'auto', 'julia', or 'python'.
+
+    Returns:
+        HomeomorphismResult: Definite answer if Poincaré Conjecture or certificate applies.
+
+    Use When:
+        - Analyzing 3D manifolds like Lens spaces, Poincaré spheres, or hyperbolic 3-manifolds.
+        - Working with geometric recognition outputs.
+
+    References:
+        Perelman, G. (2003). The entropy formula for the Ricci flow and its geometric applications. 
+        arXiv preprint math/0211159.
     """
     rec_cert = _normalize_3d_recognition_certificate(recognition_certificate)
     # Check basic homology equivalence (exact-only for certifying statements).
@@ -1640,9 +1745,44 @@ def analyze_homeomorphism_high_dim_result(
     product_assembly_certificate: ProductAssemblyCertificate | dict | None = None,
     backend: str = "auto",
 ) -> HomeomorphismResult:
-    """
-    Analyzes homeomorphism for high-dimensional manifolds (n >= 5) using the s-Cobordism Theorem
-    and Smale's Generalized Poincare Conjecture (1961).
+    """Classify high-dimensional manifolds (n ≥ 5) via Surgery Theory.
+
+    What is Being Computed?:
+        Determines homeomorphism for manifolds in dimensions 5 and above. This is the 
+        main engine for Surgery Theory classification.
+
+    Algorithm:
+        1. Check homology and cohomology equivalence.
+        2. Evaluate fundamental group and its Whitehead group Wh(π₁).
+        3. Compute Whitehead torsion τ(f) to check for simple homotopy equivalence.
+        4. Evaluate Wall surgery obstructions L_n(π₁) to check for h-cobordism.
+        5. Apply the s-Cobordism Theorem: simple homotopy equivalence + vanishing obstruction 
+           implies homeomorphism.
+
+    Preserved Invariants:
+        - Whitehead Torsion: Obstruction to simple homotopy equivalence.
+        - Wall Obstruction: Obstruction to completing surgery to a homotopy equivalence.
+        - h-Cobordism: Homeomorphism up to a cobordism that is a homotopy equivalence.
+
+    Args:
+        c1, c2: ChainComplex objects.
+        dim: Dimension n ≥ 5.
+        pi1: Fundamental group presentation.
+        whitehead_group: Pre-computed Whitehead group data.
+        wall_obstruction: Pre-computed L-group obstruction.
+        homotopy_completion_certificate: Formal certificate of homotopy equivalence.
+        backend: 'auto', 'julia', or 'python'.
+
+    Returns:
+        HomeomorphismResult: Result of the s-cobordism/surgery analysis.
+
+    Use When:
+        - Classifying manifolds where the Whitney trick is available (n ≥ 5).
+        - Verifying s-cobordisms between high-dimensional manifolds.
+
+    References:
+        Smale, S. (1961). Generalized Poincaré's conjecture in dimensions greater than four. 
+        Annals of Mathematics, 391-406.
     """
 
     def _is_nontrivial_product_descriptor(desc: object | None) -> bool:

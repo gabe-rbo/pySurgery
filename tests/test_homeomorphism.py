@@ -1,3 +1,17 @@
+"""Tests for the high-level Homeomorphism analysis API.
+
+Overview:
+    This suite verifies the end-to-end homeomorphism detection pipeline for 
+    2D, 3D, 4D, and high-dimensional manifolds. It covers exact matches, 
+    impediment detection (e.g., parity mismatch), and inconclusive results 
+    due to missing data.
+
+Key Concepts:
+    - **Classification Theorems**: Freedman's theorem (4D), Surface classification (2D), 
+      Geometrization (3D).
+    - **Impediments**: Invariants that prove non-homeomorphism (Homology, Cup Product).
+    - **Decision DAG**: The sequence of checks performed to reach a verdict.
+"""
 import numpy as np
 import pytest
 import scipy.sparse as sp
@@ -31,6 +45,20 @@ from pysurgery.wall_groups import ObstructionResult
 
 
 def test_analyze_homeomorphism_4d_indefinite():
+    """Verify homeomorphism detection for indefinite 4-manifolds.
+
+    What is Being Computed?:
+        The homeomorphism status of two simply-connected 4-manifolds with 
+        indefinite intersection forms.
+
+    Algorithm:
+        1. Construct hyperbolic plane matrices (indefinite).
+        2. Call analyze_homeomorphism_4d with simple-connectivity assumed.
+        3. Verify the result is True (isomorphic forms).
+
+    Preserved Invariants:
+        - Signature, Rank, and Parity (Type) of the intersection form.
+    """
     matrix1 = np.array([[0, 1], [1, 0]])
     form1 = IntersectionForm(matrix=matrix1, dimension=4)
 

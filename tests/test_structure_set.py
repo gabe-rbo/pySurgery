@@ -1,3 +1,18 @@
+"""Test suite for the Algebraic Surgery Structure Set computations.
+
+Overview:
+    This module tests the `StructureSet` class, which manages the surgery exact sequence:
+    ... → L_{n+1}(π) → S(M) → [M, G/TOP] → L_n(π).
+    It verifies normal invariant computations, L-group obstruction handling, and 
+    exact sequence evaluation for various manifold dimensions and fundamental groups.
+
+Key Concepts:
+    - **Surgery Exact Sequence**: The primary tool for classifying manifolds within a homotopy type.
+    - **Normal Invariants [M, G/TOP]**: Represented here by chain complex homology over Z and Z_2.
+    - **L-Theory Obstructions**: Obstructions to completing surgery to a homeomorphism.
+    - **Structure Set S(M)**: The set of manifold structures on a homotopy type.
+"""
+
 import numpy as np
 import scipy.sparse as sp
 import pytest
@@ -9,6 +24,18 @@ from pysurgery.wall_groups import ObstructionResult
 
 
 def test_compute_normal_invariants_includes_ext_z2_term():
+    """Verify that normal invariant calculation correctly identifies torsion terms.
+
+    What is Being Computed?:
+        Computes the normal invariants of a small chain complex, ensuring both 
+        free parts (Z) and torsion parts (Z_2) are captured in the report.
+
+    Algorithm:
+        1. Build a 3-dimensional chain complex with H_1 = Z_2 and H_2 = Z.
+        2. Initialize a `StructureSet` for dimension 6.
+        3. Call `compute_normal_invariants` and check for rank strings.
+        4. Validate `compute_normal_invariants_result` returns typed data.
+    """
     # Build a tiny chain complex with H_1 torsion Z_2 and H_2 free rank 1.
     # d1 = 0, d2 = [2], d3 = 0.
     d1 = sp.csr_matrix(np.zeros((1, 1), dtype=np.int64))
@@ -32,6 +59,11 @@ def test_compute_normal_invariants_includes_ext_z2_term():
 
 
 def test_structure_set_accepts_trivial_group_aliases():
+    """Verify that 'trivial' is a valid alias for the trivial fundamental group.
+
+    What is Being Computed?:
+        Tests the exact sequence evaluation for π=1 using the 'trivial' string alias.
+    """
     s = StructureSet(dimension=5, fundamental_group="trivial")
     out = s.evaluate_exact_sequence()
     assert "SURGERY EXACT SEQUENCE" in out
@@ -42,6 +74,12 @@ def test_structure_set_accepts_trivial_group_aliases():
 
 
 def test_structure_set_rejects_non_trivial_group_without_backend():
+    """Verify handling of non-simply-connected groups when backends are missing.
+
+    What is Being Computed?:
+        Ensures the structure set correctly reports partial computability for π=Z
+        when the necessary L-theory solver (e.g., Julia) is not active.
+    """
     s = StructureSet(dimension=5, fundamental_group="Z")
     out = s.evaluate_exact_sequence_result()
     assert not out.computable
@@ -50,12 +88,28 @@ def test_structure_set_rejects_non_trivial_group_without_backend():
 
 
 def test_structure_set_requires_dimension_at_least_5():
+    """Verify that surgery theory is only applied to high-dimensional manifolds (n >= 5).
+
+    What is Being Computed?:
+        Ensures a `StructureSetError` is raised for dimensions where surgery theory 
+        is not standard (n < 5).
+    """
     s = StructureSet(dimension=4, fundamental_group="1")
     with pytest.raises(StructureSetError):
         s.evaluate_exact_sequence()
 
 
 def test_structure_set_exact_sequence_carries_typed_wall_obstruction_states():
+    """Verify that explicit L-theory results are correctly integrated into the sequence.
+
+    What is Being Computed?:
+        Tests the passing of `ObstructionResult` objects into the structure set evaluator.
+
+    Algorithm:
+        1. Create dummy `ObstructionResult` objects for L_5 and L_6.
+        2. Pass them to `evaluate_exact_sequence_result`.
+        3. Assert that the resulting state reflects the obstruction values and certifications.
+    """
     s = StructureSet(dimension=5, fundamental_group="1")
     l5 = ObstructionResult(
         dimension=5,
@@ -90,6 +144,12 @@ def test_structure_set_exact_sequence_carries_typed_wall_obstruction_states():
 
 
 def test_structure_set_accepts_explicit_l_state_overrides():
+    """Verify that `LObstructionState` overrides are respected.
+
+    What is Being Computed?:
+        Checks if manually provided obstruction states correctly influence 
+        the sequence analysis.
+    """
     s = StructureSet(dimension=5, fundamental_group="1")
     l_n_state = LObstructionState(
         available=True,
@@ -109,6 +169,12 @@ def test_structure_set_accepts_explicit_l_state_overrides():
 
 
 def test_structure_set_reports_conflict_when_explicit_state_disagrees_with_obstruction():
+    """Verify conflict detection between redundant L-theory inputs.
+
+    What is Being Computed?:
+        Tests if providing both an `ObstructionResult` and a conflicting 
+        `LObstructionState` triggers a warning/conflict in the analysis.
+    """
     s = StructureSet(dimension=5, fundamental_group="1")
     l5 = ObstructionResult(
         dimension=5,
@@ -136,6 +202,11 @@ def test_structure_set_reports_conflict_when_explicit_state_disagrees_with_obstr
 
 
 def test_structure_set_nontrivial_branch_preserves_typed_states():
+    """Verify that typed obstruction states are preserved for non-trivial π.
+
+    What is Being Computed?:
+        Checks if provided states for π=Z are correctly propagated through the evaluator.
+    """
     s = StructureSet(dimension=7, fundamental_group="Z")
     state = LObstructionState(
         available=True,
@@ -150,6 +221,12 @@ def test_structure_set_nontrivial_branch_preserves_typed_states():
 
 
 def test_structure_set_nontrivial_branch_can_be_exact_with_full_typed_channels():
+    """Verify exact sequence completeness when all L-groups are provided.
+
+    What is Being Computed?:
+        Ensures that if both L_n and L_{n+1} states are provided, the sequence 
+        evaluation is marked as exact even for complex fundamental groups.
+    """
     s = StructureSet(dimension=9, fundamental_group="Z x Z_3")
     l_n_state = LObstructionState(
         available=True,

@@ -1,3 +1,19 @@
+"""Tests for the Homeomorphism Witness construction system.
+
+Overview:
+    This suite verifies the generation of HomeomorphismWitness objects across 
+    different dimensions (3D, 4D, and high-D). It ensures that certificates 
+    (isometry matrices, surgery sequence analysis, etc.) are correctly 
+    populated and valid.
+
+Key Concepts:
+    - **Homeomorphism Witness**: A bundle of mathematical evidence proving two spaces 
+      are homeomorphic.
+    - **Lattice Isometry**: For 4D manifolds, finding an isometry matrix between 
+      intersection forms.
+    - **Surgery Sequence**: For high-D manifolds, checking Whitehead torsion and 
+      Wall obstructions.
+"""
 import numpy as np
 import scipy.sparse as sp
 
@@ -16,6 +32,22 @@ from pysurgery.core.complexes import ChainComplex
 
 
 def test_build_4d_definite_homeomorphism_witness_contains_explicit_isometry_matrix():
+    """Verify that 4D witness construction returns an explicit isometry matrix.
+
+    What is Being Computed?:
+        An isometry matrix $U$ such that $U^T Q_1 U = Q_2$ for two definite 
+        intersection forms $Q_1, Q_2$.
+
+    Algorithm:
+        1. Define two isomorphic definite quadratic forms.
+        2. Call build_4d_homeomorphism_witness.
+        3. Assert the returned witness contains the isometry matrix.
+        4. Validate the matrix by applying the isometry.
+
+    Preserved Invariants:
+        - Intersection form (signature and type) — preserved by isometry.
+        - Kirby-Siebenmann invariant (ks) — checked for matching.
+    """
     q1 = np.array([[1, 0], [0, 1]], dtype=np.int64)
     u = np.array([[3, 2], [2, 1]], dtype=np.int64)
     q2 = u.T @ q1 @ u

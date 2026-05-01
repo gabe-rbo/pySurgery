@@ -1,3 +1,15 @@
+"""Tests for external library integrations and import scoping.
+
+Overview:
+    This suite verifies that pysurgery correctly interacts with external libraries 
+    (trimesh, gudhi, pytorch_geometric) and maintains proper import guards 
+    when these libraries are missing.
+
+Key Concepts:
+    - **Import Guards**: Graceful handling of optional dependencies.
+    - **Bridge Pattern**: Converting external mesh/graph formats to internal CW complexes.
+    - **Data Integrity**: Ensuring topological properties are preserved during conversion.
+"""
 import numpy as np
 import pytest
 import builtins

@@ -1,3 +1,16 @@
+"""Unit tests for the Julia bridge and high-performance backend orchestration.
+
+Overview:
+    This suite verifies the JuliaBridge singleton lifecycle, its interaction 
+    with the `juliacall` backend, and the correctness of various accelerated 
+    computations (Normal Surface residuals, Broad Phase pairing). It heavily 
+    utilizes monkeypatching to simulate different backend availability states.
+
+Key Concepts:
+    - **Singleton Pattern**: Ensures only one Julia runtime is initialized per process.
+    - **Lazy Initialization**: Backend components are loaded only when needed.
+    - **Mocked Backends**: Testing high-level logic without requiring a full Julia install.
+"""
 import pytest
 import numpy as np
 import scipy.sparse as sp
@@ -6,6 +19,16 @@ from pysurgery.bridge.julia_bridge import JuliaBridge, julia_engine
 
 
 def test_julia_bridge_singleton_identity():
+    """Verify that JuliaBridge correctly implements the Singleton pattern.
+
+    What is Being Computed?:
+        Object identity of multiple JuliaBridge instantiations.
+
+    Algorithm:
+        1. Instantiate two JuliaBridge objects.
+        2. Assert they refer to the same memory address.
+        3. Assert they match the global julia_engine instance.
+    """
     a = JuliaBridge()
     b = JuliaBridge()
     assert a is b
@@ -13,6 +36,13 @@ def test_julia_bridge_singleton_identity():
 
 
 def test_julia_bridge_require_julia_behavior():
+    """Verify the error handling of require_julia() based on backend availability.
+
+    Algorithm:
+        1. Check julia_engine.available.
+        2. If available, ensure require_julia() returns silently.
+        3. If unavailable, ensure it raises a SurgeryError.
+    """
     if julia_engine.available:
         # Should not raise when backend is available.
         julia_engine.require_julia()
@@ -24,6 +54,13 @@ def test_julia_bridge_require_julia_behavior():
 
 
 def test_julia_bridge_warmup_unavailable_is_nonfatal(monkeypatch):
+    """Ensure that calling warmup() on an unavailable backend returns a failed report without crashing.
+
+    Algorithm:
+        1. Mock julia_engine to simulate a missing Julia installation.
+        2. Call warmup().
+        3. Verify the report indicates failure but the process remains stable.
+    """
     monkeypatch.setattr(julia_engine, "_initialized", True, raising=False)
     monkeypatch.setattr(julia_engine, "_available", False, raising=False)
     monkeypatch.setattr(julia_engine, "error", "missing juliacall", raising=False)
@@ -35,6 +72,13 @@ def test_julia_bridge_warmup_unavailable_is_nonfatal(monkeypatch):
 
 
 def test_julia_bridge_warmup_full_executes_and_caches(monkeypatch):
+    """Verify that full warmup executes workloads exactly once and caches the result.
+
+    Algorithm:
+        1. Mock the internal workload runners of julia_engine.
+        2. Call warmup() twice.
+        3. Assert that workloads were called in the first turn and cached in the second.
+    """
     monkeypatch.setattr(julia_engine, "_initialized", True, raising=False)
     monkeypatch.setattr(julia_engine, "_available", True, raising=False)
     monkeypatch.setattr(julia_engine, "jl", object(), raising=False)
@@ -71,6 +115,16 @@ def test_julia_bridge_warmup_full_executes_and_caches(monkeypatch):
 
 
 def test_compute_normal_surface_residual_norms(monkeypatch):
+    """Validate the Julia-accelerated calculation of normal surface residual norms.
+
+    What is Being Computed?:
+        The Euclidean norms of the residuals (MxV) for a set of vectors V against a boundary matrix M.
+
+    Algorithm:
+        1. Define a sparse boundary matrix and a set of candidate vectors.
+        2. Mock the Julia backend to use a NumPy-based reference calculation.
+        3. Compare the output of julia_engine.compute_normal_surface_residual_norms with a local reference.
+    """
     matrix = sp.csr_matrix(np.array([[1, -1, 0], [0, 1, 1]], dtype=np.int64))
     vectors = np.array([[1, 0], [0, 1], [1, 1]], dtype=np.int64)
 
@@ -90,6 +144,16 @@ def test_compute_normal_surface_residual_norms(monkeypatch):
 
 
 def test_compute_broad_phase_pairs(monkeypatch):
+    """Validate the broad-phase collision detection logic in the Julia bridge.
+
+    What is Being Computed?:
+        A list of indices (i, j) for pairs of spheres that potentially intersect.
+
+    Algorithm:
+        1. Define centroids and radii for three spheres.
+        2. Mock the Julia backend to use a nested loop distance check.
+        3. Assert that only the intersecting pair (0, 1) is returned.
+    """
     centroids = np.array([[0.0, 0.0], [0.5, 0.0], [2.0, 0.0]], dtype=np.float64)
     radii = np.array([0.6, 0.6, 0.2], dtype=np.float64)
 

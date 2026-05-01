@@ -1,11 +1,35 @@
+"""Tests for Alpha Complex construction and persistent homology foundations.
+
+Overview:
+    This suite verifies the construction of Alpha Complexes from point cloud 
+    data using Delaunay triangulations and circumradius filtering. It ensures 
+    that the resulting complexes correctly capture the topology of the 
+    underlying shapes (S², S¹, etc.).
+
+Key Concepts:
+    - **Alpha Complex**: A subcomplex of the Delaunay triangulation consisting 
+      of simplices whose circumradius is below a threshold α.
+    - **Delaunay Triangulation**: A triangulation such that no point is inside 
+      the circumsphere of any simplex.
+    - **Nerve Theorem**: Ensures that the Alpha Complex is homotopy equivalent 
+      to the union of balls around the points.
+"""
 import numpy as np
 from pysurgery.core.complexes import SimplicialComplex
 
 def test_alpha_complex_tiny_S2():
-    """
-    Test Alpha Complex construction on a minimal 6-point octahedron 
-    embedding (homeomorphic to S2). This ensures the native Delaunay 
-    circumradius pipeline is verified with minimal computational load.
+    """Verify Alpha Complex construction for a 3D octahedron (S²).
+
+    What is Being Computed?:
+        The homology of an Alpha Complex built from 6 points on a sphere.
+
+    Algorithm:
+        1. Define 6 points representing the vertices of a regular octahedron.
+        2. Construct an Alpha Complex with α²=0.9 (captures faces but not the interior).
+        3. Compute homology groups H₀, H₁, and H₂.
+
+    Preserved Invariants:
+        - Betti numbers for S²: β₀=1, β₁=0, β₂=1.
     """
     # 6 points of a regular octahedron
     points = np.array([
@@ -32,7 +56,19 @@ def test_alpha_complex_tiny_S2():
     assert h0_rank == 1
 
 def test_alpha_complex_circle():
-    """Test Alpha Complex on a 2D circle."""
+    """Verify Alpha Complex construction for a 2D circle (S¹).
+
+    What is Being Computed?:
+        The homology of an Alpha Complex built from 30 points on a circle.
+
+    Algorithm:
+        1. Generate 30 points uniformly distributed on a unit circle.
+        2. Construct an Alpha Complex with α²=0.015.
+        3. Verify H₀=ℤ, H₁=ℤ.
+
+    Preserved Invariants:
+        - Betti numbers for S¹: β₀=1, β₁=1.
+    """
     t = np.linspace(0, 2*np.pi, 30, endpoint=False)
     points = np.column_stack([np.cos(t), np.sin(t)])
     
@@ -47,7 +83,19 @@ def test_alpha_complex_circle():
     assert h0_rank == 1
 
 def test_alpha_complex_non_convex_consistency():
-    """Test that alpha complex correctly captures non-convex shapes compared to convex hull."""
+    """Verify that Alpha Complexes capture non-convex shapes correctly.
+
+    What is Being Computed?:
+        The Euler characteristic of an Alpha Complex for a 'C'-shaped point cloud.
+
+    Algorithm:
+        1. Generate points along a partial circle ('C' shape).
+        2. Construct an Alpha Complex with a small α².
+        3. Verify that the result is contractible (χ=1).
+
+    Preserved Invariants:
+        - Contractibility (homotopy type of a point) is preserved for a simple arc.
+    """
     # Points in a 'C' shape
     t = np.linspace(0, 1.5*np.pi, 50)
     points = np.column_stack([np.cos(t), np.sin(t)])

@@ -6,6 +6,27 @@ from .wall_groups import ObstructionResult, WallGroupL, l_group_symbol
 
 
 class NormalInvariantsResult(BaseModel):
+    """Result of computing the set of normal invariants [M, G/TOP].
+
+    Overview:
+        NormalInvariantsResult stores the ranks of the group of normal invariants
+        for a manifold M. These invariants represent the fiber homotopy 
+        equivalence classes of topological bundle maps that can be framed for 
+        surgery.
+
+    Key Concepts:
+        - **[M, G/TOP]**: The set of normal invariants, which in the topological 
+          category corresponds to the set of surgery problems on M.
+        - **Sullivan's Formula**: Relates normal invariants to the cohomology 
+          of M with coefficients in Z and Z/2Z.
+
+    Attributes:
+        dimension (int): Manifold dimension.
+        rank_Z (int): The rank of the free part of the normal invariants.
+        rank_Z2 (int): The rank of the Z_2 part of the normal invariants.
+        notes (List[str]): Additional observations about the computation.
+        exact (bool): Whether the computation is considered exact.
+    """
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     dimension: int
@@ -25,6 +46,34 @@ class NormalInvariantsResult(BaseModel):
 
 
 class SurgeryExactSequenceResult(BaseModel):
+    """Result of evaluating the Surgery Exact Sequence.
+
+    Overview:
+        This class captures the state of the surgery exact sequence for a manifold:
+        L_{n+1}(π) → S_TOP(M) → [M, G/TOP] → L_n(π).
+        It provides a summary of the Wall groups, the normal invariants, 
+        and the obstructions encountered.
+
+    Key Concepts:
+        - **Surgery Exact Sequence**: A sequence of abelian groups and maps 
+          that classifies manifold structures.
+        - **S_TOP(M)**: The structure set, which we aim to understand.
+        - **L-groups**: The obstructions to completing surgery.
+
+    Common Workflows:
+        1. **Report Generation** → use to_report() for a human-readable summary.
+        2. **State Analysis** → check l_n_state and l_n_plus_1_state for obstruction details.
+
+    Attributes:
+        dimension (int): Manifold dimension.
+        fundamental_group (str): π₁ of the manifold.
+        l_n_symbol (str): Symbol for L_n(π₁).
+        l_n_plus_1_symbol (str): Symbol for L_{n+1}(π₁).
+        computable (bool): True if the sequence was successfully evaluated.
+        exact (bool): True if the result is mathematically exact.
+        analysis (List[str]): Step-by-step analysis of the sequence.
+        normal_invariants (Optional[NormalInvariantsResult]): Computed normal invariants.
+    """
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     dimension: int
@@ -55,6 +104,21 @@ class SurgeryExactSequenceResult(BaseModel):
 
 
 class LObstructionState(BaseModel):
+    """State of a specific L-group obstruction in the surgery sequence.
+
+    Overview:
+        LObstructionState provides a snapshot of an obstruction element or group 
+        at a specific point in the surgery sequence, recording whether it 
+        obstructs surgery or is certified zero.
+
+    Attributes:
+        available (bool): True if data for this obstruction is provided.
+        computable (bool): True if the obstruction can be calculated.
+        obstructs (Optional[bool]): True if the obstruction is non-zero.
+        zero_certified (bool): True if the obstruction is definitely zero.
+        value (Optional[int]): Scalar value of the obstruction.
+        modulus (Optional[int]): Modulus of the value.
+    """
     available: bool = False
     computable: bool = False
     exact: bool = False
@@ -96,18 +160,28 @@ class LObstructionState(BaseModel):
 
 
 class StructureSet(BaseModel):
-    """
-    Implementation of the topological Structure Set S_TOP(M).
+    """Implementation of the topological Structure Set S_TOP(M).
 
-    This mathematically models the Surgery Exact Sequence:
-    ... -> L_{n+1}(pi_1) -> S_TOP(M) -> [M, G/TOP] -> L_n(pi_1)
+    Overview:
+        The Structure Set S_TOP(M) classifies manifolds homotopy equivalent 
+        to M. This class implements the Surgery Exact Sequence as defined 
+        by Wall, providing tools to compute normal invariants and evaluate 
+        the obstructions in the L-groups.
 
-    References:
-        Wall, C. T. (1970). Surgery on compact manifolds. 
-        Academic Press.
+    Key Concepts:
+        - **Structure Set (S_TOP)**: The set of pairs (N, f) where N is a manifold 
+          and f: N -> M is a homotopy equivalence, modulo h-cobordism.
+        - **Surgery Exact Sequence**: ... -> L_{n+1}(π) -> S_TOP(M) -> [M, G/TOP] -> L_n(π).
+        - **Normal Invariants**: The "bridge" between homotopy theory and manifold theory.
 
-    It determines the exact number of distinct manifolds that are
-    homotopy equivalent to M but NOT homeomorphic to M.
+    Common Workflows:
+        1. **Initialization** → StructureSet(dimension=5, fundamental_group="1")
+        2. **Normal Invariants** → compute_normal_invariants(chain_complex)
+        3. **Sequence Evaluation** → evaluate_exact_sequence_result()
+
+    Attributes:
+        dimension (int): The dimension of the manifold M (n).
+        fundamental_group (str): The fundamental group π₁ (default "1").
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -120,21 +194,49 @@ class StructureSet(BaseModel):
         return symbol.strip().lower() in {"1", "trivial", "e"}
 
     def compute_normal_invariants(self, chain: ChainComplex) -> str:
-        """
-        Computes the rank of the set of Normal Invariants [M, G/TOP] via Sullivan's characteristic variety formula.
+        """Computes the rank of the set of Normal Invariants [M, G/TOP].
 
-        References:
-            Sullivan, D. (1966). Triangulating homotopy equivalences [Doctoral dissertation, Princeton University].
+        What is Being Computed?:
+            The ranks of the group of normal invariants [M, G/TOP] using 
+            Sullivan's characteristic variety formula.
 
-        For a simply connected manifold:
-        [M, G/TOP] is isomorphic to Sum_{i>=1} H^{4i}(M; Z) + Sum_{i>=1} H^{4i-2}(M; Z_2)
-        modulo some 2-torsion extensions. We compute the free rank and Z_2 rank.
+        Algorithm:
+            1. Iterate through cohomology groups H^k(M).
+            2. Sum ranks of H^{4i}(M; Z) for the free part.
+            3. Sum ranks of H^{4i-2}(M; Z_2) (including Ext terms) for the Z_2 part.
+
+        Preserved Invariants:
+            - Normal invariants are stable under manifold homeomorphisms.
+            - They depend only on the homotopy type and the topological bundle theory.
+
+        Args:
+            chain: The ChainComplex representing the manifold M.
+
+        Returns:
+            str: A formatted report of the normal invariant ranks.
         """
         return self.compute_normal_invariants_result(chain).to_report()
 
     def compute_normal_invariants_result(
         self, chain: ChainComplex, backend: str = "auto"
     ) -> NormalInvariantsResult:
+        """Computes normal invariants and returns a structured result.
+
+        What is Being Computed?:
+            A NormalInvariantsResult containing the Z and Z_2 ranks of [M, G/TOP].
+
+        Algorithm:
+            Uses the Sullivan characteristic formula:
+            - Free rank = Sum rank(H^{4k}(M; Z))
+            - Z_2 rank = Sum rank(H^{4k-2}(M; Z_2))
+
+        Args:
+            chain: ChainComplex of the manifold.
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            NormalInvariantsResult: Structured data for the normal invariants.
+        """
         n = self.dimension
         rank_Z = 0
         rank_Z2 = 0
@@ -158,8 +260,14 @@ class StructureSet(BaseModel):
         )
 
     def evaluate_exact_sequence(self) -> str:
-        """
-        Evaluates the sequence to determine the size and nature of the Structure Set S_TOP(M).
+        """Evaluates the sequence to determine the size of S_TOP(M).
+
+        What is Being Computed?:
+            A human-readable report analyzing the surgery exact sequence 
+            and its implications for the structure set.
+
+        Returns:
+            str: Analysis report.
         """
         return self.evaluate_exact_sequence_result().to_report()
 
@@ -172,6 +280,37 @@ class StructureSet(BaseModel):
         l_n_plus_1_state: Optional[LObstructionState] = None,
         backend: str = "auto",
     ) -> SurgeryExactSequenceResult:
+        """Evaluates the surgery exact sequence and returns a structured result.
+
+        What is Being Computed?:
+            The full state of the surgery exact sequence, integrating 
+            Wall group obstructions and normal invariants.
+
+        Algorithm:
+            1. Resolve the states of L_n and L_{n+1} from provided obstructions or states.
+            2. If π₁ is non-trivial, apply non-simply-connected logic and 
+               check assembly map status.
+            3. For simply connected manifolds (n >= 5), apply the classical sequence.
+            4. Identify obstructions and actions that determine the size of S_TOP(M).
+
+        Preserved Invariants:
+            - The structure set S_TOP(M) is a topological invariant of M.
+
+        Args:
+            normal_invariants: Pre-computed normal invariants.
+            l_n_obstruction: Obstruction in L_n(π₁).
+            l_n_plus_1_obstruction: Obstruction in L_{n+1}(π₁).
+            l_n_state: Explicit state for L_n.
+            l_n_plus_1_state: Explicit state for L_{n+1}.
+            backend: Computation backend.
+
+        Returns:
+            SurgeryExactSequenceResult: The evaluated state of the sequence.
+
+        Use When:
+            - Classifying manifolds homotopy equivalent to M.
+            - Determining if a specific homotopy equivalence is a homeomorphism.
+        """
         n = self.dimension
 
         def _resolve_state(
@@ -399,7 +538,7 @@ class StructureSet(BaseModel):
             k: Dimension index.
 
         Returns:
-            A string representing the L-group structure.
+            str: Symbol representing the L-group (e.g., 'Z', 'Z_2', '0').
         """
         if k % 4 == 0:
             return "Z"

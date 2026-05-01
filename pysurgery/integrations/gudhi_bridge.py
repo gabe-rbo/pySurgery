@@ -104,17 +104,48 @@ def _extract_complex_data_python(simplex_tree, simplices=None, max_dim=None):
 
 
 def extract_complex_data(simplex_tree, *, include_metadata: bool = True, backend: str = "auto"):
-    """Extract boundary matrices, cell counts, and simplex index maps from a simplex tree.
+    """Extract boundary matrices, cell counts, and simplex index maps from a GUDHI simplex tree.
+
+    What is Being Computed?:
+        Translates a GUDHI SimplexTree into a format compatible with pysurgery's 
+        ChainComplex, extracting boundary matrices ∂_k, cell counts per dimension, 
+        and mappings between simplex tuples and their matrix indices.
+
+    Algorithm:
+        1. Enumerate all simplices in the skeleton of the tree.
+        2. If Julia is available, delegate boundary assembly to `julia_engine`.
+        3. If Julia is unavailable or Python is requested, fallback to pure-Python assembly:
+           a. Group simplices by dimension and sort them.
+           b. For each k-simplex, identify its (k-1)-faces and their indices.
+           c. Populate sparse boundary matrices with appropriate signs (-1)^i.
+
+    Preserved Invariants:
+        - The resulting ChainComplex has identical homology groups H_n to the original SimplexTree.
+        - Preserves orientation induced by vertex ordering.
 
     Args:
-        simplex_tree: The GUDHI simplex tree.
-        include_metadata (bool): Whether to include full simplex lists and maps.
-            Defaults to True.
-        backend: 'auto', 'julia', or 'python'.
+        simplex_tree: The GUDHI simplex tree object.
+        include_metadata (bool): If True, returns full simplex lists and index maps. 
+            Set to False for pure memory efficiency when only boundaries are needed.
+        backend (str): Computational backend ('auto', 'julia', or 'python').
 
     Returns:
-        tuple: A tuple containing boundaries, cells, dim_simplices, and
-            simplex_to_idx.
+        tuple: (boundaries, cells, dim_simplices, simplex_to_idx)
+            - boundaries (dict): Mapping k -> sparse matrix ∂_k.
+            - cells (dict): Mapping k -> count of k-simplices.
+            - dim_simplices (dict): Mapping k -> list of k-simplex tuples.
+            - simplex_to_idx (dict): Mapping k -> {simplex_tuple: index}.
+
+    Use When:
+        - Transitioning from GUDHI's TDA-focused tools to pysurgery's surgery theory kernels.
+        - You need manual access to boundary matrices of a filtered complex.
+        - Building a ChainComplex from geometry processed via GUDHI.
+
+    Example:
+        st = gudhi.SimplexTree()
+        # ... populate st ...
+        mats, counts, _, _ = extract_complex_data(st, include_metadata=False)
+        complex_c = ChainComplex(boundaries=mats)
     """
     simplices = list(simplex_tree.get_skeleton(simplex_tree.dimension()))
     max_dim = simplex_tree.dimension()
@@ -184,19 +215,43 @@ def extract_boundary_chain_data(simplex_tree):
 def simplex_tree_to_intersection_form(
     simplex_tree, allow_approx: bool = False, backend: str = "auto"
 ) -> IntersectionForm:
-    """Derives the rigorous Intersection Form Q for a 4D manifold directly from its GUDHI SimplexTree filtration.
+    """Derives the rigorous Intersection Form Q for a 4D manifold directly from its GUDHI SimplexTree.
+
+    What is Being Computed?:
+        Computes the intersection form Q: H^2(M; Z) × H^2(M; Z) → Z for a 4-dimensional 
+        homology manifold. This captures the pairing (α ∪ β) ∩ [M] where [M] is the fundamental class.
+
+    Algorithm:
+        1. Extract the chain complex data from the SimplexTree.
+        2. Compute a basis for the 2nd cohomology group H^2(M; Z).
+        3. Identify the fundamental class [M] in H_4(M; Z) (the nullspace of ∂_4).
+           - Prefers Julia for exact nullspace; falls back to SymPy or SVD (if allow_approx).
+        4. Compute the Alexander-Whitney cup product for every pair of basis elements.
+        5. Pair the resulting 4-cochains with the fundamental class [M].
+        6. Enforce symmetry and return the IntersectionForm object.
+
+    Preserved Invariants:
+        - The signature, rank, and parity of Q are homotopy invariants of the manifold.
+        - Characterizes the homotopy type of simply-connected 4-manifolds (Milnor/Freedman).
 
     Args:
-        simplex_tree: The GUDHI simplex tree.
-        allow_approx (bool): Whether to allow approximate computations.
-        backend: 'auto', 'julia', or 'python'.
+        simplex_tree: The GUDHI simplex tree representing the manifold.
+        allow_approx (bool): If True, allow numerical SVD for fundamental class extraction 
+            on massive/noisy complexes where exact algebra fails.
+        backend (str): Computational backend ('auto', 'julia', or 'python').
 
     Returns:
-        IntersectionForm: The derived intersection form.
+        IntersectionForm: The derived intersection form Q.
 
-    Raises:
-        HomologyError: If fundamental class extraction fails or cup product
-            matrix is not symmetric.
+    Use When:
+        - Analyzing the topology of 4-manifolds derived from point clouds or meshes.
+        - Computing the signature of a simplicial 4-complex.
+        - Differentiating non-homeomorphic 4-manifolds with identical Betti numbers.
+
+    Example:
+        Q = simplex_tree_to_intersection_form(st)
+        print(f"Signature: {Q.signature()}")
+        print(f"Is definite: {Q.is_definite()}")
     """
     # Normalize backend
     backend_norm = str(backend).lower().strip()

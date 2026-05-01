@@ -7,13 +7,26 @@ from .fundamental_group import FundamentalGroup, infer_standard_group_descriptor
 
 
 class Pi1Evidence(BaseModel):
-    """Evidence for fundamental group properties.
+    """Evidence for fundamental group properties and structure.
+
+    Overview:
+        Pi1Evidence packages diagnostic information about π₁(X) to determine 
+        if the group structure is suitable for downstream algebraic surgery 
+        operations (Phase 2).
+
+    Key Concepts:
+        - **Generator Mapping**: Tracking symbolic generators and their orientation.
+        - **Structural Inference**: Mapping a raw presentation to a known group family (e.g., ℤ).
+
+    Common Workflows:
+        1. **Diagnostics** → `build_pi1_evidence(pi1)`
+        2. **Readiness Check** → Used inside `evaluate_phase2_readiness()`
 
     Attributes:
-        generators (list[str]): List of generator names.
+        generators (list[str]): List of symbolic generator names.
         relation_count (int): Number of relations in the presentation.
-        orientation_character (dict[str, int]): Map from generator names to {1, -1}.
-        inferred_descriptor (str | None): Inferred standard group descriptor.
+        orientation_character (dict[str, int]): Map from generator names to {1, -1} (w₁).
+        inferred_descriptor (str | None): Inferred standard group descriptor (e.g., 'Z', '1').
     """
     generators: list[str] = Field(default_factory=list)
     relation_count: int = 0
@@ -22,13 +35,26 @@ class Pi1Evidence(BaseModel):
 
 
 class GroupRingContext(BaseModel):
-    """Context for group ring computations.
+    """Context for group ring computations and algebraic setup.
+
+    Overview:
+        GroupRingContext stores the validated metadata required to instantiate 
+        a group ring ℤ[π₁]. it includes the classified family and validation 
+        status of the group descriptor.
+
+    Key Concepts:
+        - **Descriptor Validation**: Ensuring the group string follows the required grammar.
+        - **Family Classification**: Categorizing groups (trivial, cyclic, etc.) for backend selection.
+
+    Common Workflows:
+        1. **Validation** → `build_group_ring_context("Z")`
+        2. **Metadata Injection** → Providing context to exact algebra engines.
 
     Attributes:
-        descriptor (str): The group descriptor string.
-        valid_descriptor (bool): Whether the descriptor is valid.
-        descriptor_message (str): Status message from descriptor validation.
-        family (str): The classified group family.
+        descriptor (str): The normalized group descriptor string.
+        valid_descriptor (bool): Whether the descriptor passed grammar validation.
+        descriptor_message (str): Detailed status or error message from validation.
+        family (str): The broad computational family (e.g., 'finite_cyclic').
     """
     descriptor: str
     valid_descriptor: bool

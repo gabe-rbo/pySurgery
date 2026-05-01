@@ -12,14 +12,31 @@ from ..bridge.julia_bridge import julia_engine
 
 
 class FundamentalGroup(BaseModel):
-    """Representation of the Fundamental Group pi_1(X) of a CW Complex.
-
+    """Presentation of the Fundamental Group π₁(X) = ⟨generators | relations⟩ of a CW complex.
+    
+    What is the Fundamental Group?:
+        The fundamental group π₁(X) measures 1-dimensional "holes" and is the first non-trivial 
+        homotopy group. It captures information about loops in the space:
+        - π₁(S¹) = ℤ (one independent loop around the circle)
+        - π₁(S²) = 1 (trivial; all loops contract on the sphere)
+        - π₁(torus) = ℤ ⊕ ℤ (two independent loops)
+        - π₁(RP²) = ℤ/2ℤ (nontrivial 2-torsion)
+    
+    Presentation Format:
+        Given as generators g₁, g₂, ... and relations r₁, r₂, ... such that 
+        π₁(X) ≅ ⟨g₁, g₂, ... | r₁, r₂, ...⟩.
+        Each relation is a word that equals the identity, e.g., a relation "aba^-1b^-1" means 
+        the commutator [a,b] = 1 in the group.
+    
+    Orientation Character (w₁):
+        Maps each generator to ±1, encoding non-orientability. A generator with w₁(g) = -1 
+        means traversing g reverses orientation (e.g., generators of Klein bottle's π₁).
+    
     Attributes:
-        generators: A list of generator names as strings.
-        relations: A list of relators, where each relator is a list of generator tokens.
-        orientation_character: A map from generator names to {1, -1} (w1 character).
+        generators: List of generator symbols (strings) representing independent elements.
+        relations: List of relations, where each is a list of tokens (strings like 'a', 'b^-1').
+        orientation_character: Dict[str → {1, -1}] recording orientation-reversing generators.
     """
-
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     generators: List[str]
@@ -327,12 +344,38 @@ def simplify_presentation(
 ) -> FundamentalGroup:
     """Simplify a finitely presented group using a deterministic Tietze-lite loop.
 
+    What is Being Computed?:
+        Reduces the complexity of a group presentation ⟨G | R⟩ by iteratively 
+        removing redundant generators and simplifying relations while preserving 
+        the abstract group isomorphism.
+
+    Algorithm:
+        1. Free reduction and cyclic reduction of all relators.
+        2. Eliminate "singleton" generators that appear in a relation of length 1 (g = 1).
+        3. Identify generators that appear exactly once in a relation and substitute 
+           them out (Tietze moves).
+        4. Canonicalize and deduplicate relators after each substitution.
+        5. Repeat until no further simplifications are possible or limit is reached.
+
+    Preserved Invariants:
+        - Group Isomorphism: The resulting presentation represents the same abstract group.
+        - All group-theoretic invariants (abelianization, center, etc.) remain unchanged.
+
     Args:
-        generators: Generator names in the current presentation.
-        relations: Relators as token lists (`g_i`, `g_i^-1`).
+        generators: List of generator names in the current presentation.
+        relations: Relators as lists of tokens (e.g., ['a', 'b', 'a^-1']).
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        A reduced presentation with canonicalized relators.
+        FundamentalGroup: A simplified presentation of the group.
+
+    Use When:
+        - A presentation is too large to interpret manually (e.g., after CW extraction).
+        - Preparing for isomorphism testing or abelianization.
+        - Reducing noise in π₁ calculations.
+
+    Example:
+        pi1_simple = simplify_presentation(['a', 'b'], [['a', 'b', 'a^-1', 'b^-1']])
     """
     gens = [normalize_word_token(g) for g in generators]
     rels = _normalize_relations([list(r) for r in relations])
@@ -367,12 +410,35 @@ def simplify_presentation(
 def infer_standard_group_descriptor(pi1: FundamentalGroup, backend: str = "auto") -> str | None:
     """Infer a conservative descriptor among {"1", "Z", "Z_n"} when provable.
 
+    What is Being Computed?:
+        Attempts to identify the abstract isomorphism class of a group from its 
+        presentation, focusing on trivial groups, free groups of rank 1, and cyclic groups.
+
+    Algorithm:
+        1. Simplify the presentation using Tietze moves.
+        2. If 0 generators remain, return "1" (trivial).
+        3. If 1 generator remains, check relator exponents to identify Z or Z_n.
+        4. If multiple generators remain, compute the Smith Normal Form of the 
+           abelianization to check if it's a direct product of cyclic groups.
+        5. Return a string like "Z x Z_2" or None if inconclusive.
+
+    Preserved Invariants:
+        - Isomorphism class of the group.
+
     Args:
         pi1: The fundamental group presentation to analyze.
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        A string descriptor if a standard form can be inferred, otherwise None.
+        str | None: A standard group descriptor or None if the group is not easily classifiable.
+
+    Use When:
+        - Classifying low-dimensional manifolds via their π₁.
+        - Automating topological comparisons.
+        - Providing human-readable summaries of fundamental groups.
+
+    Example:
+        desc = infer_standard_group_descriptor(pi1)  # "Z x Z" for a torus
     """
     simplified = simplify_presentation(
         list(pi1.generators), [list(rel) for rel in pi1.relations], backend=backend
@@ -491,11 +557,26 @@ def infer_standard_group_descriptor(pi1: FundamentalGroup, backend: str = "auto"
 
 
 class GroupPresentation(BaseModel):
-    """Structured group descriptor.
+    """Structured group descriptor and classification result.
+
+    Overview:
+        GroupPresentation provides a high-level classification of a finitely presented 
+        group (e.g., distinguishing between free groups, cyclic groups, or direct 
+        products). It translates raw generator/relation data into a human-readable 
+        and algebraically meaningful descriptor.
+
+    Key Concepts:
+        - **Kind**: The primary classification (e.g., 'Z', 'Z_n', 'Product').
+        - **Factors**: Individual group components in a direct product decomposition.
+        - **Normalization**: Standardizing the descriptor for consistent comparisons.
+
+    Common Workflows:
+        1. **Classification** → Returned by infer_standard_group_descriptor().
+        2. **String Representation** → Use normalized() to get a standard group name.
 
     Attributes:
-        kind: The type of group.
-        factors: Factor descriptors for product groups.
+        kind (str): The type of group (e.g., "1", "Z", "Z_n", "Product").
+        factors (List[str]): List of factor descriptors for product groups.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -858,14 +939,52 @@ def extract_pi_1_with_traces(
     mode: str | None = None,
     backend: str = "auto",
 ) -> Pi1PresentationWithTraces:
-    """Return pi_1 presentation with generator traces.
+    """Extract π₁ presentation from CW boundary maps, including generator traces (spatial origins).
+
+    What is Being Computed?:
+        Extracts π₁(X) = ⟨generators | relations⟩ from the 2-skeleton of a CW complex.
+        For a 2-complex, generators correspond to 1-cells and relations to 2-cell attaching maps.
+        Also returns Pi1GeneratorTrace objects showing which 1-cells correspond to each generator.
+
+    Algorithm:
+        1. From CW boundary matrices d₁ and d₂, read 1-cell labels and 2-cell attachments
+        2. Build a "word" for each 2-cell boundary describing which 1-cells appear and with what sign
+        3. These words become relators; the 1-cells become generators
+        4. Optionally apply Tietze moves (elementary simplifications) to reduce presentation
+        5. Compute orientation character w₁ (±1 per generator) if manifold is non-orientable
+
+    Preserved Invariants:
+        - π₁(X) is a homotopy invariant (homotopy equivalent complexes have isomorphic π₁)
+        - Presentations may differ by Tietze moves, but represent the same group
+        - Torsion structure detected: e.g., ℤ/2ℤ generators appear as relations of the form g²
 
     Args:
-        cw: The CW complex to analyze.
-        simplify: Whether to apply Tietze simplification.
-        generator_mode: 'raw' or 'optimized'.
-        mode: Alias for generator_mode.
-        backend: 'auto', 'julia', or 'python'.
+        cw: CWComplex to analyze.
+        simplify: If True (default), apply Tietze simplification to reduce generator count.
+        generator_mode: 'raw' (before simplification) or 'optimized' (after simplification).
+        mode: Alias for generator_mode (for backwards compatibility).
+        backend: 'auto', 'julia', or 'python' for boundary matrix computation.
+
+    Returns:
+        Pi1PresentationWithTraces with fields:
+            - generators: List of generator symbols
+            - relations: List of relations (words)
+            - traces: List of Pi1GeneratorTrace objects linking generators to 1-cells
+            - mode_used, generator_mode: Records which mode was used
+            - backend_used: Backend name used
+            - raw_generator_count, optimized_generator_count: Counts before/after simplification
+
+    Use When:
+        - Need spatial location/tracing of generators (e.g., which edges correspond to which generators)
+        - Computing homomorphisms from π₁ to other groups
+        - Studying group structure in detail
+        - Debugging presentations
+
+    Example:
+        traces = extract_pi_1_with_traces(cw, simplify=True)
+        for trace in traces.traces:
+            print(f"Generator {trace.generator} comes from 1-cell {trace.cell_index}")
+        π1 = FundamentalGroup(generators=traces.generators, relations=traces.relations)
     """
     actual_mode = _normalize_pi1_mode(generator_mode, mode)
     raw_generators, relations, traces, meta = _pi1_raw_data_python(cw, backend=backend)
@@ -920,7 +1039,44 @@ def extract_pi_1(
     mode: str | None = None,
     backend: str = "auto",
 ) -> FundamentalGroup:
-    """Compute a pi1 presentation from CW boundary maps."""
+    """Extract π₁ presentation from CW boundary maps as a FundamentalGroup object.
+
+    What is Being Computed?:
+        Extracts the fundamental group π₁(X) = ⟨generators | relations⟩ from the 2-skeleton
+        of a CW complex in the form of a FundamentalGroup (generators, relations, w₁ character).
+
+    Algorithm:
+        1. Call extract_pi_1_with_traces() to get raw presentation and traces
+        2. Extract generators, relations, and orientation character from traces
+        3. Return FundamentalGroup object (discarding spatial trace information)
+
+    Preserved Invariants:
+        - π₁ is a homotopy invariant: homotopy equivalent spaces have isomorphic fundamental groups
+        - Presentations may differ, but represent the same abstract group structure
+        - Torsion in π₁ (e.g., generators of finite order) is preserved
+
+    Args:
+        cw: CWComplex to analyze.
+        simplify: If True, apply Tietze simplification to reduce presentation size.
+        generator_mode: 'raw' or 'optimized' (controls simplifcation).
+        mode: Alias for generator_mode.
+        backend: 'auto', 'julia', or 'python'.
+
+    Returns:
+        FundamentalGroup: The presentation π₁(X) = ⟨generators | relations⟩ with orientation
+                         character (w₁) recording non-orientability info.
+
+    Use When:
+        - Need just the group structure, not spatial traces
+        - Computing derived invariants (abelianization, homology via Hurewicz)
+        - Checking if two spaces are non-homeomorphic via π₁
+        - Studying fundamental groups in algebraic topology
+
+    Example:
+        π1 = extract_pi_1(cw, simplify=True)
+        print(π1)  # Prints: < a, b | aba^-1b^-1 > for a torus
+        ab = π1.abelianization()  # ℤ ⊕ ℤ for torus
+    """
     traces = extract_pi_1_with_traces(
         cw, simplify=simplify, generator_mode=generator_mode, mode=mode, backend=backend
     )

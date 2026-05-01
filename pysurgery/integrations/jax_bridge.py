@@ -10,21 +10,39 @@ except ImportError:
 
 
 def _approximate_signature(matrix: jnp.ndarray, temp: float = 10.0):
-    """
-    A differentiable approximation of the signature of a symmetric matrix.
-    Uses a soft step function (tanh) on the eigenvalues.
+    """A differentiable approximation of the signature of a symmetric matrix.
 
-    Parameters
-    ----------
-    matrix : jnp.ndarray
-        The symmetric matrix.
-    temp : float
-        Temperature for the soft step. Higher is sharper (closer to exact signature).
+    What is Being Computed?:
+        Computes a continuous, differentiable proxy for the signature (n_+ - n_-) 
+        of a symmetric matrix. This is essential for gradient-based optimization 
+        of topological properties in neural networks.
 
-    Returns
-    -------
-    float
-        The approximated signature.
+    Algorithm:
+        1. Compute the eigenvalues of the symmetric matrix using `jnp.linalg.eigvalsh`.
+        2. Apply a soft step function `tanh(temp * λ)` to each eigenvalue λ.
+        3. Sum the results to approximate the difference between positive and 
+           negative eigenvalue counts.
+
+    Preserved Invariants:
+        - The approximation approaches the true integer signature as `temp` → ∞.
+        - Preserves the sign of the signature for sufficiently large `temp` and non-zero eigenvalues.
+
+    Args:
+        matrix: The symmetric matrix (jnp.ndarray).
+        temp: Temperature parameter. Higher values increase sharpness and 
+            accuracy but may lead to vanishing gradients.
+
+    Returns:
+        float: The approximated (soft) signature.
+
+    Use When:
+        - Defining a loss function that penalizes deviation from a target 
+          intersection form signature.
+        - Training "Topology-Aware" neural networks via backpropagation.
+        - Performing differentiable manifold optimization.
+
+    Example:
+        loss = (target_sig - _approximate_signature(predicted_Q, temp=20.0))**2
     """
     if not HAS_JAX:
         raise ImportError(
@@ -45,7 +63,42 @@ def _approximate_signature(matrix: jnp.ndarray, temp: float = 10.0):
 
 
 def exact_signature(matrix: np.ndarray, tol: float | None = None) -> int:
-    """Exact (non-differentiable) signature computed with NumPy eigenvalues."""
+    """Exact (non-differentiable) signature computed with NumPy eigenvalues.
+
+    What is Being Computed?:
+        Computes the classical signature of a symmetric bilinear form Q, defined 
+        as the number of positive eigenvalues minus the number of negative 
+        eigenvalues (n_+ - n_-).
+
+    Algorithm:
+        1. Symmetrize the input matrix: (A + A.T) / 2.
+        2. Compute real eigenvalues using `np.linalg.eigvalsh`.
+        3. Count eigenvalues greater than `tol` as positive.
+        4. Count eigenvalues less than `-tol` as negative.
+        5. Return the difference.
+
+    Preserved Invariants:
+        - Signature is a congruent invariant (Sylvester's Law of Inertia).
+        - For 4-manifolds, the signature is a homotopy invariant.
+
+    Args:
+        matrix: The symmetric real matrix (np.ndarray).
+        tol: Tolerance for identifying zero eigenvalues. If None, it is 
+            automatically scaled based on the matrix norm and precision.
+
+    Returns:
+        int: The integer signature.
+
+    Use When:
+        - Performing non-differentiable topological validation.
+        - Verifying final outputs of a manifold optimization pipeline.
+        - Computing the signature of small-to-medium matrices where exact 
+          integer algebra is not required.
+
+    Example:
+        sig = exact_signature(Q_matrix)
+        # sig = 8 for E8 manifold intersection form
+    """
     mat = np.asarray(matrix, dtype=float)
     if mat.ndim != 2 or mat.shape[0] != mat.shape[1]:
         raise ValueError("matrix must be square.")

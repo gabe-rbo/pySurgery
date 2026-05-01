@@ -15,11 +15,33 @@ THEOREM_TAGS: dict[str, str] = {
 def infer_theorem_tag(theorem: str | None) -> str | None:
     """Infer a stable theorem tag from user-facing theorem labels.
 
+    What is Being Computed?:
+        Maps human-readable theorem names or partial descriptions to canonical,
+        stable tag strings used for classification and indexing.
+
+    Algorithm:
+        1. Clean and normalize input string (strip, handle accents).
+        2. Check for exact matches in the THEOREM_TAGS dictionary.
+        3. Fall back to keyword-based heuristic matching for common topological terms.
+        4. Return 'unscoped.unknown' if no match is found.
+
+    Preserved Invariants:
+        None (this is a string mapping utility).
+
     Args:
         theorem: The user-facing theorem label to infer a tag for.
 
     Returns:
-        The inferred theorem tag, or None if the input is None.
+        str | None: The inferred theorem tag, or None if the input is None.
+
+    Use When:
+        - Mapping user input to internal classification tags
+        - Indexing results by major topological theorems
+        - Normalizing theorem references in reports
+
+    Example:
+        tag = infer_theorem_tag("Poincare Conjecture 3D")
+        # returns "3d.poincare.geometrization"
     """
     if theorem is None:
         return None

@@ -6,9 +6,34 @@ from ..bridge.julia_bridge import julia_engine
 
 
 class GroupRingElement:
-    """Element of the group ring Z[G].
+    """An element of the integral group ring ℤ[G].
 
-    Represented as a mapping from group elements to integer coefficients.
+    Overview:
+        A GroupRingElement represents a formal sum Σ a_g * g, where a_g ∈ ℤ and g ∈ G.
+        It provides the foundation for algebraic surgery theory by allowing 
+        computations over fundamental group rings, supporting addition, 
+        multiplication, and the standard involution (anti-automorphism).
+
+    Key Concepts:
+        - **Formal Sum**: Linear combination of group elements with integer coefficients.
+        - **Sparse Representation**: Only non-zero coefficients are stored in a dictionary.
+        - **Group Law**: The multiplication g₁ * g₂ = g₃ defined by the underlying group G.
+        - **Involution (Bar Map)**: The map Σ a_g * g ↦ Σ a_g * g⁻¹, essential for Hermitian forms.
+
+    Common Workflows:
+        1. **Creation** → `GroupRingElement({'a': 1, 'b': -2})`
+        2. **Algebra** → `z3 = z1 * z2 + z1.involution()`
+        3. **Form Evaluation** → Used in `IntersectionForm` over ℤ[π₁].
+
+    Coefficient Ring:
+        - ℤ (Integers): Standard for integral group rings in surgery theory.
+
+    Attributes:
+        coeffs (Dict[str, int]): Mapping from group element labels to their integer coefficients.
+        group_order (Optional[int]): The order of G if it is a cyclic group (ℤ/nℤ).
+        group_law (Optional[Callable]): Functional definition of the group multiplication.
+        inverse_law (Optional[Callable]): Functional definition of the group inverse.
+        mul_table (Optional[Dict]): Precomputed multiplication table for finite groups.
     """
 
     @staticmethod
@@ -83,16 +108,33 @@ class GroupRingElement:
         self.mul_table = mul_table
 
     def __add__(self, other: "GroupRingElement") -> "GroupRingElement":
-        """Add two elements from the same group ring.
+        """Add two group ring elements.
+
+        What is Being Computed?:
+            The pointwise sum of coefficients: (Σ a_g * g) + (Σ b_g * g) = Σ (a_g + b_g) * g.
+
+        Algorithm:
+            1. Copy the coefficients of the first element.
+            2. Iterate through the second element's coefficients, adding them to the copy.
+            3. Filter out zero coefficients to maintain sparsity.
+
+        Preserved Invariants:
+            - Module structure over ℤ.
+            - The underlying group G remains unchanged.
 
         Args:
-            other (GroupRingElement): The other group-ring element.
+            other (GroupRingElement): The element to add.
 
         Returns:
-            GroupRingElement: The sum of the two elements.
+            GroupRingElement: The resulting sum.
 
         Raises:
-            GroupRingError: If the elements are from different group rings.
+            GroupRingError: If the elements belong to different group rings.
+
+        Example:
+            z1 = GroupRingElement({'a': 1})
+            z2 = GroupRingElement({'a': 1, 'b': 1})
+            z3 = z1 + z2  # Represents 2a + b
         """
         if self.group_order != other.group_order:
             raise GroupRingError(
@@ -110,17 +152,35 @@ class GroupRingElement:
         )
 
     def __mul__(self, other: "GroupRingElement") -> "GroupRingElement":
-        """Multiply two group-ring elements using exact backend or cyclic fallback.
+        """Multiply two group ring elements.
+
+        What is Being Computed?:
+            The Cauchy product in the group ring: (Σ a_g * g) * (Σ b_h * h) = Σ (a_g * b_h) * (g * h).
+
+        Algorithm:
+            Delegates to `multiply()` which selects the backend (Julia or Python fallback).
+            It iterates over all pairs (g, h) from the supports, computes g*h, 
+            and accumulates the products of their coefficients.
+
+        Preserved Invariants:
+            - Ring structure of ℤ[G].
+            - Identity element '1' (if present in the group law).
 
         Args:
-            other (GroupRingElement): The other group-ring element.
+            other (GroupRingElement): The element to multiply by.
 
         Returns:
-            GroupRingElement: The product of the two elements.
+            GroupRingElement: The resulting product.
 
-        Raises:
-            GroupRingError: If the elements are from different group rings or
-                if multiplication is not defined.
+        Use When:
+            - Computing intersection forms with ℤ[π₁] coefficients.
+            - Evaluating L-theory obstructions.
+            - General algebraic manipulation of group ring elements.
+
+        Example:
+            z1 = GroupRingElement({'a': 1})
+            z2 = GroupRingElement({'a_inv': 1})
+            z3 = z1 * z2  # Represents the identity '1' if a * a_inv = 1
         """
         if self.group_order != other.group_order:
             raise GroupRingError("Cannot multiply elements from different group rings.")
@@ -213,15 +273,34 @@ class GroupRingElement:
             )
 
     def involution(self) -> "GroupRingElement":
-        """The standard involution bar: Z[G] -> Z[G] mapping g to g^-1.
+        """Compute the standard involution (bar map) on the group ring.
 
-        Used to define Hermitian forms over group rings.
+        What is Being Computed?:
+            The anti-automorphism z ↦ z̄ defined by Σ a_g * g ↦ Σ a_g * g⁻¹.
+
+        Algorithm:
+            1. Iterate through each group element g in the support.
+            2. Compute its inverse g⁻¹ using `inverse_law` or cyclic group arithmetic.
+            3. Construct a new GroupRingElement with the same coefficients but inverted group elements.
+
+        Preserved Invariants:
+            - Norms in Hermitian forms (z * z̄).
+            - Real parts (fixed points of the involution).
 
         Returns:
-            GroupRingElement: The involuted group-ring element.
+            GroupRingElement: The involuted element (z̄).
 
         Raises:
-            GroupRingError: If the inverse structure is missing.
+            GroupRingError: If no inverse law or group order is provided for non-identity elements.
+
+        Use When:
+            - Defining Hermitian or anti-Hermitian forms.
+            - Computing the adjoint of a matrix over ℤ[G].
+            - Checking for self-adjoint elements.
+
+        Example:
+            z = GroupRingElement({'g': 1, 'h': 2})
+            z_bar = z.involution()  # Represents g⁻¹ + 2h⁻¹
         """
         if self.inverse_law is None and self.group_order is None:
             raise GroupRingError(

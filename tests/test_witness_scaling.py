@@ -1,7 +1,33 @@
 import numpy as np
 from pysurgery.core.complexes import SimplicialComplex
 
+"""Test suite for scaling and performance of witness complex constructions.
+
+Overview:
+    This module validates the construction of witness complexes from large point clouds.
+    It ensures that landmarks and witnesses correctly capture the underlying 
+    topology (homology) of the sampled space even with high-density inputs.
+
+Key Concepts:
+    - **Witness Complex**: A simplicial complex built using a subset of points (landmarks) 
+      and the full point cloud (witnesses) to determine simplex existence.
+    - **Scaling**: Verifying that the construction is performant and correct for thousands of points.
+    - **H1 Recovery**: Specifically checking if the 1st homology rank (Betti-1) matches 
+      the theoretical value (e.g., 1 for a circle, 2 for a torus).
+"""
+
 def test_witness_complex_scaling():
+    """Verify that witness complex construction scales to 2000 points on S1.
+
+    What is Being Computed?:
+        Constructs a witness complex for a circle (S^1) and computes its 1st homology rank.
+
+    Algorithm:
+        1. Sample 2000 points on a unit circle in 2D.
+        2. Select 100 landmarks and build the witness complex with alpha=0.5.
+        3. Extract the chain complex and compute H_1.
+        4. Assert that H_1 rank is at least 1.
+    """
     # 2000 points on a circle (S1)
     # 10k+ points is doable but we use 2k for the CI test
     t = np.linspace(0, 2*np.pi, 2000)
@@ -18,7 +44,18 @@ def test_witness_complex_scaling():
     print(f"H1 Rank: {h1_rank}, Torsion: {h1_torsion}")
 
 def test_witness_complex_torus():
-    """Test witness complex on a torus."""
+    """Verify witness complex topology recovery for a 3D torus.
+
+    What is Being Computed?:
+        Tests if the witness complex correctly identifies the two fundamental 
+        cycles of a torus from a 3D point cloud.
+
+    Algorithm:
+        1. Sample 400 points from a torus in 3D.
+        2. Build a witness complex with 40 landmarks and alpha=0.6.
+        3. Compute H_1 rank.
+        4. Assert that H_1 rank is at least 2.
+    """
     # Build a torus point cloud
     n = 400
     theta = np.random.uniform(0, 2*np.pi, n)

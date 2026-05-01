@@ -1,3 +1,17 @@
+"""Tests for Intrinsic Dimension Estimation algorithms.
+
+Overview:
+    This suite verifies various estimators for the intrinsic dimension of 
+    point clouds, including Maximum Likelihood Estimation (MLE), Two-Nearest 
+    Neighbors (TwoNN), and Local PCA.
+
+Key Concepts:
+    - **Intrinsic Dimension**: The minimal number of variables needed to represent 
+      the data without significant information loss.
+    - **MLE Estimator**: Based on the distance distribution of nearest neighbors.
+    - **TwoNN**: Uses the ratio of distances to the first two nearest neighbors.
+    - **Local PCA**: Estimates dimension via the rank of local covariance matrices.
+"""
 from types import SimpleNamespace
 
 import numpy as np
@@ -29,6 +43,21 @@ def _plane_point_cloud(n=500, seed=1):
 
 
 def test_mle_and_twonn_on_distance_matrix_plane():
+    """Verify MLE and TwoNN estimators on a planar point cloud.
+
+    What is Being Computed?:
+        Intrinsic dimension estimates for a set of points sampled from a 
+        2-dimensional plane embedded in 3D space.
+
+    Algorithm:
+        1. Generate a plane point cloud with small normal noise.
+        2. Precompute the distance matrix.
+        3. Apply MLE and TwoNN estimators.
+        4. Validate that estimated global dimension is approximately 2.
+
+    Preserved Invariants:
+        - Intrinsic dimension — should be invariant to isometric embedding.
+    """
     points = _plane_point_cloud(n=500, seed=7)
     distances = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=-1)
 

@@ -12,6 +12,23 @@ CONTRACT_VERSION = "2026.04-phase10"
 class CoverageMatrixEntry(BaseModel):
     """One scoped theorem-support claim in the package coverage matrix.
 
+    Overview:
+        Represents a single entry in the project's coverage matrix, detailing
+        the level of support for a specific topological theorem across different
+        manifold dimensions and fundamental group families.
+
+    Key Concepts:
+        - **Theorem Tag**: Stable identifier for cross-referencing logic.
+        - **Status**: Level of implementation (exact, partial, unsupported).
+        - **Required Inputs**: Prerequisites needed for the theorem to be applicable.
+
+    Common Workflows:
+        1. Querying library capabilities for a specific manifold class.
+        2. Generating automated documentation or coverage reports.
+
+    Coefficient Ring:
+        N/A.
+
     Attributes:
         dimension_class (str): The dimension class (e.g., "2D", "3D").
         pi_family (str): The fundamental group family.
@@ -33,6 +50,22 @@ class CoverageMatrixEntry(BaseModel):
 
 class AnalyzerContract(BaseModel):
     """Contract metadata attached to analyzer outputs and witness payloads.
+
+    Overview:
+        Formalizes the relationship between an analyzer's output and the
+        mathematical theorems it relies upon. This metadata ensures that
+        certificates and witnesses are verifiable and version-stable.
+
+    Key Concepts:
+        - **Contract Versioning**: Ensuring metadata matches the logic version.
+        - **Exactness Policy**: Rules for claiming "exact" results.
+
+    Common Workflows:
+        1. Attaching metadata to `HomeomorphismWitness` objects.
+        2. Validating if a certificate meets the required input standards.
+
+    Coefficient Ring:
+        N/A.
 
     Attributes:
         analyzer (str): The name of the analyzer.

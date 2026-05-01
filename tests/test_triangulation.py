@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
-"""
-Test suite for the surface triangulation functionality.
+"""Test suite for the surface triangulation functionality.
+
+Overview:
+    This module provides unit tests for surface triangulation algorithms, specifically
+    verifying that point clouds in 3D are correctly converted into 2-dimensional 
+    simplicial complexes (triangle meshes). It tests both specific implementations 
+    and the public unified API.
+
+Key Concepts:
+    - **Surface Triangulation**: Constructing a 2-manifold (with or without boundary) from points.
+    - **Skeleton Extraction**: Verifying the presence of vertices, edges, and faces.
+    - **Implementation Parity**: Ensuring Python fallbacks match expectation for common surfaces.
 """
 
 import numpy as np
@@ -13,7 +23,18 @@ from pysurgery.integrations.gudhi_bridge import (
 
 
 def test_triangulate_sphere():
-    """Test triangulation of a sphere (simplest 2D surface)."""
+    """Verify triangulation of a sampled sphere.
+
+    What is Being Computed?:
+        Checks if the triangulation algorithm correctly reconstructs a sphere-like 
+        surface from a stochastic point cloud.
+
+    Algorithm:
+        1. Generate 50 points on a unit sphere using uniform spherical sampling.
+        2. Run `triangulate_surface_python` on the point set.
+        3. Extract the 2-skeleton and count simplices by dimension.
+        4. Assert that all vertices are present and both edges/faces are created.
+    """
     print("Testing sphere triangulation...")
 
     # Generate points on a unit sphere
@@ -50,7 +71,16 @@ def test_triangulate_sphere():
     print("  ✓ Sphere triangulation passed!")
 
 def test_triangulate_torus():
-    """Test triangulation of a torus (more complex 2D surface)."""
+    """Verify triangulation of a sampled torus.
+
+    What is Being Computed?:
+        Tests the algorithm's ability to handle surfaces with non-zero genus (torus).
+
+    Algorithm:
+        1. Generate 100 points on a torus with major radius 3.0 and minor radius 1.0.
+        2. Run `triangulate_surface_python`.
+        3. Confirm the presence of 2-dimensional faces in the output complex.
+    """
     print("Testing torus triangulation...")
 
     # Generate points on a torus: (R + r*cos(v)) * (cos(u), sin(u)) in x-y, r*sin(v) in z
@@ -87,7 +117,16 @@ def test_triangulate_torus():
     print("  ✓ Torus triangulation passed!")
 
 def test_triangulate_plane():
-    """Test triangulation of points on a plane (degenerate 2D surface in 3D)."""
+    """Verify triangulation of points on a flat plane.
+
+    What is Being Computed?:
+        Ensures the triangulator handles degenerate cases where points are coplanar in 3D.
+
+    Algorithm:
+        1. Generate 30 random points on the z=0 plane.
+        2. Run `triangulate_surface_python`.
+        3. Assert that a 2D complex is produced despite the lack of volumetric span.
+    """
     print("Testing planar point cloud triangulation...")
 
     # Generate points on z=0 plane
@@ -119,7 +158,17 @@ def test_triangulate_plane():
     print("  ✓ Planar triangulation passed!")
 
 def test_triangulate_public_api():
-    """Test the public triangulate_surface API (Python fallback)."""
+    """Test the unified public triangulation entry point.
+
+    What is Being Computed?:
+        Verifies that the `triangulate_surface` dispatcher correctly routes 
+        calls to the available backend.
+
+    Algorithm:
+        1. Sample points from a sphere using a grid.
+        2. Call the high-level `triangulate_surface` function.
+        3. Confirm the resulting SimplicialComplex is non-empty.
+    """
     print("Testing public triangulate_surface API...")
 
     # Simple sphere

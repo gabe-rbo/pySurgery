@@ -1,3 +1,15 @@
+"""Tests for ChainComplex, CWComplex, and SimplicialComplex.
+
+Overview:
+    Validates foundational data structures for topological computation, 
+    including boundary matrix construction, homology/cohomology calculation, 
+    and skeletal closure properties.
+
+Key Concepts:
+    - **ChainComplex**: Linear algebra of boundary operators.
+    - **SimplicialComplex**: Combinatorial representation of triangulated spaces.
+    - **CWComplex**: Generalization using cell attaching maps.
+"""
 import numpy as np
 import scipy.sparse as sp
 import pytest
@@ -11,6 +23,16 @@ from pysurgery.bridge.julia_bridge import julia_engine
 
 
 def test_sphere_homology():
+    """Verify homology computation for a minimal S² model.
+
+    What is Being Computed?:
+        Computes H_n(S²) for n=0, 1, 2.
+
+    Algorithm:
+        1. Define boundary maps for a 0-cell and a 2-cell.
+        2. Instantiate ChainComplex.
+        3. Assert H₀=ℤ, H₁=0, H₂=ℤ.
+    """
     # S^2: 1 cell of dim 0, 1 cell of dim 2, trivial boundaries
     d1 = sp.csr_matrix(np.zeros((1, 0), dtype=np.int64))
     d2 = sp.csr_matrix(np.zeros((0, 1), dtype=np.int64))

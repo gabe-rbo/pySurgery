@@ -15,8 +15,35 @@ from .exceptions import (
 class IntersectionForm(BaseModel):
     """Representation of a symmetric bilinear form Q on H_{2k}(M, Z).
 
+    Overview:
+        The IntersectionForm class encapsulates the intersection properties of 
+        even-dimensional manifolds. For a 4k-dimensional manifold, the 
+        intersection form is a symmetric bilinear form on H_{2k}(M; Z). It is 
+        a fundamental invariant for the classification of manifolds, 
+        particularly in dimension 4.
+
+    Key Concepts:
+        - **Symmetric Bilinear Form**: A map Q: V x V -> Z that is linear in 
+          each variable and Q(x, y) = Q(y, x).
+        - **Unimodularity**: The form is unimodular if the matrix has determinant +/- 1, 
+          corresponding to Poincaré duality on a closed manifold.
+        - **Signature**: The difference between the number of positive and 
+          negative eigenvalues (rank+ - rank-).
+        - **Even/Odd Type**: A form is even (Type II) if Q(x, x) is even for all x, 
+          otherwise it is odd (Type I).
+
+    Common Workflows:
+        1. **Classification** → Use `classify_z_form()` to get rank, signature, and type.
+        2. **Surgery** → Use `perform_algebraic_surgery(x)` to simulate the effect 
+           of surgery on an isotropic class.
+        3. **Invariants** → Compute `signature()` and `determinant()`.
+
+    Coefficient Ring:
+        - ℤ (Integers): The form is defined over the integers to capture the 
+          full arithmetic of the intersection lattice.
+
     Attributes:
-        matrix (np.ndarray): The symmetric matrix of the intersection form.
+        matrix (np.ndarray): The symmetric matrix representing the form.
         dimension (int): The dimension of the manifold (n = 4k).
     """
 
@@ -60,18 +87,32 @@ class IntersectionForm(BaseModel):
         return max(self.matrix.shape) * np.finfo(float).eps * scale
 
     def signature(self) -> int:
-        """Compute the signature of the intersection form (rank+ - rank-).
+        """Compute the signature of the intersection form.
 
-        Uses exact rational arithmetic via Sylvester's Law of Inertia to ensure correctness.
+        What is Being Computed?:
+            The signature σ(Q) = n₊ - n₋, where n₊ and n₋ are the number of 
+            positive and negative eigenvalues of the bilinear form Q.
 
-        References:
-            Sylvester, J. J. (1852). A demonstration of the theorem that every homogeneous 
-            quadratic polynomial is reducible by real orthogonal substitutions to the 
-            form of a sum of positive and negative squares. 
-            Philosophical Magazine, 4(4), 138-142.
+        Algorithm:
+            1. Convert the matrix to a SymPy Matrix for exact arithmetic.
+            2. Perform LDL decomposition to find the diagonal elements.
+            3. Count positive and negative diagonal entries (Sylvester's Law of Inertia).
+            4. Fallback to numerical eigvalsh if symbolic decomposition fails.
+
+        Preserved Invariants:
+            - Signature is a cobordism invariant for 4k-dimensional manifolds.
+            - Signature is unchanged under stabilization (adding hyperbolic pairs).
 
         Returns:
-            int: The signature of the bilinear form.
+            int: The signature σ(Q) of the bilinear form.
+
+        Use When:
+            - Classifying 4-manifolds via Freedman's theorem.
+            - Checking for Hirzebruch Signature Theorem consistency.
+
+        Example:
+            Q = IntersectionForm(matrix=np.array([[1, 0], [0, -1]]), dimension=4)
+            print(Q.signature())  # Output: 0
         """
         if self.matrix.size == 0:
             return 0
@@ -178,14 +219,22 @@ class IntersectionForm(BaseModel):
     def perform_algebraic_surgery(self, x: np.ndarray) -> "IntersectionForm":
         """Perform algebraic surgery on the manifold by surgering out the isotropic class x.
 
-        This corresponds to finding a class y with Q(x, y) = 1, and restricting the form to {x, y}^perp.
+        What is Being Computed?:
+            The intersection form of the manifold resulting from surgery on the 
+            homology class x. Algebraically, this is the restriction of the 
+            form Q to the orthogonal complement of the subspace spanned by {x, y}, 
+            where Q(x, y) = 1 and Q(x, x) = 0.
 
-        References:
-            Wall, C. T. (1970). Surgery on compact manifolds. 
-            Academic Press.
-            
-            Ranicki, A. (1980). Exact sequences in the algebraic theory of surgery. 
-            Princeton University Press.
+        Algorithm:
+            1. Validate that x is isotropic (Q(x, x) = 0) and primitive.
+            2. Find a dual class y such that Q(x, y) = 1 using the Extended Euclidean Algorithm.
+            3. Construct the orthogonal complement H^perp = {v | Q(v, x) = 0 and Q(v, y) = 0}.
+            4. Compute an exact ℤ-basis for H^perp using Hermite Normal Form (HNF).
+            5. Project the original form onto this new basis.
+
+        Preserved Invariants:
+            - Signature is preserved (surgery on S^k in M^{2k} preserves signature if 2k=4).
+            - The resulting form remains symmetric and (usually) unimodular if the input was.
 
         Args:
             x (np.ndarray): The isotropic class to surger out.
@@ -198,6 +247,17 @@ class IntersectionForm(BaseModel):
             IsotropicError: If x is not isotropic.
             NonPrimitiveError: If x is zero or not primitive.
             UnimodularityError: If the dual class y cannot be found.
+
+        Use When:
+            - Modeling the effect of handle attachment on the intersection form.
+            - Simplifying the intersection form of a 4-manifold towards a target form.
+            - Implementing the algebraic steps of the surgery exact sequence.
+
+        Example:
+            # Surgery on a hyperbolic pair H = [[0, 1], [1, 0]] surgering x=[1, 0]
+            Q = IntersectionForm(matrix=np.array([[0, 1], [1, 0]]), dimension=4)
+            Q_new = Q.perform_algebraic_surgery(np.array([1, 0]))
+            # Resulting matrix will be empty (0x0) as we surgered out the only pair.
         """
         x = np.asarray(x, dtype=int).flatten()
         if x.shape[0] != self.matrix.shape[0]:

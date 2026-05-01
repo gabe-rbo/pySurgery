@@ -7,15 +7,28 @@ from .exceptions import KirbyMoveError
 class KirbyDiagram(BaseModel):
     """Represents a 3D/4D manifold as a framed link in S^3 via Kirby Calculus.
 
-    Each component of the link represents the attachment of a 2-handle.
+    Overview:
+        A KirbyDiagram encodes the instructions for building a 4-dimensional 
+        manifold (and its 3-dimensional boundary) by attaching 2-handles to 
+        a 4-ball. The diagram consists of a framed link in S^3, where each 
+        component represents the core of a handle attachment.
 
-    References:
-        Kirby, R. (1978). A calculus for framed links in S^3. 
-        Inventiones mathematicae, 45(1), 35-56.
+    Key Concepts:
+        - **Framed Link**: A collection of knots with integer weights (framings).
+        - **Handle Attachment**: Gluing a D^2 x D^2 along S^1 x D^2 to the boundary.
+        - **Kirby Moves**: Moves (blow-up, handle slide) that change the diagram 
+          but preserve the homeomorphism type of the resulting 3-manifold.
+        - **Linking Matrix**: The matrix recording self-linking (framing) and 
+          mutual linking numbers.
+
+    Common Workflows:
+        1. **Simplification** → Use `handle_slide()` to diagonalize the linking matrix.
+        2. **Stabilization** → Use `blow_up()` to add hyperbolic or CP^2 factors.
+        3. **Invariants** → Use `extract_intersection_form()` for 4-manifold classification.
 
     Attributes:
-        framings: Diagonal of the linking matrix.
-        linking_matrix: The symmetric linking numbers Lk(K_i, K_j).
+        framings (np.ndarray): Diagonal of the linking matrix.
+        linking_matrix (np.ndarray): The symmetric linking numbers Lk(K_i, K_j).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -42,19 +55,37 @@ class KirbyDiagram(BaseModel):
         return cls(framings=np.diag(mat).copy(), linking_matrix=mat.copy())
 
     def blow_up(self, sign: int = 1) -> "KirbyDiagram":
-        """Performs a +1 or -1 blow-up.
+        """Performs a +1 or -1 blow-up on the Kirby diagram.
 
-        This corresponds geometrically to taking the connected sum with CP^2 or -CP^2.
-        It adds an isolated +1 or -1 framed unknot to the diagram.
+        What is Being Computed?:
+            The Kirby diagram of the manifold after taking the connected sum 
+            with CP^2 (sign=+1) or -CP^2 (sign=-1).
+
+        Algorithm:
+            1. Validate the sign is ±1.
+            2. Append a new isolated row and column to the linking matrix.
+            3. Set the new diagonal entry to the specified sign.
+
+        Preserved Invariants:
+            - Preserves the homotopy type of the resulting 3-manifold (boundary).
+            - Changes the signature of the 4-manifold by exactly the sign.
 
         Args:
             sign: The sign of the blow-up, must be 1 or -1. Defaults to 1.
 
         Returns:
-            A new KirbyDiagram instance after the blow-up.
+            KirbyDiagram: A new diagram instance with the added component.
 
         Raises:
             KirbyMoveError: If sign is not 1 or -1.
+
+        Use When:
+            - You need to stabilize the intersection form.
+            - Changing the parity or signature of a 4-manifold diagram.
+
+        Example:
+            # Add a -1 framed unknot to the diagram
+            blown_up = diagram.blow_up(sign=-1)
         """
         if sign not in (1, -1):
             raise KirbyMoveError("Blow-up sign must be strictly +1 or -1.")
@@ -67,21 +98,41 @@ class KirbyDiagram(BaseModel):
         return KirbyDiagram.from_matrix(new_mat)
 
     def handle_slide(self, source_idx: int, target_idx: int) -> "KirbyDiagram":
-        """Performs a handle slide of K_{source} over K_{target}.
+        """Performs a handle slide of one link component over another.
 
-        This adds the target column (and row) to the source column (and row).
-        Geometrically, the framing of the source knot changes by:
-        f_s -> f_s + f_t + 2 * lk(K_s, K_t).
+        What is Being Computed?:
+            The updated linking matrix after sliding handle K_{source} over K_{target}. 
+            Algebraically, this corresponds to a basis change in the second 
+            homology of the 4-manifold.
+
+        Algorithm:
+            1. Construct an elementary basis change matrix P where P[s, t] = 1.
+            2. Compute the new linking matrix L' = P * L * P^T.
+            3. Geometrically, this updates the source framing: 
+               f_s -> f_s + f_t + 2 * lk(K_s, K_t).
+
+        Preserved Invariants:
+            - Homeomorphism type of the 4-manifold — Unchanged.
+            - Homeomorphism type of the 3-manifold boundary — Unchanged.
+            - Intersection form (up to isomorphism) — Unchanged.
 
         Args:
-            source_idx: Index of the source knot.
-            target_idx: Index of the target knot.
+            source_idx: Index of the knot being slid.
+            target_idx: Index of the knot being slid over.
 
         Returns:
-            A new KirbyDiagram instance after the handle slide.
+            KirbyDiagram: The updated diagram after the move.
 
         Raises:
             KirbyMoveError: If indices are out of bounds or source_idx equals target_idx.
+
+        Use When:
+            - Diagonalizing the linking matrix for homology computation.
+            - Simplifying the diagram towards a standard form.
+
+        Example:
+            # Slide handle 0 over handle 1
+            diagram_after = diagram.handle_slide(0, 1)
         """
         n = self.linking_matrix.shape[0]
         if not (0 <= source_idx < n) or not (0 <= target_idx < n):

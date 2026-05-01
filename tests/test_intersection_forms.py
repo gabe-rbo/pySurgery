@@ -1,3 +1,17 @@
+"""Tests for Intersection Forms, Kirby Diagrams, and Algebraic Surgery.
+
+Overview:
+    This suite verifies the core algebraic topology tools for 4-manifolds, 
+    including intersection form classification (signature, parity), Kirby diagram 
+    manipulations (blow-ups, handle slides), and algebraic surgery on isotropic 
+    classes.
+
+Key Concepts:
+    - **Intersection Form**: A symmetric bilinear form representing the pairing on H₂(M).
+    - **Unimodular Lattices**: Classification of integral forms (Type I vs Type II).
+    - **Kirby Calculus**: Combinatorial moves on framed links in S³.
+    - **Algebraic Surgery**: Reducing the rank of a form by surgering out hyperbolic planes.
+"""
 import numpy as np
 import pytest
 from hypothesis import given, strategies as st
@@ -20,6 +34,20 @@ def test_intersection_form_signature(data):
 
 
 def test_even_form_classification():
+    """Verify the classification of the E8 even intersection form.
+
+    What is Being Computed?:
+        The type (parity) and signature of the E8 Cartan matrix.
+
+    Algorithm:
+        1. Construct the 8x8 E8 matrix.
+        2. Initialize an IntersectionForm object.
+        3. Compute form.is_even() and form.signature().
+
+    Preserved Invariants:
+        - Signature is a stable homotopy invariant (for 4-manifolds).
+        - Parity (even/odd) distinguishes spin vs. non-spin structures.
+    """
     # E8 matrix (even, unimodular, rank 8, signature 8)
     e8_matrix = np.array(
         [

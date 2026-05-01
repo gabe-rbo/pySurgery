@@ -16,11 +16,33 @@ from ..bridge.julia_bridge import julia_engine
 def _parse_coefficient_ring(ring: str) -> tuple[str, int | None]:
     """Parse user ring labels into internal `(kind, modulus)` form.
 
+    What is Being Computed?:
+        Translates human-readable ring specifications (e.g., 'Z', 'Q', 'Z/2Z') into a 
+        standardized internal format consisting of a kind ('Z', 'Q', 'ZMOD') and 
+        an optional modulus.
+
+    Algorithm:
+        1. Strip whitespace and convert input to uppercase.
+        2. If 'Z', return ('Z', None).
+        3. If 'Q', return ('Q', None).
+        4. If 'Z/pZ' format, extract p, validate p > 1, and return ('ZMOD', p).
+        5. Otherwise, raise a ValueError for unsupported formats.
+
+    Preserved Invariants:
+        - None (purely a parsing utility).
+
     Args:
         ring: User ring label (e.g., 'Z', 'Q', 'Z/2Z').
 
     Returns:
-        A tuple (kind, modulus) where kind is one of 'Z', 'Q', or 'ZMOD'.
+        tuple[str, int | None]: A tuple (kind, modulus) where kind is one of 'Z', 'Q', or 'ZMOD'.
+
+    Use When:
+        - Initializing a ChainComplex or SimplicialComplex with a user-provided ring string.
+        - Validating ring inputs before performing homological computations.
+
+    Example:
+        kind, p = _parse_coefficient_ring("Z/2Z")  # ('ZMOD', 2)
     """
     rs = ring.strip().upper()
     if rs == "Z":
@@ -39,11 +61,29 @@ def _parse_coefficient_ring(ring: str) -> tuple[str, int | None]:
 def _coerce_csr_matrix(matrix: csr_matrix | np.ndarray | list | tuple) -> csr_matrix:
     """Coerce sparse/dense matrix-like data to CSR with integer entries.
 
+    What is Being Computed?:
+        Converts various matrix-like inputs (dense arrays, lists, tuples, or existing sparse matrices)
+        into a consistent SciPy CSR (Compressed Sparse Row) format with 64-bit integer entries.
+
+    Algorithm:
+        1. If input is already a CSR matrix, copy it and cast to int64.
+        2. Otherwise, convert input to a NumPy array of int64, then to a CSR matrix.
+
+    Preserved Invariants:
+        - The linear map represented by the matrix is preserved (up to integer truncation if input is float).
+
     Args:
-        matrix: Matrix-like data to coerce.
+        matrix: Matrix-like data to coerce (csr_matrix, ndarray, list, or tuple).
 
     Returns:
-        The matrix in CSR format with int64 entries.
+        csr_matrix: The matrix in CSR format with int64 entries.
+
+    Use When:
+        - Standardizing input for boundary matrices in ChainComplex.
+        - Preparing data for sparse algebraic operations (e.g., SNF, rank).
+
+    Example:
+        sparse_d = _coerce_csr_matrix([[1, -1, 0], [0, 1, -1]])
     """
     if isinstance(matrix, csr_matrix):
         return matrix.copy().astype(np.int64)
@@ -53,11 +93,34 @@ def _coerce_csr_matrix(matrix: csr_matrix | np.ndarray | list | tuple) -> csr_ma
 def _normalize_simplex(simplex: Iterable[int]) -> tuple[int, ...]:
     """Return a canonical, sorted simplex tuple with distinct integer vertices.
 
+    What is Being Computed?:
+        A canonical representation of a simplex. Since a simplex is defined by its 
+        set of vertices, this function ensures that any representation of the 
+        same simplex results in the same sorted tuple.
+
+    Algorithm:
+        1. Convert all vertices to integers.
+        2. Remove duplicates using a set.
+        3. Sort the unique vertices.
+        4. Return as a tuple.
+        5. Raise ValueError if the resulting simplex is empty.
+
+    Preserved Invariants:
+        - Simplex identity: Two sets of vertices representing the same simplex will 
+          have the same normalized form.
+
     Args:
         simplex: Iterable of vertex indices.
 
     Returns:
-        A sorted tuple of unique vertex indices.
+        tuple[int, ...]: A sorted tuple of unique vertex indices.
+
+    Use When:
+        - Adding simplices to a SimplicialComplex.
+        - Using simplices as keys in a dictionary or items in a set.
+
+    Example:
+        s = _normalize_simplex([3, 1, 2, 1])  # (1, 2, 3)
     """
     vertices = tuple(sorted(set(int(v) for v in simplex)))
     if len(vertices) == 0:
@@ -70,11 +133,33 @@ def _canonicalize_simplices_by_dim(
 ) -> dict[int, list[tuple[int, ...]]]:
     """Sort and deduplicate simplex lists across dimensions.
 
+    What is Being Computed?:
+        A cleaned dictionary where each dimension maps to a sorted, unique list of 
+        normalized simplices.
+
+    Algorithm:
+        1. Iterate through each dimension and its list of simplices.
+        2. Deduplicate the list using a dictionary (preserving order if possible, though sorted later).
+        3. Sort the unique simplices for each dimension.
+        4. Return the new dictionary.
+
+    Preserved Invariants:
+        - The set of simplices in each dimension remains the same.
+        - Overall complex structure is preserved.
+
     Args:
-        raw_grouped: Dictionary mapping dimension to list of simplices.
+        raw_grouped: Dictionary mapping dimension (int) to list of simplex tuples.
 
     Returns:
-        A dictionary with sorted and deduplicated simplex lists.
+        dict[int, list[tuple[int, ...]]]: A dictionary with sorted and deduplicated simplex lists.
+
+    Use When:
+        - Finalizing the internal representation of a SimplicialComplex after adding many simplices.
+        - Preparing simplex lists for boundary matrix construction.
+
+    Example:
+        raw = {0: [(1,), (0,), (1,)], 1: [(0, 1), (0, 1)]}
+        clean = _canonicalize_simplices_by_dim(raw)  # {0: [(0,), (1,)], 1: [(0, 1)]}
     """
     out = {}
     for d, simplices in raw_grouped.items():
@@ -95,11 +180,36 @@ def _simplicial_closure_from_generators(
 ) -> dict[int, list[tuple[int, ...]]]:
     """Generate all faces of the given simplices and group by dimension.
 
+    What is Being Computed?:
+        The downward skeletal closure of a set of simplices. For every simplex 
+        provided, all its sub-simplices (faces) are generated and included in 
+        the result.
+
+    Algorithm:
+        1. Convert input to a list of simplices.
+        2. If the number of simplices is large (>5000), use a ThreadPoolExecutor 
+           to parallelize the face generation.
+        3. For each simplex, find all non-empty subsets of its vertices.
+        4. Accumulate unique faces in a dictionary grouped by dimension.
+        5. Return the dictionary with sorted simplex lists.
+
+    Preserved Invariants:
+        - Ensures the result is a valid simplicial complex (closed under taking faces).
+        - Preserves the homotopy type defined by the input generators.
+
     Args:
         simplices: Iterable of simplices (generators).
 
     Returns:
-        A dictionary mapping dimension to sorted lists of unique simplices.
+        dict[int, list[tuple[int, ...]]]: A dictionary mapping dimension to sorted lists of unique simplices.
+
+    Use When:
+        - Constructing a SimplicialComplex from a set of maximal simplices (facets).
+        - Ensuring that a list of simplices forms a closed complex.
+
+    Example:
+        closure = _simplicial_closure_from_generators([(0, 1, 2)])
+        # {0: [(0,), (1,), (2,)], 1: [(0, 1), (0, 2), (1, 2)], 2: [(0, 1, 2)]}
     """
     final_grouped = defaultdict(set)
     # Avoid nested threading overhead for small complexes (like vertex links)
@@ -126,12 +236,40 @@ def _boundary_matrix_from_simplices_with_maps(
 ) -> csr_matrix:
     """Construct an oriented boundary matrix using a pre-computed face map.
 
+    What is Being Computed?:
+        The n-th boundary operator ∂_n: C_n → C_{n-1} as a sparse matrix. The matrix 
+        entry at (i, j) is (-1)^k if the i-th (n-1)-simplex is the k-th face of the 
+        j-th n-simplex, and 0 otherwise.
+
+    Algorithm:
+        1. Handle the base case of an empty list of n-simplices.
+        2. Define a chunked computation function to populate sparse matrix indices.
+        3. For each n-simplex, iterate through its (n-1)-dimensional faces.
+        4. Lookup each face in the pre-computed `nm1_map` to find its row index.
+        5. Assign the alternating sign (-1)^i to the entry.
+        6. Parallelize the computation using ThreadPoolExecutor for large inputs (>5000).
+        7. Assemble and return a SciPy CSR matrix.
+
+    Preserved Invariants:
+        - Homology property: ∂_n ∘ ∂_{n+1} = 0 is satisfied if the complex is valid.
+        - Orientation consistency: Respects the canonical ordering of vertices.
+
     Args:
-        simplices_n: List of n-simplices.
-        nm1_map: Pre-computed mapping from (n-1)-simplex to its index.
+        simplices_n: List of n-simplices (sorted tuples).
+        nm1_map: Pre-computed mapping from (n-1)-simplex tuple to its index.
 
     Returns:
-        The sparse boundary matrix d_n in CSR format.
+        csr_matrix: The sparse boundary matrix d_n in CSR format.
+
+    Use When:
+        - Building a ChainComplex from a SimplicialComplex.
+        - Computing boundary maps for specific dimensions of a complex.
+
+    Example:
+        s1 = [(0,), (1,), (2,)]
+        s2 = [(0, 1), (1, 2)]
+        map1 = {v: i for i, v in enumerate(s1)}
+        d1 = _boundary_matrix_from_simplices_with_maps(s2, map1)
     """
     if not simplices_n:
         return csr_matrix((len(nm1_map), 0), dtype=np.int64)
@@ -176,11 +314,34 @@ def _boundary_matrix_from_simplices_with_maps(
 def _csr_matrix_signature(m: csr_matrix) -> tuple[int, int, int, str]:
     """Return a content-based signature for a sparse matrix to detect changes.
 
+    What is Being Computed?:
+        A unique fingerprint of a sparse matrix's contents, including its shape, 
+        sparsity pattern (nonzero indices), and data values.
+
+    Algorithm:
+        1. Extract nonzero row and column indices.
+        2. Feed the shape, row indices, column indices, and data values into a 
+           SHA-256 hash function.
+        3. Return a tuple containing (number of rows, number of columns, 
+           number of non-zero elements, and the hex digest of the hash).
+
+    Preserved Invariants:
+        - Deterministic: Identical matrices always produce the same signature.
+        - Sensitivity: Any change in matrix entries or structure results in a 
+          different signature.
+
     Args:
-        m: The sparse matrix.
+        m: The sparse CSR matrix to hash.
 
     Returns:
-        A tuple containing (rows, cols, non-zeros, hash).
+        tuple[int, int, int, str]: A signature tuple (rows, cols, nnz, hash_str).
+
+    Use When:
+        - Implementing caching mechanisms where the result depends on matrix data.
+        - Detecting if a complex has been modified to invalidate cached invariants.
+
+    Example:
+        sig = _csr_matrix_signature(boundary_matrix)
     """
     rows, cols = m.nonzero()
     data = m.data
@@ -193,14 +354,35 @@ def _csr_matrix_signature(m: csr_matrix) -> tuple[int, int, int, str]:
 
 
 def _clone_cache_value(v: Any) -> Any:
-    """Return a shallow copy of large objects to prevent accidental cache mutation
-    without the full overhead of deepcopy.
+    """Return a shallow copy of large objects to prevent accidental cache mutation.
+
+    What is Being Computed?:
+        A copy of a value being retrieved from or stored in the cache. This 
+        prevents external modifications to the original object from affecting 
+        the cached copy (and vice versa).
+
+    Algorithm:
+        1. If the value is an immutable primitive (int, float, str, bool, tuple, None), return it as is.
+        2. If it's a list, return a new list with copies of its elements.
+        3. If it's a dictionary, recursively clone its values.
+        4. If the object has a `.copy()` method, use it.
+        5. Otherwise, return the object as is (fallback).
+
+    Preserved Invariants:
+        - Value equivalence: The cloned object represents the same mathematical data.
 
     Args:
-        v: The value to clone.
+        v: The value to clone (any type).
 
     Returns:
-        A copy of the value.
+        Any: A copy of the value.
+
+    Use When:
+        - Getting/setting values in the internal cache of ChainComplex or SimplicialComplex.
+        - Ensuring that mutable objects (like matrices or lists) aren't shared across different parts of the system accidentally.
+
+    Example:
+        safe_copy = _clone_cache_value(some_mutable_list)
     """
     if isinstance(v, (int, float, str, bool, tuple)) or v is None:
         return v
@@ -216,11 +398,31 @@ def _clone_cache_value(v: Any) -> Any:
 def _is_prime(n: int) -> bool:
     """Check if n is prime (heuristic for small moduli).
 
+    What is Being Computed?:
+        Primality test for an integer n.
+
+    Algorithm:
+        1. If n < 2, return False.
+        2. If n = 2, return True.
+        3. If n is even, return False.
+        4. Check odd divisors from 3 up to sqrt(n).
+        5. If any divisor is found, return False. Otherwise, return True.
+
+    Preserved Invariants:
+        - None.
+
     Args:
         n: The integer to check.
 
     Returns:
-        True if n is prime, False otherwise.
+        bool: True if n is prime, False otherwise.
+
+    Use When:
+        - Validating if a coefficient ring Z/pZ is over a field (p prime).
+        - Choosing algorithms that require prime moduli (e.g., specific rank computations).
+
+    Example:
+        is_p = _is_prime(7)  # True
     """
     if n < 2:
         return False
@@ -247,7 +449,33 @@ def _gcd_extended_numba(a: int, b: int):
     return a, x0, y0
 
 def _gcd_extended(a: int, b: int) -> tuple[int, int, int]:
-    """Extended Euclidean algorithm."""
+    """Extended Euclidean algorithm.
+
+    What is Being Computed?:
+        The greatest common divisor (GCD) g of integers a and b, along with 
+        coefficients x and y such that ax + by = g.
+
+    Algorithm:
+        Delegates to `_gcd_extended_numba`, which implements the standard 
+        iterative extended Euclidean algorithm.
+
+    Preserved Invariants:
+        - Bézout's identity: ax + by = gcd(a, b).
+
+    Args:
+        a: First integer.
+        b: Second integer.
+
+    Returns:
+        tuple[int, int, int]: (g, x, y) where g is the GCD and x, y are the coefficients.
+
+    Use When:
+        - Computing modular inverses (e.g., in Z/pZ arithmetic).
+        - Performing exact linear algebra over integers or finite rings.
+
+    Example:
+        g, x, y = _gcd_extended(10, 6)  # (2, -1, 2) since 10*(-1) + 6*2 = 2
+    """
     return _gcd_extended_numba(a, b)
 
 @numba.njit(cache=True)
@@ -304,7 +532,36 @@ def _rank_mod_p_numba(M: np.ndarray, p: int) -> int:
     return rank
 
 def _rank_mod_p(A: np.ndarray, p: int) -> int:
-    """Compute matrix rank over `Z/pZ` via Euclidean row reduction (handles composite p)."""
+    """Compute matrix rank over `Z/pZ` via Euclidean row reduction (handles composite p).
+
+    What is Being Computed?:
+        The rank of a matrix over the ring Z/pZ. This measures the number of 
+        linearly independent rows/columns in the finite field (if p is prime) 
+        or ring (if p is composite).
+
+    Algorithm:
+        1. Copy the input array and take values modulo p.
+        2. Delegate to `_rank_mod_p_numba`, which performs Gaussian-like 
+           elimination using Euclidean reduction to handle possibly non-prime p.
+        3. Count the number of pivots found.
+
+    Preserved Invariants:
+        - Rank is invariant under elementary row and column operations over Z/pZ.
+
+    Args:
+        A: The input dense matrix as a NumPy array.
+        p: The modulus.
+
+    Returns:
+        int: The rank of the matrix over Z/pZ.
+
+    Use When:
+        - Computing Betti numbers or homology with Z/pZ coefficients.
+        - Checking linear independence of chains over a finite field.
+
+    Example:
+        rank = _rank_mod_p(np.array([[1, 0], [0, 2]]), 2)  # 1 (since 2 mod 2 is 0)
+    """
     M = (A.astype(np.int64) % p).copy()
     return _rank_mod_p_numba(M, p)
 
@@ -363,7 +620,37 @@ def _rref_mod_p_numba(M: np.ndarray, p: int):
     return M, pivots
 
 def _rref_mod_p(A: np.ndarray, p: int) -> tuple[np.ndarray, list[int]]:
-    """Compute row-reduced echelon form over `Z/pZ` via Euclidean reduction."""
+    """Compute row-reduced echelon form over `Z/pZ` via Euclidean reduction.
+
+    What is Being Computed?:
+        The row-reduced echelon form (RREF) of a matrix over Z/pZ, and the 
+        indices of the pivot columns.
+
+    Algorithm:
+        1. Copy the input matrix and take values modulo p.
+        2. Perform row reduction using the Euclidean algorithm for pivots to 
+           handle composite p.
+        3. Eliminate entries above and below pivots to achieve reduced form.
+        4. Return the reduced matrix and the list of pivot column indices.
+
+    Preserved Invariants:
+        - Row space of the matrix is preserved.
+        - Rank (number of pivots) is preserved.
+
+    Args:
+        A: The input dense matrix.
+        p: The modulus.
+
+    Returns:
+        tuple[np.ndarray, list[int]]: A tuple (reduced_matrix, pivot_columns).
+
+    Use When:
+        - Computing nullspaces or basis vectors over finite fields.
+        - Solving linear systems over Z/pZ.
+
+    Example:
+        rref, pivots = _rref_mod_p(np.array([[2, 1], [1, 1]]), 3)
+    """
     M = (A.astype(np.int64) % p).copy()
     M_out, pivots = _rref_mod_p_numba(M, p)
     return M_out, list(pivots)
@@ -373,12 +660,32 @@ def _rref_mod_p(A: np.ndarray, p: int) -> tuple[np.ndarray, list[int]]:
 def _nullspace_basis_mod_p(A: np.ndarray, p: int) -> list[np.ndarray]:
     """Return a basis of `ker(A)` over `Z/pZ`.
 
+    What is Being Computed?:
+        A basis for the kernel (nullspace) of a linear map A over the ring Z/pZ.
+
+    Algorithm:
+        1. Compute the row-reduced echelon form (RREF) of A over Z/pZ using `_rref_mod_p`.
+        2. Identify free columns (columns without pivots).
+        3. For each free column, construct a basis vector by setting the free 
+           variable to 1 and solving for pivot variables.
+        4. Return the list of basis vectors.
+
+    Preserved Invariants:
+        - The span of the returned vectors is exactly the nullspace of A.
+
     Args:
-        A: The input matrix.
+        A: The input matrix as a dense NumPy array.
         p: The modulus.
 
     Returns:
-        A list of basis vectors for the nullspace.
+        list[np.ndarray]: A list of basis vectors for the nullspace.
+
+    Use When:
+        - Computing homology or cohomology basis over finite fields.
+        - Solving for cycles that are not boundaries.
+
+    Example:
+        basis = _nullspace_basis_mod_p(np.array([[1, 1]]), 2)  # [array([1, 1])]
     """
     m, n = A.shape
     rref, pivots = _rref_mod_p(A, p)
@@ -437,8 +744,42 @@ def _is_independent_wrt_optimized(
 ) -> tuple[bool, int]:
     """Check independence using a pre-allocated pivot matrix for zero allocation.
 
+    What is Being Computed?:
+        Checks if a vector `v` is linearly independent of a set of existing 
+        pivot vectors. If it is independent, it is reduced and added to the 
+        pivot set.
+
+    Algorithm:
+        1. Copy the input vector into a work array.
+        2. If a modulus `p` is provided (Z/pZ case):
+           a. Perform Euclidean reduction of `work` using existing pivot rows.
+           b. If a new pivot dimension is found, normalize the vector (if possible) 
+              and add it to `pivot_matrix`.
+        3. If no modulus is provided (Q/R case):
+           a. Use standard field reduction (Gaussian elimination with floats).
+           b. Check if the remaining vector is non-zero (above a threshold).
+           c. If non-zero, normalize and add to `pivot_matrix`.
+        4. Return whether it was independent and the updated pivot count.
+
+    Preserved Invariants:
+        - The span of the pivot matrix is maintained and optionally extended.
+
+    Args:
+        v: The vector to test for independence.
+        pivot_matrix: Pre-allocated 2D array storing current pivot vectors.
+        pivot_indices: Array storing the column index of the first non-zero entry for each pivot.
+        n_pivots: Current number of pivots in the matrix.
+        p: Optional modulus for Z/pZ.
+
     Returns:
-        tuple (is_independent, updated_n_pivots)
+        tuple[bool, int]: (is_independent, updated_n_pivots).
+
+    Use When:
+        - Building a basis incrementally from a set of candidate vectors.
+        - High-performance basis reduction where minimizing allocations is critical.
+
+    Example:
+        is_indep, n = _is_independent_wrt_optimized(v, pivots, indices, n)
     """
     work = np.asarray(v, dtype=np.int64).copy()
     if p is not None:
@@ -481,7 +822,39 @@ def _is_independent_wrt_optimized(
 def _is_independent_wrt(
     v: np.ndarray, pivots: dict[int, np.ndarray], p: Optional[int] = None
 ) -> bool:
-    """Legacy wrapper for _is_independent_wrt (avoid re-packing if possible in callers)."""
+    """Legacy wrapper for _is_independent_wrt (avoid re-packing if possible in callers).
+
+    What is Being Computed?:
+        Checks if vector `v` is independent of a set of pivot vectors stored 
+        in a dictionary.
+
+    Algorithm:
+        1. Copy `v` and take modulo `p` if provided.
+        2. If `pivots` dictionary is empty, find the first non-zero entry, 
+           normalize `v`, store it in `pivots`, and return True.
+        3. Convert the `pivots` dictionary to arrays.
+        4. Delegate to `_is_independent_wrt_mod_p_kernel` or perform field 
+           reduction if `p` is None.
+        5. Update the `pivots` dictionary with any changes and return independence result.
+
+    Preserved Invariants:
+        - The span of the vectors in the `pivots` dictionary is maintained.
+
+    Args:
+        v: The vector to check.
+        pivots: Dictionary mapping pivot column index to pivot vector.
+        p: Optional modulus.
+
+    Returns:
+        bool: True if the vector was independent and added to the dictionary.
+
+    Use When:
+        - Legacy code where basis is stored as a dictionary of indices.
+        - Incremental basis building where zero-allocation optimization is not needed.
+
+    Example:
+        is_new = _is_independent_wrt(vec, my_pivots, p=5)
+    """
     # This remains for backward compatibility but callers should migrate to _is_independent_wrt_optimized
     work = np.asarray(v, dtype=np.int64).copy()
     if p is not None:
@@ -538,11 +911,39 @@ def _matrix_rank_for_ring(
 ) -> int:
     """Compute matrix rank in the requested coefficient field with backend selection.
 
+    What is Being Computed?:
+        The rank of a sparse matrix over a specified ring or field (Q or Z/pZ).
+
+    Algorithm:
+        1. If the matrix is empty or has no non-zeros, return 0.
+        2. Normalize backend selection (auto, julia, or python).
+        3. If `ring_kind` is 'Q':
+           a. Try using Julia's sparse rank computation over Q if available.
+           b. Fallback to NumPy's dense rank on the float-converted matrix.
+        4. If `ring_kind` is 'ZMOD':
+           a. Validate modulus `p`.
+           b. Try using Julia's sparse rank computation over Z/pZ if available.
+           c. Fallback to Python's Euclidean elimination on the dense matrix.
+        5. Warn if performing large dense rank computations.
+
+    Preserved Invariants:
+        - Rank is a fundamental invariant of the linear map represented by the matrix.
+
     Args:
-        matrix: The sparse matrix.
-        ring_kind: One of 'Q' or 'ZMOD'.
-        p: Modulus for 'ZMOD'.
-        backend: 'auto', 'julia', or 'python'.
+        matrix: The sparse CSR matrix.
+        ring_kind: One of 'Q' (Rationals) or 'ZMOD' (Finite ring/field).
+        p: Modulus for 'ZMOD'; ignored for 'Q'.
+        backend: Backend selector ('auto', 'julia', or 'python').
+
+    Returns:
+        int: The computed rank.
+
+    Use When:
+        - Computing Betti numbers in homology.
+        - Calculating ranks of boundary operators over different coefficient rings.
+
+    Example:
+        r = _matrix_rank_for_ring(d2, "ZMOD", p=2)
     """
     if matrix is None or matrix.nnz == 0:
         return 0
@@ -596,14 +997,40 @@ def _composite_mod_uct_decomposition(
 ) -> Tuple[int, List[int]]:
     """Compute Z/n decomposition from integral data via UCT tensor/Tor terms.
 
+    What is Being Computed?:
+        The structure of the homology group H_n(X; Z/mZ) given the integral 
+        homology H_n(X; Z) and H_{n-1}(X; Z).
+
+    Algorithm:
+        1. Start with the free rank of H_n(X; Z).
+        2. Apply the Universal Coefficient Theorem (UCT):
+           H_n(X; Z/mZ) ≅ (H_n(X; Z) ⊗ Z/mZ) ⊕ Tor(H_{n-1}(X; Z), Z/mZ).
+        3. For each torsion coefficient t in H_n(Z), compute g = gcd(t, m). If g = m, 
+           it contributes to the free part of H_n(Z/mZ); if 1 < g < m, it 
+           contributes a Z/gZ factor.
+        4. Repeat the same process for torsion coefficients in H_{n-1}(Z) to 
+           account for the Tor term.
+        5. Return the total rank and sorted list of torsion coefficients.
+
+    Preserved Invariants:
+        - Homological structure under coefficient change.
+
     Args:
         free_rank: Free rank of H_n(Z).
         torsion_n: Torsion coefficients of H_n(Z).
         torsion_nm1: Torsion coefficients of H_{n-1}(Z).
-        modulus: The modulus n for Z/nZ coefficients.
+        modulus: The modulus m for Z/mZ coefficients.
 
     Returns:
-        A tuple (rank_mod, torsion_mod) for H_n(Z/nZ).
+        tuple[int, list[int]]: (rank_mod, torsion_mod) representing H_n(Z/mZ).
+
+    Use When:
+        - Computing homology with composite Z/mZ coefficients without direct reduction.
+        - Deriving modular homology from previously computed integral homology.
+
+    Example:
+        rank, tors = _composite_mod_uct_decomposition(1, [2], [2], 2)
+        # H_n(Z)=Z+Z/2, H_{n-1}(Z)=Z/2, modulus=2 => (1+1+1, []) = (3, [])
     """
     rank_mod = int(free_rank)
     torsion_mod: List[int] = []
@@ -632,8 +1059,39 @@ def _composite_mod_uct_decomposition(
 
 
 class ChainComplex(BaseModel):
-    """
-    An abstract Chain Complex C_* over Z.
+    """An abstract Chain Complex C_* over Z (or other rings).
+
+    Overview:
+        A ChainComplex represents a sequence of modules (chain groups) and linear 
+        maps (boundary operators) between them, such that the composition of any 
+        two consecutive maps is zero (∂_n ∘ ∂_{n+1} = 0). It serves as the 
+        fundamental algebraic object for computing homology and cohomology 
+        groups of topological spaces.
+
+    Key Concepts:
+        - **Chain Groups (C_n)**: Free Z-modules generated by cells of dimension n.
+        - **Boundary Maps (∂_n)**: Linear maps C_n → C_{n-1} represented as sparse matrices.
+        - **Cycles (Z_n)**: Elements in the kernel of ∂_n (chains with no boundary).
+        - **Boundaries (B_n)**: Elements in the image of ∂_{n+1}.
+        - **Homology (H_n)**: The quotient group Z_n / B_n, measuring "holes".
+        - **Smith Normal Form (SNF)**: The matrix reduction algorithm used to compute homology over Z.
+
+    Common Workflows:
+        1. **Initialization** → Directly from boundary matrices and cell counts.
+        2. **Homology computation** → Use homology() to get rank and torsion.
+        3. **Cohomology computation** → Use cohomology() and cohomology_basis().
+        4. **Invariants summary** → Use topological_invariants() for a comprehensive report.
+
+    Coefficient Ring:
+        - 'Z' (default): Integer coefficients (exact computation with torsion).
+        - 'Q': Rational coefficients (only ranks/Betti numbers).
+        - 'Z/pZ': Modular coefficients (for prime p or composite moduli).
+
+    Attributes:
+        boundaries (Dict[int, csr_matrix]): Mapping from dimension n to the boundary map ∂_n.
+        dimensions (List[int]): Sorted list of dimensions present in the complex.
+        cells (Dict[int, int]): Mapping from dimension n to the rank of the chain group C_n.
+        coefficient_ring (str): The ring or field over which computations are performed.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -859,18 +1317,45 @@ class ChainComplex(BaseModel):
     def homology(
         self, n: int | None = None, backend: str = "auto"
     ) -> Tuple[int, List[int]] | Dict[int, Tuple[int, List[int]]]:
-        """Compute the n-th homology group H_n(C) = ker(d_n) / im(d_{n+1}).
-
-        If `n` is omitted, computes homology for all known nonnegative degrees
-        and returns a dictionary `{degree: (rank, torsion)}`.
-
+        """Compute homology groups H_n(C) = ker(∂_n) / im(∂_{n+1}), measuring n-dimensional "holes".
+        
+        What is Homology?:
+            Homology groups measure the topological features of a space (holes, voids, etc.) in each 
+            dimension. H_0 counts connected components, H_1 counts 1-dimensional holes (loops), H_2 
+            counts 2-dimensional voids, etc. Each H_n is expressed as (rank, torsion): the free part 
+            (rank over ℤ) and the torsion coefficients.
+        
+        Algorithm:
+            1. Extract the boundary matrices ∂_n and ∂_{n+1} from the chain complex
+            2. Compute the image of ∂_{n+1} (cycles that are boundaries of (n+1)-chains)
+            3. Compute the kernel of ∂_n (n-chains with no boundary)
+            4. Form H_n = ker(∂_n) / im(∂_{n+1}) using Smith Normal Form (Julia or Python backend)
+            5. Return (free_rank, torsion_list) where torsion_list contains torsion coefficients
+        
+        Preserved Invariants:
+            - Homotopy equivalent complexes have isomorphic homology groups
+            - Betti numbers (free ranks) are topological invariants
+            - Torsion structure detects higher-order phenomena (e.g., fundamental group imperfections)
+        
         Args:
-            n: Optional homological degree to compute.
-            backend: 'auto', 'julia', or 'python'.
-
+            n: Homological degree (int). If None, computes homology for all positive degrees.
+            backend: 'auto' (tries Julia, falls back to Python), 'julia', or 'python'.
+        
         Returns:
-            If n is provided: A tuple (rank, torsion).
-            If n is None: A dictionary mapping degree to (rank, torsion).
+            If n is int: Tuple (rank, torsion) where rank is the free rank and torsion is a 
+                         list of torsion coefficients (e.g., [2, 2] means ℤ/2ℤ ⊕ ℤ/2ℤ).
+            If n is None: Dict[int → (rank, torsion)] for all degrees in the complex.
+        
+        Use When:
+            - You need to classify the topology of a space (e.g., sphere vs. torus)
+            - Computing Betti numbers, Euler characteristic, or persistence diagrams
+            - Checking homotopy equivalence: identical homology is necessary (but not sufficient)
+            - Julia backend recommended for complexes with >1000 simplices
+        
+        Example:
+            h0 = sc.homology(0)  # (1, []) means 1 connected component, no torsion
+            h1 = sc.homology(1)  # (1, []) means 1 "hole" (fundamental group has rank 1)
+            all_homology = sc.homology()  # {0: (1, []), 1: (1, []), ...}
         """
         if n is None:
             key_all = ("chain", "homology", "all", str(self.coefficient_ring), backend)
@@ -965,15 +1450,43 @@ class ChainComplex(BaseModel):
     def cohomology(
         self, n: int | None = None, backend: str = "auto"
     ) -> Tuple[int, List[int]] | Dict[int, Tuple[int, List[int]]]:
-        """Compute the n-th cohomology group H^n(C).
-
+        """Compute cohomology groups H^n(C), the dual of homology with cup product structure.
+        
+        What is Cohomology?:
+            Cohomology is the dual notion to homology, living in H^n(C) = Hom(H_n(C), ℤ). For CW 
+            complexes over ℤ, H^n ≅ H_n, BUT cohomology carries additional structure: the cup product 
+            (∪), which encodes higher-order intersection information. This matters for manifolds, 
+            characteristic classes, and surgery theory.
+        
+        Algorithm:
+            1. Compute homology H_n(C) and H_{n-1}(C) to obtain rank and torsion
+            2. By the Universal Coefficient Theorem over ℤ:
+               H^n(C; ℤ) ≅ Hom(H_n(C), ℤ) ⊕ Ext¹(H_{n-1}(C), ℤ)
+               which simplifies to: H^n has rank = rank(H_n), torsion = torsion(H_{n-1})
+            3. Cache result; subsequent queries use cached homology data
+        
+        Preserved Invariants:
+            - Cohomology groups are topological invariants (homotopy equivalence preserves them)
+            - Cup product ring structure is preserved under homotopy equivalence
+            - Characteristic classes derived from cohomology are stable topological invariants
+        
         Args:
-            n: Optional homological degree to compute.
-            backend: 'auto', 'julia', or 'python'.
-
+            n: Cohomological degree. If None, computes for all degrees.
+            backend: 'auto', 'julia', or 'python' (used when computing underlying homology).
+        
         Returns:
-            If n is provided: A tuple (rank, torsion).
-            If n is None: A dictionary mapping degree to (rank, torsion).
+            If n is int: Tuple (rank, torsion) representing H^n(C).
+            If n is None: Dict[int → (rank, torsion)] for all degrees.
+        
+        Use When:
+            - You need cup product structure or characteristic classes
+            - Working with manifolds (where cup product gives intersection form)
+            - Computing Stiefel-Whitney or Pontryagin classes
+            - Stuifying Poincaré duality in manifold surgery
+        
+        Example:
+            rank, torsion = sc.cohomology(1)  # H^1: copies of ℤ (plus torsion)
+            # On a closed surface: H^1 has rank = 2g (g = genus), H^2 has rank = 1
         """
         if n is None:
             key_all = ("chain", "cohomology", "all", str(self.coefficient_ring), backend)
@@ -1069,14 +1582,43 @@ class ChainComplex(BaseModel):
         return out
 
     def betti_number(self, n: int | None = None, backend: str = "auto") -> int | Dict[int, int]:
-        """Return the n-th Betti number (rank of H_n).
-
+        """Return the n-th Betti number β_n, the free rank of H_n(C).
+        
+        What is the Betti Number?:
+            The n-th Betti number β_n = rank(H_n(C)) is the number of independent n-dimensional 
+            "holes" in the space. For example:
+            - β₀ = number of connected components
+            - β₁ = 2g on a closed surface of genus g (counts loops)
+            - β₂ = number of 2-dimensional voids
+            - Euler characteristic χ = Σ (-1)^n β_n
+        
+        Algorithm:
+            1. Compute homology H_n(C) as (rank, torsion)
+            2. Extract and return the free rank component
+            3. Cache result for efficiency
+        
+        Preserved Invariants:
+            - Betti numbers are homotopy invariants (homotopy equivalent spaces have identical Betti numbers)
+            - They are intrinsic properties that don't depend on triangulation
+            - Provide complete topological classification for simply-connected spaces (e.g., spheres)
+        
         Args:
-            n: Optional degree.
+            n: Homological degree. If None, returns Betti numbers for all degrees.
             backend: 'auto', 'julia', or 'python'.
-
+        
         Returns:
-            Betti number or dictionary of Betti numbers.
+            If n is int: The Betti number β_n (a non-negative integer).
+            If n is None: Dict[int → β_n] for all degrees.
+        
+        Use When:
+            - Quick summary of topology without full torsion info
+            - Euler characteristic: χ = Σ (-1)^n β_n
+            - Classification: e.g., closed surfaces differ by Betti number
+            - Need a single topological "fingerprint" per dimension
+        
+        Example:
+            β1 = sc.betti_number(1)  # Rank of the 1st homology group
+            all_bettis = sc.betti_numbers()  # {0: 1, 1: 2, 2: 1} for a torus
         """
         if n is None:
             key_all = ("chain", "betti_number", "all", str(self.coefficient_ring), backend)
@@ -1099,13 +1641,25 @@ class ChainComplex(BaseModel):
         return out
 
     def betti_numbers(self, backend: str = "auto") -> Dict[int, int]:
-        """Return all Betti numbers.
-
+        """Return all Betti numbers β₀, β₁, β₂, ... as a dictionary.
+        
+        Algorithm:
+            Calls betti_number(n=None) to obtain {degree: β_n} for all dimensions in the complex.
+        
+        Use When:
+            - Need a complete topological summary
+            - Computing Euler characteristic χ = Σ (-1)^n β_n
+            - Quick classification or comparison of spaces
+        
         Args:
             backend: 'auto', 'julia', or 'python'.
-
+        
         Returns:
-            Dictionary mapping degree to Betti number.
+            Dict[int → β_n] with Betti numbers for all degrees.
+        
+        Example:
+            bettis = sc.betti_numbers()  # {0: 1, 1: 1, 2: 0}
+            χ = sum((-1)**n * β for n, β in bettis.items())
         """
         out = self.betti_number(backend=backend)
         return out
@@ -1366,8 +1920,35 @@ class ChainComplex(BaseModel):
 
 
 class CWComplex(BaseModel):
-    """
-    Representation of a Finite CW Complex X.
+    """Representation of a Finite CW Complex X.
+
+    Overview:
+        A CWComplex models a topological space built inductively by attaching n-cells 
+        to the (n-1)-skeleton. It is a highly flexible representation that generalizes 
+        simplicial complexes, allowing for more efficient descriptions of spaces (e.g., 
+        a torus as 1 vertex, 2 edges, and 1 face). This class maintains the cellular 
+        structure and provides tools to compute its cellular homology.
+
+    Key Concepts:
+        - **n-Cells**: The basic building blocks (disk-like components of dimension n).
+        - **Attaching Maps**: The boundary operators that describe how n-cells are glued to the (n-1)-skeleton.
+        - **Cellular Chain Complex**: The algebraic structure C_*(X) derived from the cell decomposition.
+        - **2-Skeleton**: Sufficient for computing the fundamental group π₁(X).
+
+    Common Workflows:
+        1. **From Simplicial** → CWComplex.from_simplicial_complex(sc).
+        2. **Cellular Homology** → Compute homology() or betti_numbers() directly.
+        3. **Algebraic Lifting** → Obtain the cellular_chain_complex() for advanced homological algebra.
+        4. **Fundamental Group** → Pass to extract_pi_1() to compute π₁(X).
+
+    Coefficient Ring:
+        - 'Z' (default), 'Q', 'Z/pZ'.
+
+    Attributes:
+        cells (Dict[int, int]): Mapping from dimension n to the number of n-cells.
+        attaching_maps (Dict[int, csr_matrix]): Mapping from n to the boundary map ∂_n.
+        dimensions (List[int]): Dimensions present in the complex.
+        coefficient_ring (str): Default coefficient ring for computations.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -1606,7 +2187,36 @@ class CWComplex(BaseModel):
 
 
 class SimplicialComplex(BaseModel):
-    """Finite simplicial complex with sparse boundary operators and face-closure helpers."""
+    """A finite simplicial complex with sparse boundary matrices and topological computation tools.
+    
+    Overview:
+        A SimplicialComplex represents a finite CW complex built from simplices (points, edges, 
+        triangles, tetrahedra, etc.). It automatically maintains skeletal closure, computes boundary 
+        and coboundary operators via sparse matrices, and provides access to fundamental topological 
+        invariants: homology groups, fundamental groups, Betti numbers, Euler characteristic, and more.
+    
+    Key Concepts:
+        - **Simplices**: Vertices (0-simplices), edges (1-simplices), triangles (2-simplices), etc.
+        - **Skeletal Closure**: The complex automatically includes all faces of any simplex added.
+        - **Boundary Operator (∂_n)**: Maps n-dimensional chains to (n-1)-dimensional chains.
+        - **Chain Complex**: C_0 ←d₁ C_1 ←d₂ C_2 ← ... where C_n is the ℤ-module of n-chains.
+        - **Homology H_n(C)**: The quotient ker(d_n) / im(d_{n+1}) (roughly: "holes" of dimension n).
+    
+    Common Workflows:
+        1. **From geometry** → SimplicialComplex.from_simplices() or from_mesh()
+        2. **Reduction** → simplify() or collapse() to get homotopy-equivalent smaller complex
+        3. **Invariant computation** → homology(), fundamental_group(), betti_numbers()
+        4. **Lifting results** → Use simplify()'s simplex_map to lift invariants back to original
+    
+    Coefficient Ring:
+        - 'Z' (default): Integer coefficients; returns (rank, torsion) pairs
+        - 'Q': Rational coefficients; returns ranks only
+        - 'Z/pZ': Mod p coefficients; for prime p returns mod p structure
+    
+    Attributes:
+        coefficient_ring (str): The coefficient ring for homology computations ('Z', 'Q', 'Z/pZ').
+        filtration (dict): Optional Rips/Vietoris filtration (simplex → filtration_value).
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -2290,13 +2900,40 @@ class SimplicialComplex(BaseModel):
         return self.boundary_matrices()
 
     def n_simplices(self, d: int) -> List[Tuple[int, ...]]:
-        """Return the list of simplices in dimension d.
-
+        """Return the list of all simplices of dimension d (d-simplices).
+        
+        What are n-Simplices?:
+            An n-simplex is the n-dimensional generalization of a triangle:
+            - 0-simplex: A single vertex {v}
+            - 1-simplex: An edge {u, v}
+            - 2-simplex: A triangle {u, v, w}
+            - 3-simplex: A tetrahedron {u, v, w, x}
+            - n-simplex: The convex hull of n+1 affinely independent points
+        
+        Algorithm:
+            Retrieve the pre-computed list of n-dimensional simplices from the internal 
+            _simplices_table dictionary, which is built and maintained during complex construction.
+        
         Args:
-            d: Dimension.
-
+            d: Dimension (int). d=0 returns vertices, d=1 returns edges, etc.
+        
         Returns:
-            List of d-simplices.
+            List[Tuple[int, ...]]: All d-simplices as sorted tuples of vertex indices.
+                                  Empty list if no simplices of dimension d exist.
+        
+        Use When:
+            - Iterating over simplices of a specific dimension
+            - Building custom algorithms (e.g., computing link, star, or specific cofaces)
+            - Filtering by dimension for targeted computations
+            - Exporting the complex to other formats
+        
+        Example:
+            vertices = sc.n_simplices(0)  # List of vertex labels
+            edges = sc.n_simplices(1)  # Edges (1-simplices)
+            triangles = sc.n_simplices(2)  # Triangles (2-simplices)
+            for edge in sc.n_simplices(1):
+                u, v = edge
+                # process edge
         """
         return self._simplices_table.get(int(d), [])
 
@@ -2538,13 +3175,41 @@ class SimplicialComplex(BaseModel):
         return edges
 
     def boundary_matrix(self, d: int) -> csr_matrix:
-        """Return the boundary matrix d_d.
-
+        """Return the boundary operator matrix ∂_d: C_d → C_{d-1}.
+        
+        What is the Boundary Operator?:
+            The boundary of an n-simplex {v₀, v₁, ..., v_n} is the formal sum of its (n-1)-faces
+            with alternating signs: ∂{v₀, ..., v_n} = Σ (-1)^i {v₀, ..., v̂ᵢ, ..., v_n}.
+            The boundary matrix ∂_d encodes this operation as a sparse integer matrix with rows 
+            indexed by (d-1)-simplices and columns by d-simplices.
+        
+        Algorithm:
+            1. Extract all d-simplices from the complex
+            2. For each d-simplex σ, compute its (d-1) faces with signs
+            3. Assemble a CSR sparse matrix where entry (i, j) = ±1 if face_i is a face of simplex_j
+            4. Cache result for fast re-access
+        
+        Preserved Invariants:
+            - ∂_{d-1} ∘ ∂_d = 0 (boundary of a boundary is zero; ker(∂_d) ⊇ im(∂_{d+1}))
+            - Rank and null-space determine homology groups
+            - Matrix is sparse and efficient to work with
+        
         Args:
-            d: Dimension of the simplices to compute boundaries for.
-
+            d: Dimension. Returns ∂_d: C_d → C_{d-1}.
+        
         Returns:
-            csr_matrix: The sparse boundary matrix in CSR format.
+            csr_matrix: Sparse matrix of shape (|C_{d-1}|, |C_d|) with ±1 entries.
+        
+        Use When:
+            - Direct computation of homology via Smith Normal Form
+            - Studying the chain complex structure
+            - Computing with alternative backends (e.g., Julia)
+            - Custom homological algebra computations
+        
+        Example:
+            ∂2 = sc.boundary_matrix(2)  # Boundary operator for triangles → edges
+            # ∂2.shape = (num_edges, num_triangles)
+            # Use for homology: H_1 = ker(∂1) / im(∂2)
         """
         key = ("simplicial", "boundary_matrix", int(d))
         cached = self._cache_get(key)
@@ -2900,15 +3565,34 @@ class SimplicialComplex(BaseModel):
         )
 
     def simplify(self, backend: str = "auto") -> tuple["SimplicialComplex", dict[tuple, list[tuple]]]:
-        """Simplify the simplicial complex into a smaller homotopy equivalent one.
+        """Simplify the simplicial complex into a smaller homotopy equivalent one using Link Condition edge contractions.
         
-        This method performs a rigorous topological reduction using iterative edge 
-        contractions gated by the Link Condition: Lk(u) ∩ Lk(v) == Lk(uv). 
-        It is guaranteed to reduce the complex size while strictly preserving 
-        the homotopy type, Betti numbers, and fundamental group.
-
-        Returns:
-            tuple: (simplified_complex, simplex_map)
+        **Algorithm:** Iteratively contracts edges (u, v) that satisfy the Link Condition:
+        Lk(u) ∩ Lk(v) == Lk(uv), where Lk denotes the link of a simplex.
+        This is a topologically rigorous reduction that guarantees homotopy equivalence.
+        
+        **Preserved Invariants (Homotopy Equivalence):**
+        - Fundamental group (π₁) — same generators and relations
+        - Homology groups (H_n) — identical Betti numbers
+        - Cohomology rings — Cup product structure preserved
+        - All derived invariants (Euler characteristic, etc.)
+        
+        **Returns:**
+            tuple: (simplified_complex, simplex_map) where:
+                - simplified_complex: A homotopy-equivalent complex with fewer simplices
+                - simplex_map: dict[new_simplex] → [original_simplices]
+                  Maps each simplex in the simplified complex back to all original simplices
+                  that were contracted/merged into it. Use this to lift invariants back to
+                  the original geometry.
+        
+        **Use When:**
+        - You need the mapping back to original simplices for lifting invariants
+        - Working with large complexes (1000+ simplices) with Julia acceleration
+        - You require rigorous topological guarantees via Link Condition
+        
+        **Example:**
+            sc_reduced, simplex_map = sc.simplify()
+            # Use simplex_map to lift homology generators back to original points
         """
         from collections import defaultdict
         import numpy as np
@@ -3323,7 +4007,34 @@ class SimplicialComplex(BaseModel):
         return extract_pi_1(self.to_cw_complex(), simplify=simplify, backend=backend)
 
     def collapse(self) -> "SimplicialComplex":
-        """Perform all possible simplicial collapses to reduce the complex size."""
+        """Reduce the complex by removing all free faces (simplicial collapses).
+        
+        Algorithm:
+            Iteratively identifies "free faces" (faces with exactly one coface)
+            and removes both the free face and its unique coface. This reduces the complex
+            size while preserving homotopy equivalence.
+        
+        Preserved Invariants (Homotopy Equivalence):
+            - Fundamental group (π₁) — unchanged
+            - Homology groups (H_n) — Betti numbers identical
+            - Cohomology rings — Cup product structure preserved
+            - All derived invariants (Euler characteristic, etc.)
+        
+        Returns:
+            SimplicialComplex: A homotopy-equivalent complex with fewer simplices.
+            Note: No mapping information is provided. Use simplify() if you need
+            to track which original simplices were removed.
+        
+        Use When:
+            - You want quick, aggressive size reduction without tracking the mapping
+            - Working on small-to-medium complexes (<5000 simplices)
+            - You don't need to lift invariants back to original geometry
+            - Speed is critical and Julia acceleration is unavailable
+        
+        Example:
+            sc_minimal = sc.collapse()  # Fast reduction, typical 90%+ size reduction
+            # Just the minimal homotopy equivalent; no original mapping available
+        """
         current_simplices = set()
         for d in self.dimensions:
             for s in self.n_simplices(d):

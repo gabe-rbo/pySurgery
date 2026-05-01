@@ -12,19 +12,32 @@ HAS_JULIACALL = importlib.util.find_spec("juliacall") is not None
 class JuliaBridge:
     """Zero-Copy Bridge to execute high-performance Julia algebraic topology operations.
 
-    Replaces subprocess mocks with native memory sharing via `juliacall`.
+    Overview:
+        The JuliaBridge provides a high-performance, zero-copy interface between Python 
+        and Julia for heavy algebraic topology computations. It replaces slower 
+        subprocess-based alternatives with native memory sharing via `juliacall`, 
+        enabling efficient execution of exact algebra, persistent homology, and 
+        manifold certification kernels.
+
+    Key Concepts:
+        - **Zero-Copy**: Direct memory sharing between NumPy and Julia arrays to avoid serialization overhead.
+        - **Singleton**: Process-wide instance ensures Julia runtime is initialized once.
+        - **Lazy Initialization**: Julia is only loaded upon the first compute-heavy call.
+        - **Warm-up**: Pre-compiles Julia kernels on startup to minimize first-call latency.
+
+    Common Workflows:
+        1. **Initialization** -> Automatic via julia_engine.available check.
+        2. **Exact Algebra** -> compute_sparse_snf() or compute_sparse_rank_q().
+        3. **Geometric Topology** -> is_homology_manifold_jl() or compute_trimesh_boundary_data().
+        4. **Optimization** -> compute_optimal_h1_basis_from_simplices().
+
+    Coefficient Ring:
+        Supports computations over Z, Q, and Z/pZ depending on the specific backend kernel invoked.
 
     Attributes:
-        _instance: The singleton instance of JuliaBridge.
-        _lock: Reentrant lock for thread-safe initialization.
-        _initialized: Whether the bridge has attempted initialization.
-        _available: Whether the Julia backend is successfully loaded.
-        error: Error message if initialization failed.
-        jl: The Julia Main module.
-        backend: The SurgeryBackend Julia module.
-        _coo_cache: Cache for sparse COO triplets.
-        _warmup_level: Level of warm-up performed (0: none, 1: minimal, 2: full).
-        _warmup_report: Report of warm-up workload results.
+        error (str | None): Error message if Julia initialization failed.
+        jl: The Julia Main module proxy.
+        backend: The SurgeryBackend Julia module proxy.
     """
 
     _instance = None
@@ -197,7 +210,7 @@ class JuliaBridge:
                 pkg_expr = ", ".join(f'\"{pkg}\"' for pkg in missing_required)
                 self.jl.eval(f"Pkg.add([{pkg_expr}])")
                 if verbose:
-                    print(f"[pySurgery] Successfully installed required packages")
+                    print("[pySurgery] Successfully installed required packages")
             except Exception as e:
                 raise RuntimeError(
                     f"Failed to install required Julia packages {missing_required}: {e!r}. "
@@ -213,7 +226,7 @@ class JuliaBridge:
                 pkg_expr = ", ".join(f'\"{pkg}\"' for pkg in missing_optional)
                 self.jl.eval(f"Pkg.add([{pkg_expr}])")
                 if verbose:
-                    print(f"[pySurgery] Successfully installed optional packages")
+                    print("[pySurgery] Successfully installed optional packages")
             except Exception as e:
                 if verbose:
                     print(f"[pySurgery] Optional packages failed (non-critical): {e!r}")
@@ -490,15 +503,36 @@ class JuliaBridge:
     ) -> np.ndarray:
         """Compute `||A * x_i||_2` in batch for normal-surface coordinate columns.
 
+        What is Being Computed?:
+            Computes the L2 norm of the residual vector A*x for each coordinate vector 
+            in the input matrix. This is used to verify if normal surface coordinates 
+            satisfy the matching equations A*x = 0.
+
+        Algorithm:
+            1. Convert the sparse matrix to cached COO triplets.
+            2. Pass triplets and the coordinate matrix to the Julia backend.
+            3. Perform batched matrix-vector multiplication and norm calculation in Julia.
+            4. Return the resulting norms as a NumPy array.
+
+        Preserved Invariants:
+            - The residual norm is 0 if and only if the coordinate vector represents a valid normal surface.
+            - Linear scaling: ||A * (c*x)|| = |c| * ||A * x||.
+
         Args:
-            matrix: The sparse matrix A.
+            matrix: The sparse matrix A (matching equations).
             coordinate_matrix: A 2D array where each column is a coordinate vector x_i.
 
         Returns:
-            An array of norms for each column.
+            np.ndarray: An array of L2 norms for each column in coordinate_matrix.
 
-        Raises:
-            ValueError: If inputs are invalid or incompatible.
+        Use When:
+            - Validating normal surface candidates at scale.
+            - Checking convergence of normal surface optimization.
+            - Working with large-scale matching equation systems where Python speed is insufficient.
+
+        Example:
+            norms = julia_engine.compute_normal_surface_residual_norms(A, coords)
+            valid_mask = norms < 1e-9
         """
         self.require_julia()
         coords = np.asarray(coordinate_matrix, dtype=np.int64)
@@ -609,6 +643,7 @@ class JuliaBridge:
             }
             for name, workload in workloads:
                 try:
+                    print(f"[julia_engine.warmup() :: WARMING UP] {name}")
                     workload()
                     report["completed"].append(name)
                 except Exception as exc:

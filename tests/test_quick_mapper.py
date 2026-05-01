@@ -1,8 +1,29 @@
+"""Tests for point cloud CkNN construction and QuickMapper simplification.
+
+Overview:
+    Validates topological preservation during point cloud construction via 
+    Continuous k-Nearest Neighbors (CkNN) and subsequent homology-preserving 
+    simplification using the QuickMapper algorithm.
+
+Key Concepts:
+    - **CkNN**: A graph construction method that handles multi-scale density in point clouds.
+    - **QuickMapper**: An aggressive simplification algorithm that preserves homotopy type.
+"""
 import pytest
 import numpy as np
 from pysurgery.core.complexes import SimplicialComplex
 
 def test_from_point_cloud_cknn():
+    """Test CkNN construction on a multi-scale point cloud.
+
+    What is Being Computed?:
+        Constructs a SimplicialComplex from points with varying densities.
+
+    Algorithm:
+        1. Create two clusters with different spatial densities.
+        2. Apply CkNN with k=2.
+        3. Verify that both clusters are internally connected (H_0 = 2).
+    """
     # Simple dataset: 3 points far apart, 3 points close together
     points = np.array([
         [0.0, 0.0], [0.1, 0.0], [0.0, 0.1], # Dense cluster
@@ -17,6 +38,17 @@ def test_from_point_cloud_cknn():
     assert sc.chain_complex().betti_number(0) == 2
 
 def test_quick_mapper_invariants():
+    """Validate invariant preservation during QuickMapper simplification.
+
+    What is Being Computed?:
+        Simplifies a noisy topological circle while ensuring Betti numbers remain constant.
+
+    Algorithm:
+        1. Generate a noisy circle point cloud.
+        2. Build a SimplicialComplex via CkNN.
+        3. Apply sc.simplify() (QuickMapper).
+        4. Assert that Betti numbers (β₀, β₁) are unchanged.
+    """
     # Construct a noisy topological circle (1D hole)
     angles = np.linspace(0, 2*np.pi, 20, endpoint=False)
     points = np.column_stack([np.cos(angles), np.sin(angles)])
@@ -52,6 +84,13 @@ def test_quick_mapper_invariants():
     assert isinstance(mapping, dict)
 
 def test_quick_mapper_dimension_agnostic():
+    """Verify remapping logic for collapsing simplices.
+
+    Algorithm:
+        1. Create a 2-simplex (triangle).
+        2. Manually force a merge of two vertices.
+        3. Verify the 2-simplex collapses to a 1-simplex (edge).
+    """
     # Create a simple 2-simplex (triangle)
     sc = SimplicialComplex.from_simplices([(0, 1, 2)])
     

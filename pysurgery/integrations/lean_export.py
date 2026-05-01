@@ -7,15 +7,29 @@ from pydantic import BaseModel, ConfigDict
 
 
 class LeanCheckResult(BaseModel):
-    """Result of a Lean 4 code check.
+    """Execution diagnostics and status for a formal Lean 4 code check.
+
+    Overview:
+        A LeanCheckResult encapsulates the outcome of running a generated Lean script 
+        through the `lean` compiler. It tracks availability, process exit codes, 
+        and full compiler logs to assist in identifying formal verification failures.
+
+    Key Concepts:
+        - **Formal Verification**: Using a proof assistant to ensure mathematical correctness.
+        - **Decidability**: Lean's ability to computationally verify matrix identities.
+
+    Common Workflows:
+        1. **Generate** -> `generate_lean_isomorphism_certificate()`
+        2. **Run** -> `run_lean_check()`
+        3. **Analyze** -> Inspect `LeanCheckResult.success` and `stderr`.
 
     Attributes:
-        available (bool): Whether Lean was available on the system.
-        exit_code (int): The exit code of the Lean process.
-        stdout (str): Standard output from Lean.
-        stderr (str): Standard error from Lean.
-        success (bool): Whether the check was successful.
-        command (str): The command executed.
+        available (bool): True if the `lean` executable was found on the path.
+        exit_code (int): Process exit code from the Lean compiler.
+        stdout (str): Output from Lean (typically contains timing/proof info).
+        stderr (str): Error output (typically contains proof failure details).
+        success (bool): True if the Lean theorem was successfully proved.
+        command (str): The exact shell command executed.
     """
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -74,22 +88,44 @@ def run_lean_check(
 def generate_lean_isomorphism_certificate(
     Q1: np.ndarray, Q2: np.ndarray, P: np.ndarray, theorem_name: str = "homeo_cert"
 ) -> str:
-    """Generates a Lean 4 proof script verifying that P is an Algebraic Isomorphism Certificate between the intersection forms Q1 and Q2.
+    """Generates a Lean 4 proof script verifying an Algebraic Isomorphism Certificate.
 
-    This fulfills the Formal Verification requirement for Surgery Theory.
+    What is Being Computed?:
+        Generates formal Lean 4 source code that proves Pᵀ * Q1 * P = Q2 and 
+        det(P) = ±1. This provides a machine-verifiable certificate that two 
+        intersection forms (and thus their underlying manifolds) are algebraically 
+        isomorphic.
+
+    Algorithm:
+        1. Validates that Q1, Q2, and P are square integer matrices of the same dimension.
+        2. Converts NumPy arrays into Lean matrix literals (`!![1, 2; 3, 4]`).
+        3. Constructs a Lean theorem statement asserting the matrix identity.
+        4. Selects the appropriate proof tactic (`decide` for small matrices, 
+           `native_decide` for larger ones).
+
+    Preserved Invariants:
+        - Algebraic isomorphism of intersection forms is a necessary condition 
+          for homeomorphism of simply-connected 4-manifolds.
+        - Unimodularity of P ensures the isomorphism is over Z (integral).
 
     Args:
-        Q1 (np.ndarray): The first intersection form matrix.
-        Q2 (np.ndarray): The second intersection form matrix.
-        P (np.ndarray): The isomorphism certificate matrix.
-        theorem_name (str): The name for the Lean theorem. Defaults to "homeo_cert".
+        Q1: The first intersection form matrix (Z-valued).
+        Q2: The second intersection form matrix (Z-valued).
+        P: The candidate isomorphism certificate matrix.
+        theorem_name: The name for the generated Lean theorem.
 
     Returns:
-        str: The Lean 4 source code.
+        str: Lean 4 source code containing the proof script.
 
-    Raises:
-        ValueError: If matrices are not 2D, not square, have mismatched shapes,
-            or contain non-integers, or if theorem_name is invalid.
+    Use When:
+        - Providing high-assurance evidence for a homeomorphism claim.
+        - Bridging numerical/algebraic results from Python to formal proof assistants.
+        - Fulfilling "Certificate" requirements in safety-critical topological analysis.
+
+    Example:
+        lean_code = generate_lean_isomorphism_certificate(Q_A, Q_B, P_isometry)
+        with open("certificate.lean", "w") as f:
+            f.write(lean_code)
     """
 
     Q1 = np.asarray(Q1)

@@ -1,3 +1,30 @@
+"""pysurgery: High-performance library for exact computational algebraic topology and surgery theory.
+
+Overview:
+    pysurgery provides a comprehensive suite of tools for computing discrete 
+    topological invariants and performing manifold classification using the 
+    framework of surgery theory. It leverages exact integer arithmetic for 
+    homology and intersection forms, and integrates with Julia and JAX for 
+    high-performance accelerators.
+
+Key Concepts:
+    - **Surgery Theory**: The classification of manifolds via the surgery exact sequence.
+    - **Poincaré Duality**: Exact computation of dualities and intersection forms.
+    - **Witnessing Model**: Certified homeomorphism decisions with explicit evidence.
+    - **Backend Agnosticism**: Unified API for Python, Julia, and JAX backends.
+
+Common Workflows:
+    1. **Invariant Extraction** → homology(), fundamental_group(), intersection_form().
+    2. **Manifold Comparison** → build_homeomorphism_witness(), analyze_homeomorphism().
+    3. **Surgery Obstructions** → WallGroupL.compute_obstruction_result().
+
+Coefficient Ring:
+    Supports 'Z' (integers), 'Q' (rationals), and 'Z/pZ' (mod p).
+
+Attributes:
+    __version__ (str): Current version of the library.
+    __all__ (list): Exported public symbols.
+"""
 from .core.complexes import ChainComplex, CWComplex, SimplicialComplex
 from .core.embedding import (
     EmbeddingResult,

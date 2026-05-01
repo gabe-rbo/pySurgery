@@ -1,19 +1,28 @@
 """Data-grounded H_1 generators and optimal basis extraction.
 
-Algorithmic foundation follows the "Generators and Optimality" chapter in:
-T. K. Dey and Y. Wang, *Computational Topology for Data Analysis*.
+Overview:
+    This module provides tools for extracting representative cycles for homology groups, 
+    with a focus on finding "optimal" (short or sparse) generators. It implements 
+    algorithms for H0 (connected components) and Hk (via kernel/image quotient), 
+    specifically specializing in a greedy shortest-path basis for H1.
+
+Key Concepts:
+    - **Homology Generators**: Representative cycles [z] that generate the homology group H_k.
+    - **Optimal Basis**: A basis of the homology group where the total weight (length/support) 
+      of the representative cycles is minimized.
+    - **Edge Annotations**: Z/2-valued labels on edges used to efficiently check 
+      homological independence of cycles.
+    - **Greedy Basis**: An approach that sorts candidate cycles by weight and 
+      iteratively picks those that are independent in homology.
+
+Common Workflows:
+    1. **H1 Analysis** → `compute_optimal_h1_basis_from_complex()` to get short cycles.
+    2. **General Homology** → `compute_homology_basis_from_complex()` for higher dimensions.
+    3. **Low-level** → `generator_cycles_from_simplices()` to generate candidates for custom filtering.
 
 References:
     Dey, T. K., & Wang, Y. (2022). Computational topology for data analysis. 
     Cambridge University Press.
-
-Implemented pipeline:
-- edge annotations on 2-complexes,
-- shortest-path generated cycle candidates,
-- greedy independent minimum-weight basis over Z2 annotations.
-
-When Julia backend support is available, this module can delegate the core
-generator/optimality computation to Julia and falls back to Python otherwise.
 """
 
 from __future__ import annotations
@@ -579,14 +588,38 @@ def annot_edge(
 ) -> tuple[Dict[Edge, np.ndarray], int]:
     """Compute edge annotations for cycle-space independence over Z/2.
 
+    What is Being Computed?:
+        Computes Z/2-valued annotation vectors for edges such that two 
+        cycles are homologically independent if and only if their 
+        XORed edge annotations are linearly independent.
+
+    Algorithm:
+        1. Construct a minimum spanning forest (MSF) of the 1-skeleton.
+        2. Assign basis vectors to non-tree edges.
+        3. Propagate annotations through 2-simplices (triangles) to 
+           ensure that boundaries have trivial annotations.
+        4. Perform Gaussian elimination on the resulting system.
+
+    Preserved Invariants:
+        - The dimension of the annotation space matches the rank of H_1(K; Z/2).
+
     Args:
-        simplices (Iterable[Tuple[int, ...]]): Input simplices.
-        num_vertices (int): Total number of vertices.
-        edge_weights (Optional[Dict[Edge, float]]): Edge weights.
+        simplices (Iterable[Tuple[int, ...]]): Input simplices (must include 1- and 2-simplices).
+        num_vertices (int): Total vertex count.
+        edge_weights (Optional[Dict[Edge, float]]): Weights for MSF construction.
 
     Returns:
-        tuple[Dict[Edge, np.ndarray], int]: Mapping from edges to annotation
-            vectors and the final dimension of the annotation space.
+        tuple[Dict[Edge, np.ndarray], int]: 
+            - Dictionary mapping each edge to its annotation vector.
+            - Dimension of the resulting homology space.
+
+    Use When:
+        - Implementing greedy basis selection algorithms.
+        - Need a fast way to check if a cycle is a boundary or homologically trivial.
+
+    Example:
+        annots, dim = annot_edge(simplices, n_v)
+        is_boundary = np.all(sum(annots[e] for e in cycle) % 2 == 0)
     """
     edges, triangles, _ = _normalize_edges_triangles(simplices)
     weights = {
@@ -747,16 +780,34 @@ def generator_cycles_from_simplices(
 ) -> List[Cycle]:
     """Generate candidate H1 cycles from simplices via shortest-path trees.
 
+    What is Being Computed?:
+        A large set of candidate 1-cycles that likely contain "short" 
+        homology generators.
+
+    Algorithm:
+        1. Build the 1-skeleton graph with geometric weights.
+        2. For a set of root vertices, compute shortest-path trees.
+        3. For each non-tree edge (u, v), form a cycle by combining the edge 
+           with the unique path in the tree between u and v.
+
+    Preserved Invariants:
+        - The generated set is guaranteed to contain a basis for H_1(K; Z/2) 
+          if all roots are used.
+
     Args:
         simplices (Iterable[Tuple[int, ...]]): Input simplices.
         num_vertices (int): Total number of vertices.
-        point_cloud (Optional[np.ndarray]): Point cloud coordinates.
-        max_roots (Optional[int]): Maximum number of tree roots.
-        root_stride (int): Stride for picking roots. Defaults to 1.
-        max_cycles (Optional[int]): Maximum number of cycles to generate.
+        point_cloud (Optional[np.ndarray]): Point cloud for geometric weights.
+        max_roots (Optional[int]): Maximum number of tree roots to consider.
+        root_stride (int): Stride for picking roots (e.g., 2 picks every second vertex).
+        max_cycles (Optional[int]): Cap on total generated candidates.
 
     Returns:
-        List[Cycle]: The list of generated cycles.
+        List[Cycle]: A list of cycles, each represented as a list of edges.
+
+    Use When:
+        - You need a candidate pool for optimal generator selection.
+        - Studying the distribution of short loops in a complex.
     """
     edges, _, vertex_ids = _normalize_edges_triangles(simplices)
     return _generator_cycles_from_normalized_edges(
@@ -933,15 +984,33 @@ def greedy_h1_basis(
 ) -> List[Cycle]:
     """Select a greedy independent H1 basis from cycle candidates.
 
+    What is Being Computed?:
+        Extracts a subset of cycles from the candidate pool that forms 
+        a basis for H_1(K; Z/2), prioritizing cycles with lower weight.
+
+    Algorithm:
+        1. Sort candidates by weight (e.g., geometric length).
+        2. Use `annot_edge` to get homological labels.
+        3. Iteratively add cycles to the basis if their annotation 
+           vector is independent of the current basis.
+
+    Preserved Invariants:
+        - The result is a basis for H_1(K; Z/2).
+        - Rank of H1 is preserved.
+
     Args:
         cycles (List[Cycle]): List of candidate cycles.
-        simplices (Iterable[Tuple[int, ...]]): Input simplices.
-        num_vertices (int): Total number of vertices.
-        point_cloud (Optional[np.ndarray]): Point cloud coordinates.
+        simplices (Iterable[Tuple[int, ...]]): Simplices for annotation.
+        num_vertices (int): Total vertex count.
+        point_cloud (Optional[np.ndarray]): Coordinates for weight recalculation.
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
         List[Cycle]: The selected basis cycles.
+
+    Use When:
+        - You have a custom set of candidate cycles and want to find an independent basis.
+        - Analyzing cycle sparsity vs. length.
     """
     backend_norm = str(backend).lower().strip()
     if backend_norm == "julia" and not julia_engine.available:
@@ -1033,13 +1102,24 @@ def compute_optimal_h1_basis_from_simplices(
 ) -> HomologyBasisResult:
     """Compute a data-grounded optimal H1 basis from simplices.
 
-    Uses Julia's optimized backend when available, otherwise falls back to the
-    Python shortest-path candidate + greedy-independence pipeline.
+    What is Being Computed?:
+        Computes a homology basis for H_1 over Z/2 from raw simplicial data, 
+        optimizing for short cycle representatives.
+
+    Algorithm:
+        1. Extract edge and triangle information.
+        2. If Julia backend is available, delegate the heavy optimization.
+        3. Otherwise, use Python shortest-path tree candidate generation.
+        4. Apply greedy selection based on cycle weight to extract an independent basis.
+
+    Preserved Invariants:
+        - Rank of H_1(K; Z/2) is preserved.
+        - The cycles found represent the fundamental generators of the 1-skeleton modulo boundaries.
 
     Args:
         simplices (Iterable[Tuple[int, ...]]): Input simplices.
-        num_vertices (int): Total number of vertices.
-        point_cloud (Optional[np.ndarray]): Point cloud coordinates.
+        num_vertices (int): Total number of vertices in the complex.
+        point_cloud (Optional[np.ndarray]): Point cloud coordinates for geometry.
         max_roots (Optional[int]): Maximum number of roots for candidates.
         root_stride (int): Stride for roots. Defaults to 1.
         max_cycles (Optional[int]): Maximum number of candidates.
@@ -1047,6 +1127,13 @@ def compute_optimal_h1_basis_from_simplices(
 
     Returns:
         HomologyBasisResult: The computed optimal H1 basis.
+
+    Use When:
+        - Working with raw simplex lists instead of SimplicialComplex objects.
+        - Performance tuning by adjusting candidate generation parameters.
+
+    Example:
+        res = compute_optimal_h1_basis_from_simplices(edges_and_tris, n_v)
     """
     simplices_list = [tuple(int(x) for x in s) for s in simplices]
     basis: Optional[list[Cycle]] = None
@@ -1141,8 +1228,17 @@ def compute_homology_basis_from_simplices(
 ) -> HomologyBasisResult:
     """Compute H_k generator representatives from simplices over Z/2.
 
-    `mode="valid"` returns any independent quotient basis, while
-    `mode="optimal"` applies the small-support/short-cycle heuristic.
+    What is Being Computed?:
+        General-purpose homology basis for H_k(K; Z/2) from simplicial data.
+
+    Algorithm:
+        1. Build boundary matrices d_k and d_{k+1}.
+        2. Compute the kernel of d_k and the image of d_{k+1}.
+        3. Identify a basis for the quotient space ker(d_k) / im(d_{k+1}).
+        4. For dimension 1 and mode='optimal', use the specialized shortest-path pipeline.
+
+    Preserved Invariants:
+        - Dimension of H_k(K; Z/2) (Betti number) is preserved.
 
     Args:
         simplices (Iterable[Tuple[int, ...]]): Input simplices.
@@ -1153,9 +1249,17 @@ def compute_homology_basis_from_simplices(
         max_roots (Optional[int]): Max roots for H1 optimal candidates.
         root_stride (int): Stride for roots. Defaults to 1.
         max_cycles (Optional[int]): Max candidates for H1 optimal.
+        backend (str): Backend selection ('auto', 'julia', 'python').
 
     Returns:
         HomologyBasisResult: The computed homology basis.
+
+    Use When:
+        - Computing H_k for k != 1.
+        - Quick validation of homology ranks via representative cycles.
+
+    Example:
+        h2_basis = compute_homology_basis_from_simplices(tetrahedra, n_v, dimension=2)
 
     Raises:
         ValueError: If dimension < 0 or mode is invalid.
@@ -1256,10 +1360,24 @@ def compute_homology_basis_from_complex(
 ) -> HomologyBasisResult:
     """Compute H_k generators directly from a SimplicialComplex object.
 
+    What is Being Computed?:
+        Computes a basis for the k-th homology group H_k(K; Z/2) as a set of 
+        representative cycles.
+
+    Algorithm:
+        1. Extract all relevant simplices (up to dimension k+1) from the complex.
+        2. Infer vertex count and build boundary matrices.
+        3. Solve for ker(d_k) / im(d_{k+1}) to find independent cycles.
+        4. If mode is 'optimal', use greedy heuristics to pick "small" representatives.
+
+    Preserved Invariants:
+        - Homology rank (Betti number β_k) is preserved exactly over Z/2.
+        - The resulting basis spans the k-th homology group.
+
     Args:
         complex (SimplicialComplex): The simplicial complex.
         dimension (int): Homology dimension.
-        point_cloud (Optional[np.ndarray]): Point cloud coordinates.
+        point_cloud (Optional[np.ndarray]): Point cloud coordinates for weight computation.
         mode (Literal["valid", "optimal"]): Computation mode. Defaults to "valid".
         max_roots (Optional[int]): Max roots for H1 optimal.
         root_stride (int): Stride for roots. Defaults to 1.
@@ -1267,7 +1385,17 @@ def compute_homology_basis_from_complex(
         backend (str): 'auto', 'julia', or 'python'.
 
     Returns:
-        HomologyBasisResult: The computed homology basis.
+        HomologyBasisResult: The computed homology basis containing representative cycles.
+
+    Use When:
+        - Need to visualize generators of homology.
+        - Studying persistent features or data-grounded cycles.
+        - Validating topological features against geometric data.
+
+    Example:
+        res = compute_homology_basis_from_complex(sc, dimension=1, mode='optimal')
+        for gen in res.generators:
+            print(f"Cycle with weight {gen.weight} and support {len(gen.support_simplices)}")
     """
     # Get all simplices up to dim + 1
     simplices = []
@@ -1301,16 +1429,39 @@ def compute_optimal_h1_basis_from_complex(
 ) -> HomologyBasisResult:
     """Compute an optimal H1 basis directly from a SimplicialComplex object.
 
+    What is Being Computed?:
+        Computes a basis for H_1(K; Z/2) consisting of cycles that are 
+        locally "short" according to the shortest-path heuristic.
+
+    Algorithm:
+        1. Extract 1-simplices and 2-simplices.
+        2. Generate candidate cycles via Dijkstra's algorithm on the 1-skeleton.
+        3. Compute edge annotations for independence testing.
+        4. Sort candidates by weight and greedily select an independent basis.
+
+    Preserved Invariants:
+        - Spans the fundamental homology group H_1(K; Z/2).
+        - Preserves the rank of the first homology group.
+
     Args:
         complex (SimplicialComplex): The simplicial complex.
-        point_cloud (Optional[np.ndarray]): Point cloud coordinates.
-        max_roots (Optional[int]): Max roots.
-        root_stride (int): Stride for roots. Defaults to 1.
-        max_cycles (Optional[int]): Max candidates.
+        point_cloud (Optional[np.ndarray]): Point cloud coordinates for geometric lengths.
+        max_roots (Optional[int]): Max roots for shortest path candidates.
+        root_stride (int): Stride for picking roots. Defaults to 1.
+        max_cycles (Optional[int]): Max candidates to generate.
         backend (str): 'auto', 'julia', or 'python'.
 
     Returns:
         HomologyBasisResult: The computed optimal H1 basis.
+
+    Use When:
+        - Finding representative loops for tunnels or holes in data.
+        - Minimizing the geometric length of H1 generators.
+        - Performing topological data analysis where H1 localization is required.
+
+    Example:
+        basis = compute_optimal_h1_basis_from_complex(sc, point_cloud=points)
+        shortest_loop = basis.generators[0]
     """
     # H1 needs 1-simplices and 2-simplices
     simplices = list(complex.n_simplices(1)) + list(complex.n_simplices(2))

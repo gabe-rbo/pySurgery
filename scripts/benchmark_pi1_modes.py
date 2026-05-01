@@ -1,3 +1,16 @@
+"""Benchmark suite for π₁ (fundamental group) extraction algorithms.
+
+Overview:
+    This script evaluates the performance and output quality of fundamental group 
+    extraction from CW complexes. It compares 'raw' vs 'optimized' generator modes 
+    and validates the acceleration provided by the Julia backend.
+
+Key Concepts:
+    - **Generator Modes**: 'raw' (direct extraction) vs 'optimized' (internal simplification).
+    - **Backend Comparison**: Comparing native Python execution with Julia-accelerated logic.
+    - **Trace Quality**: Measuring the complexity/length of the paths representing generators.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -12,6 +25,30 @@ from pysurgery.integrations.gudhi_bridge import extract_complex_data
 
 
 def build_torus_4x4_chain_complex(R: float = 3.0, r: float = 1.0):
+    """Construct a triangulated 4x4 torus as a CWComplex for benchmarking.
+
+    What is Being Computed?:
+        Generates a standard simplicial decomposition of a torus (S¹ × S¹) using a 4x4 grid
+        of quadrilaterals, each split into two triangles.
+
+    Algorithm:
+        1. Generate 16 vertices by sampling the torus immersion in ℝ³.
+        2. Populate a GUDHI SimplexTree with 0-simplices (vertices) and 2-simplices (triangles).
+        3. Use `extract_complex_data` to convert the SimplexTree into boundary matrices.
+        4. Instantiate a `CWComplex` from the extracted data.
+
+    Preserved Invariants:
+        - Homotopy type of the torus (S¹ × S¹).
+        - Euler characteristic χ = 0.
+        - Fundamental group π₁ ≅ ℤ ⊕ ℤ.
+
+    Args:
+        R: Major radius of the torus.
+        r: Minor radius of the torus.
+
+    Returns:
+        CWComplex: A complex representing the triangulated torus.
+    """
     import gudhi
 
     nu = nv = 4
@@ -48,12 +85,52 @@ def build_torus_4x4_chain_complex(R: float = 3.0, r: float = 1.0):
 
 
 def _avg_trace_len(pi1) -> float:
+    """Calculate the average length of generator traces.
+
+    Algorithm:
+        Computes the arithmetic mean of the lengths of `undirected_edge_path`
+        for all traces present in the FundamentalGroup result.
+
+    Args:
+        pi1: The result object from π₁ extraction containing traces.
+
+    Returns:
+        float: The average trace length, or 0.0 if no traces are present.
+    """
     if not pi1.traces:
         return 0.0
     return float(sum(len(t.undirected_edge_path) for t in pi1.traces) / len(pi1.traces))
 
 
 def run_case(cw: CWComplex, *, mode: str, force_python: bool) -> dict:
+    """Benchmark π₁ extraction for a given complex and configuration.
+
+    What is Being Computed?:
+        Measures the performance (time) and quality (generator counts and trace lengths)
+        of fundamental group extraction using different simplification modes and backends.
+
+    Algorithm:
+        1. Capture current Julia engine availability.
+        2. If `force_python` is True, temporarily disable the Julia backend.
+        3. Execute `extract_pi_1_with_traces` and time the duration.
+        4. Calculate the average length of the undirected edge paths in the resulting traces.
+        5. Restore the original Julia engine state.
+
+    Args:
+        cw: The CWComplex to analyze.
+        mode: The generator extraction mode ('raw' or 'optimized').
+        force_python: If True, bypass the Julia backend even if available.
+
+    Returns:
+        dict: A dictionary containing benchmark results:
+            - 'mode': The requested extraction mode.
+            - 'backend': The actual backend used ('julia' or 'python').
+            - 'runtime_s': Elapsed time in seconds.
+            - 'raw_count': Number of generators before simplification.
+            - 'optimized_count': Number of generators after internal simplification.
+            - 'selected_count': Final number of generators returned.
+            - 'avg_trace_len': Mean length of generator paths.
+    """
     original_available = julia_engine.available
     if force_python:
         julia_engine.available = False
@@ -78,6 +155,19 @@ def run_case(cw: CWComplex, *, mode: str, force_python: bool) -> dict:
 
 
 def main() -> None:
+    """Main execution entry point for the π₁ extraction benchmark script.
+
+    Overview:
+        Orchestrates the benchmarking process by building a test torus, running multiple
+        π₁ extraction cases, and displaying the results.
+
+    Algorithm:
+        1. Parse command-line arguments to handle backend preferences.
+        2. Construct a standard 4x4 torus complex using `build_torus_4x4_chain_complex`.
+        3. Run benchmarks for 'raw' generator mode.
+        4. Run benchmarks for 'optimized' generator mode.
+        5. Format and print the comparison table to stdout.
+    """
     parser = argparse.ArgumentParser(
         description="Benchmark pi1 raw/optimized generator extraction."
     )

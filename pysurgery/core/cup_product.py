@@ -16,7 +16,17 @@ def _numpy_alexander_whitney_cup(
 ) -> np.ndarray:
     """Optimized map-based evaluation for Cup Product.
 
-    Avoids native Python for-loops via list comprehensions and direct mapping.
+    What is Being Computed?:
+        Vectorized evaluation of the standard cup product (α ∪ β) at the cochain level.
+
+    Algorithm:
+        1. Slices the target (p+q)-simplices into front p-faces and back q-faces.
+        2. Maps faces to their respective cochain indices using provided dictionaries.
+        3. Identifies valid face pairs and performs vectorized multiplication.
+        4. Applies modulus if provided.
+
+    Preserved Invariants:
+        - Homotopy invariance of the cup product.
 
     Args:
         alpha: The p-cochain vector.
@@ -29,7 +39,11 @@ def _numpy_alexander_whitney_cup(
         modulus: Optional modulus for arithmetic.
 
     Returns:
-        The resulting (p+q)-cochain evaluation.
+        np.ndarray: The resulting (p+q)-cochain evaluation.
+
+    Use When:
+        - Internal Python-backend evaluation of standard cup products.
+        - Julia backend is unavailable or not preferred.
     """
     if len(simplices) == 0:
         return np.zeros(0, dtype=np.int64)
@@ -68,9 +82,20 @@ def cup_i_product(
 ) -> np.ndarray:
     """Simplicial cup-i product on ordered simplices using exact Steenrod interleaved intervals.
 
-    References:
-        Steenrod, N. E. (1947). Products of cocycles and extensions of mappings. 
-        Annals of Mathematics, 48(2), 290-320.
+    What is Being Computed?:
+        Evaluates the cup-i product α ∪_i β of cochains. This is a higher-order 
+        topological operation that measures the failure of the cup product 
+        to be commutative at the cochain level.
+
+    Algorithm:
+        1. Generate all valid Steenrod interleaving sequences for a (p+q-i)-simplex.
+        2. For each sequence, extract the front and back face indices.
+        3. XOR-evaluate the cochains on these faces and sum the results with 
+           the appropriate sign determined by the sequence parity.
+
+    Preserved Invariants:
+        - Homotopy invariance of Steenrod squares.
+        - Provides the foundation for secondary cohomology operations.
 
     Args:
         alpha: The p-cochain vector.
@@ -84,10 +109,19 @@ def cup_i_product(
         modulus: Optional modulus.
 
     Returns:
-        The resulting (p+q-i)-cochain evaluated on target simplices.
+        np.ndarray: The resulting (p+q-i)-cochain evaluated on target simplices.
 
-    Raises:
-        ValueError: If i is not in range [0, min(p, q)].
+    Use When:
+        - Computing Steenrod squares Sq^k.
+        - Studying higher-order homotopy invariants.
+        - Working with mod-2 cohomology where cup-i products are fundamental.
+
+    Example:
+        sq2 = cup_i_product(alpha, alpha, p, p, p-2, simplices_target, idx_p, idx_p, modulus=2)
+
+    References:
+        Steenrod, N. E. (1947). Products of cocycles and extensions of mappings. 
+        Annals of Mathematics, 48(2), 290-320.
     """
     if i < 0 or i > min(p, q):
         raise ValueError("cup-i requires 0 <= i <= min(p, q).")
@@ -169,24 +203,43 @@ def alexander_whitney_cup(
 ) -> np.ndarray:
     """Computes the Alexander-Whitney cup product of a p-cochain alpha and a q-cochain beta.
 
-    The result is a (p+q)-cochain.
-    Formula: (alpha U beta)([v_0, ..., v_{p+q}]) = alpha([v_0, ..., v_p]) * beta([v_p, ..., v_{p+q}])
-    Uses Julia backend acceleration when available, with a pure-Python fallback.
+    What is Being Computed?:
+        Evaluates the cup product (α ∪ β) or cup-i product (α ∪_i β) of cochains. 
+        For i=0, this is the standard Alexander-Whitney cup product which induces 
+        the ring structure on cohomology.
+
+    Algorithm:
+        1. If i=0 and Julia is available, delegate to the Julia backend.
+        2. If i=0 and using Python, use `_numpy_alexander_whitney_cup` for vectorized 
+           front-face/back-face evaluation.
+        3. If i > 0, use `cup_i_product` for the interleaved Steenrod definition.
+
+    Preserved Invariants:
+        - Cup product structure is a homotopy invariant.
+        - Preserves the graded-commutative algebra structure of H*(X; R).
 
     Args:
         alpha: The p-cochain vector.
         beta: The q-cochain vector.
         p: Dimension of alpha.
         q: Dimension of beta.
-        simplices_p_plus_q: List of all (p+q)-simplices, each as a sorted tuple.
+        simplices_p_plus_q: List of all (p+q-i)-simplices, each as a sorted tuple.
         simplex_to_idx_p: Mapping from p-simplex tuple to cochain index.
         simplex_to_idx_q: Mapping from q-simplex tuple to cochain index.
         i: Interleaving degree (defaults to 0 for standard cup product).
-        modulus: Optional modulus for arithmetic.
+        modulus: Optional modulus for arithmetic (e.g., 2).
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
-        The resulting (p+q-i)-cochain evaluated on target simplices.
+        np.ndarray: The resulting (p+q-i)-cochain evaluated on target simplices.
+
+    Use When:
+        - Computing the cohomology ring H*(X).
+        - Identifying non-homeomorphic spaces with identical Betti numbers.
+        - Computing characteristic classes or Steenrod squares.
+
+    Example:
+        cup = alexander_whitney_cup(alpha, beta, p, q, simplices_pq, p_idx, q_idx)
     """
     # Normalize backend
     backend_norm = str(backend).lower().strip()
@@ -253,7 +306,17 @@ def steenrod_square(
 ) -> np.ndarray:
     """Computes the k-th Steenrod square Sq^k(alpha) for a p-cochain alpha.
 
-    Formula: Sq^k(alpha) = alpha cup_{p-k} alpha (mod 2).
+    What is Being Computed?:
+        Evaluates the k-th Steenrod square Sq^k: H^p(X; Z/2) -> H^{p+k}(X; Z/2).
+
+    Algorithm:
+        1. Relates Sq^k(α) to the cup-(p-k) product: Sq^k(α) = α ∪_{p-k} α.
+        2. Calls `cup_i_product` with i = p - k and modulus = 2.
+
+    Preserved Invariants:
+        - Steenrod squares are stable cohomology operations.
+        - Homotopy invariant under continuous maps.
+        - Natural with respect to induced maps of spaces.
 
     Args:
         alpha: The p-cochain vector.
@@ -264,7 +327,15 @@ def steenrod_square(
         modulus: Arithmetic modulus (must be 2 for Steenrod squares).
 
     Returns:
-        The resulting (p+k)-cochain evaluated on target simplices.
+        np.ndarray: The resulting (p+k)-cochain evaluated on target simplices.
+
+    Use When:
+        - Computing stable cohomology operations.
+        - Distinguishing homotopy types when cup products are insufficient.
+        - Working with characteristic classes (Wu classes, Stiefel-Whitney).
+
+    Example:
+        sq1_alpha = steenrod_square(alpha, p, 1, targets, idx_p)
     """
     if k < 0 or k > p:
         return np.zeros(len(simplices_target), dtype=np.int64)

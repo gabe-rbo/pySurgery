@@ -10,7 +10,36 @@ from .bridge.julia_bridge import julia_engine
 
 
 class ObstructionResult(BaseModel):
-    """Typed result for Wall obstruction evaluations."""
+    """Typed result for Wall obstruction evaluations.
+
+    Overview:
+        ObstructionResult encapsulates the outcome of a surgery obstruction computation
+        in the Wall group L_n(π, w). It tracks whether the obstruction is computable,
+        exact, and whether it certifies the existence of a surgery obstruction (i.e.,
+        whether the map is not a homotopy equivalence).
+
+    Key Concepts:
+        - **Wall Obstruction (θ)**: An element of the L-group L_n(Z[π]) that vanishes
+          if and only if a normal map is cobordant to a homotopy equivalence.
+        - **Computability**: Indicates if the current backend/data supports the calculation.
+        - **Exactness**: Whether the result is mathematically precise or an approximation.
+        - **Zero Certification**: A rigorous proof that the obstruction is the zero element.
+
+    Common Workflows:
+        1. **Computation** → Obtained from WallGroupL.compute_obstruction_result()
+        2. **Validation** → Check .zero_certified or .obstructs
+        3. **Algebra** → Convert to LDirectSumElement for arithmetic operations
+
+    Attributes:
+        dimension (int): Manifold dimension.
+        pi (str): Fundamental group descriptor.
+        computable (bool): True if the calculation was successfully attempted.
+        exact (bool): True if the result is mathematically exact.
+        value (Optional[int]): The numerical value of the obstruction (if scalar).
+        modulus (Optional[int]): The modulus if the value is in Z/kZ.
+        obstructs (Optional[bool]): True if the obstruction is non-zero.
+        zero_certified (bool): True if the obstruction is definitively zero.
+    """
 
     dimension: int
     pi: str
@@ -76,7 +105,27 @@ class ObstructionResult(BaseModel):
 
 
 class LDirectSummand(BaseModel):
-    """Typed representation of one direct-sum component in a Wall obstruction element."""
+    """Typed representation of one direct-sum component in a Wall obstruction element.
+
+    Overview:
+        Represents a single summand in the decomposition of an L-group, typically 
+        arising from Shaneson splitting or product group assembly. Each summand 
+        corresponds to a specific L-group L_{n-k}(G) with its own value and modulus.
+
+    Key Concepts:
+        - **Shift (k)**: The dimension shift in Shaneson splitting L_n(G x Z) ≅ L_n(G) ⊕ L_{n-1}(G).
+        - **Multiplicity**: Number of copies of this summand in the direct sum.
+        - **Symbol**: Mathematical notation for the group (e.g., 'Z', 'Z_2').
+
+    Attributes:
+        shift (int): Dimension shift from the base L-group.
+        multiplicity (int): Multiplicity of the summand.
+        dimension (int): Dimension of this specific L-group component.
+        pi (str): Fundamental group of this component.
+        symbol (str): Mathematical symbol (e.g., 'Z', 'Z_2', '0').
+        value (Optional[int]): The numerical value within this summand.
+        modulus (Optional[int]): The modulus of the group (None for Z).
+    """
 
     shift: int = 0
     multiplicity: int = 1
@@ -96,7 +145,32 @@ class LDirectSummand(BaseModel):
 
 
 class LDirectSumElement(BaseModel):
-    """Formal direct-sum element in decomposed L-group coordinates."""
+    """Formal direct-sum element in decomposed L-group coordinates.
+
+    Overview:
+        Represents an element of a surgery obstruction group that has been 
+        decomposed into a direct sum of simpler L-groups. This is the primary 
+        object for performing arithmetic (addition, scalar multiplication) 
+        on surgery obstructions across different group splittings.
+
+    Key Concepts:
+        - **Direct Sum (⊕)**: L-groups of product groups decompose into sums of simpler factors.
+        - **Normalization**: Consolidating summands with identical group keys and 
+          reducing values modulo their respective moduli.
+        - **Equivalence**: Two elements are equivalent if their normalized 
+          contributions to each summand match.
+
+    Common Workflows:
+        1. **Conversion** → ObstructionResult.to_direct_sum_element()
+        2. **Arithmetic** → element1 + element2 or 5 * element
+        3. **Comparison** → element1 == element2 or element1.equivalent(element2)
+        4. **Export** → to_obstruction_result() for high-level reporting
+
+    Attributes:
+        dimension (int): Base manifold dimension.
+        pi (str): Base fundamental group.
+        summands (List[LDirectSummand]): The individual components of the sum.
+    """
 
     dimension: int
     pi: str
@@ -393,16 +467,30 @@ class LDirectSumElement(BaseModel):
 
 
 class WallGroupL(BaseModel):
-    """
-    Interface for computing Wall's surgery obstruction groups L_n(pi, w).
-    Extends beyond the simply-connected case into finite groups and Z.
+    """Interface for computing Wall's surgery obstruction groups L_n(π, w).
 
-    References:
-        Wall, C. T. (1970). Surgery on compact manifolds. 
-        Academic Press.
-        
-        Shaneson, J. L. (1968). Wall's surgery obstruction groups for G x Z. 
-        Annals of Mathematics, 88(1), 1-67.
+    Overview:
+        WallGroupL provides the core logic for evaluating surgery obstructions 
+        θ ∈ L_n(Z[π]). It handles the simply-connected case (L_n(1)), 
+        infinite cyclic groups (L_n(Z) via Shaneson splitting), finite 
+        cyclic groups (L_n(Z_p) via multisignatures), and product groups.
+
+    Key Concepts:
+        - **L-groups (L_n)**: Functors from rings with involution to abelian groups.
+        - **Shaneson Splitting**: L_n(G x Z) ≅ L_n(G) ⊕ L_{n-1}(G).
+        - **Multisignature**: An invariant for L_{4k}(G) when G is finite.
+        - **Arf Invariant**: The obstruction in L_{4k+2}(1) ≅ Z/2Z.
+        - **Signature**: The obstruction in L_{4k}(1) ≅ Z.
+
+    Common Workflows:
+        1. **Setup** → WallGroupL(dimension=4, pi="Z")
+        2. **Evaluation** → compute_obstruction_result(form)
+        3. **Decomposition** → compute_obstruction_element(form) for complex groups
+
+    Attributes:
+        dimension (int): The dimension of the manifold (n).
+        pi (Union[str, GroupPresentation]): Fundamental group descriptor.
+        w1 (Optional[Dict[str, int]]): Orientation character (w₁: π₁ → {±1}).
     """
 
     dimension: int
@@ -427,8 +515,21 @@ class WallGroupL(BaseModel):
     def compute_obstruction(
         self, form: Optional[IntersectionForm] = None, backend: str = "auto"
     ) -> Union[int, str]:
-        """
-        Backward-compatible output (int or diagnostic string).
+        """Backward-compatible output (int or diagnostic string).
+
+        What is Being Computed?:
+            The numerical value of the surgery obstruction, or a diagnostic 
+            message if the result cannot be expressed as a single integer.
+
+        Algorithm:
+            Calls compute_obstruction_result() and extracts the legacy output.
+
+        Args:
+            form: The intersection/quadratic form.
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            Union[int, str]: The obstruction value or a message.
         """
         return self.compute_obstruction_result(form, backend=backend).legacy_output()
 
@@ -669,10 +770,47 @@ class WallGroupL(BaseModel):
         self, form: Optional[IntersectionForm] = None, backend: str = "auto"
     ) -> ObstructionResult:
         """Compute surgery obstruction as a typed result with exactness metadata.
-        
+
+        What is Being Computed?:
+            The surgery obstruction θ ∈ L_n(Z[π]) for a given manifold dimension 
+            and fundamental group, using an intersection or quadratic form as input.
+
+        Algorithm:
+            1. Normalize the fundamental group descriptor.
+            2. If π is a product group (G x H), apply Shaneson splitting or Künneth-type 
+               assembly map approximations recursively.
+            3. For single factors (1, Z, Z_p):
+               - L_{4k}(1): return Signature/8.
+               - L_{4k+2}(1): return Arf invariant.
+               - L_n(Z): Apply Shaneson splitting to reduce to L_n(1) ⊕ L_{n-1}(1).
+               - L_{4k}(Z_p): Compute multisignature via Julia backend if available.
+            4. Aggregate results into an ObstructionResult.
+
+        Preserved Invariants:
+            - The obstruction vanishes if and only if the map is cobordant to 
+              a homotopy equivalence (in the surgery range).
+            - L-groups are functors: group homomorphisms induce L-group homomorphisms.
+
         Args:
-            form: The intersection/quadratic form.
-            backend: 'auto', 'julia', or 'python'.
+            form: The intersection/quadratic form representing the functional 
+                  homology of the map.
+            backend: 'auto', 'julia', or 'python'. 'julia' is required for 
+                     exact multisignatures.
+
+        Returns:
+            ObstructionResult: A structured object containing the obstruction 
+                              value, modulus, and certification metadata.
+
+        Use When:
+            - Verifying if a normal map can be surgeries to a homotopy equivalence.
+            - Computing Wall groups for non-simply connected manifolds.
+            - Working with complex fundamental groups like Z^k or G x Z.
+
+        Example:
+            wall = WallGroupL(dimension=4, pi="1")
+            res = wall.compute_obstruction_result(form=my_form)
+            if res.zero_certified:
+                print("Surgery possible!")
         """
         n = self.dimension
         pi = self._normalize_pi(self.pi)
@@ -900,14 +1038,37 @@ class WallGroupL(BaseModel):
 
 
 def l_group_symbol(n: int, pi: Union[str, GroupPresentation] = "1") -> str:
-    """Returns the mathematical symbol/structure of L_n(pi).
+    """Returns the mathematical symbol/structure of L_n(π).
+
+    What is Being Computed?:
+        A string representation of the abelian group structure of the Wall 
+        L-group L_n(Z[π]).
+
+    Algorithm:
+        1. Normalize the group presentation π.
+        2. For π=1, return 'Z', 'Z_2', or '0' based on n mod 4.
+        3. For π=Z, return 'Z' or 'Z_2' based on Shaneson splitting.
+        4. For product groups, recursively construct the direct sum string 
+           using binomial coefficients (e.g., 'Z + Z').
+
+    Preserved Invariants:
+        - The structure of the L-group is an invariant of the group π 
+          and the dimension n.
 
     Args:
-        n: The dimension of the L-group.
-        pi: The fundamental group descriptor.
+        n: The dimension of the L-group (n mod 4 is what usually matters).
+        pi: The fundamental group descriptor (e.g., "1", "Z", "Z x Z").
 
     Returns:
-        A string representing the L-group structure (e.g., 'Z', 'Z_2', '0').
+        str: A string representing the group structure (e.g., 'Z', 'Z_2', 'Z + Z').
+
+    Use When:
+        - Generating human-readable reports of L-group structures.
+        - Labeling components of a direct sum in LDirectSumElement.
+        - Debugging surgery obstruction decompositions.
+
+    Example:
+        symbol = l_group_symbol(4, "Z")  # Returns "Z" (from L_4(1) + L_3(1) = Z + 0)
     """
     if isinstance(pi, GroupPresentation):
         pi = pi.normalized()
