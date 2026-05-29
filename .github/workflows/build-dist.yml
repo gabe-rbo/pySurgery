@@ -6,11 +6,33 @@ on:
       - main
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
 
 jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build tools
+        run: pip install build
+      - name: Build package
+        run: python -m build
+      - name: Upload dist as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
   release:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
       id-token: write
@@ -26,26 +48,7 @@ jobs:
 
       - name: Install tools
         run: |
-          pip install build bump-my-version
-
-      - name: Bump version and push
-        if: github.ref == 'refs/heads/main'
-        id: bump
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-          if [[ ! "$COMMIT_MSG" =~ "Bump version" ]]; then
-            BUMP_TYPE="patch"
-            if [[ "$COMMIT_MSG" =~ "#major" ]]; then
-              BUMP_TYPE="major"
-            elif [[ "$COMMIT_MSG" =~ "#minor" ]]; then
-              BUMP_TYPE="minor"
-            fi
-            bump-my-version bump $BUMP_TYPE
-            git push --follow-tags
-          fi
+          pip install build
 
       - name: Build package
         run: python -m build
@@ -64,22 +67,3 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-
-  build-check:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install build tools
-        run: pip install build
-      - name: Build package
-        run: python -m build
-      - name: Upload dist as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/

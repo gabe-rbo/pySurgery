@@ -42,17 +42,17 @@ echo "----------------------------------------------------"
 echo ""
 EOF
 
-# 3. Pre-push Hook (Intent-Based Tagging)
-cat << 'EOF' > .git/hooks/pre-push
+# 3. Post-commit Hook (Tagging)
+cat << 'EOF' > .git/hooks/post-commit
 #!/bin/bash
 PENDING_FILE=".git/PY_SURGERY_RELEASE_PENDING"
 if [ -f "$PENDING_FILE" ]; then
     TAG=$(cat "$PENDING_FILE")
     git tag -a "$TAG" -m "Release $TAG"
     rm "$PENDING_FILE"
-    echo ">>> New version v$TAG tagged for release."
+    echo ">>> New version v$TAG tagged locally."
 fi
 EOF
 
-chmod +x .git/hooks/pre-commit .git/hooks/pre-push
+chmod +x .git/hooks/pre-commit .git/hooks/post-commit
 echo "pySurgery Git hooks (intent-based) installed successfully."

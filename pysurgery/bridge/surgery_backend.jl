@@ -847,15 +847,20 @@ function embedding_broad_phase_pairs(
     radii::AbstractVector{Float64},
     tol::Float64,
 )
+    # Materialize native copies: callers pass zero-copy PyArrays over NumPy
+    # buffers, which are NOT thread-safe to read from the @threads loop below.
+    centroids = centroids isa Matrix{Float64} ? centroids : Matrix{Float64}(centroids)
+    radii = radii isa Vector{Float64} ? radii : Vector{Float64}(radii)
     n = size(centroids, 1)
     d = size(centroids, 2)
     d >= 1 || return Matrix{Int64}(undef, 0, 2)
     length(radii) == n || error("radii length must match centroid count")
     n <= 1 && return Matrix{Int64}(undef, 0, 2)
 
-    # Thread-local storage for pairs
-    thread_pairs = [Vector{NTuple{2, Int64}}() for _ in 1:Threads.nthreads()]
-    
+    # Thread-local storage for pairs. Size by maxthreadid(): threadid() is not
+    # bounded by nthreads(), so indexing with it would otherwise BoundsError.
+    thread_pairs = [Vector{NTuple{2, Int64}}() for _ in 1:Threads.maxthreadid()]
+
     Threads.@threads for i in 1:(n - 1)
         tid = Threads.threadid()
         ci = @view centroids[i, :]
@@ -1109,9 +1114,10 @@ function multisignature(matrix::AbstractMatrix{Float64}, p::Int)
     mat = Matrix{Float64}(matrix)
     n = size(mat, 1)
     
-    # Pre-allocate thread-local totals
-    thread_totals = zeros(Int64, Threads.nthreads())
-    
+    # Pre-allocate thread-local totals. Size by maxthreadid(): threadid() is not
+    # bounded by nthreads(), so indexing with it would otherwise BoundsError.
+    thread_totals = zeros(Int64, Threads.maxthreadid())
+
     Threads.@threads for k in 1:(p-1)
         tid = Threads.threadid()
         omega = exp(2π * im * k / p)
@@ -1651,6 +1657,11 @@ Evaluate the Alexander-Whitney cup product on `(p+q)`-simplices.
 function compute_alexander_whitney_cup(alpha::AbstractVector, beta::AbstractVector, p::Int, q::Int, simplices_pq_raw, s_to_idx_p, s_to_idx_q, modulus=nothing)
     idx_p, idx_q = pyconvert(Dict{Tuple{Vararg{Int}}, Int64}, s_to_idx_p), pyconvert(Dict{Tuple{Vararg{Int}}, Int64}, s_to_idx_q)
     simplices_pq = [_to_vertices_simplex(s) for s in simplices_pq_raw]
+    # Materialize native copies of the coefficient vectors: callers pass zero-copy
+    # PyArrays over NumPy buffers, which are NOT thread-safe to read concurrently
+    # from the @threads loop below.
+    alpha = collect(alpha)
+    beta = collect(beta)
     res = zeros(Int64, length(simplices_pq))
     Threads.@threads for i in 1:length(simplices_pq)
         s = simplices_pq[i]; length(s) < p + q + 1 && continue
@@ -2290,7 +2301,12 @@ Complexity: O(N^2 * D) for 1-skeleton, plus clique search which is O(3^(N/3)) in
 but bounded to O(N * (max_deg)^max_dim) here.
 """
 function compute_vietoris_rips(points_raw, epsilon_raw, max_dim_raw)
-    points = pyconvert(AbstractMatrix{Float64}, points_raw)
+    # Materialize a NATIVE dense copy. `pyconvert(AbstractMatrix{Float64}, ...)`
+    # yields a lazy PyArray over the NumPy buffer; reading it from the @threads
+    # loop below touches Python state and is NOT thread-safe, throwing an
+    # intermittent CompositeException/TaskFailedException. A single O(N*D) copy
+    # gives a true Matrix{Float64} that threads can read concurrently.
+    points = pyconvert(Matrix{Float64}, points_raw)
     epsilon = pyconvert(Float64, epsilon_raw)
     max_dim = pyconvert(Int, max_dim_raw)
     n_pts = size(points, 1)
@@ -2298,7 +2314,9 @@ function compute_vietoris_rips(points_raw, epsilon_raw, max_dim_raw)
 
     # 1. 1-skeleton (Edges) - Parallelized
     eps2 = epsilon^2
-    n_threads = Threads.nthreads()
+    # threadid() is NOT bounded by nthreads() (GC/interactive threads have higher
+    # ids), so size per-thread buffers by maxthreadid() to avoid a BoundsError.
+    n_threads = Threads.maxthreadid()
     I_threads = [Int64[] for _ in 1:n_threads]
     J_threads = [Int64[] for _ in 1:n_threads]
 
@@ -2390,6 +2408,10 @@ end
 Compute squared circumradii for 3D tetrahedra natively.
 """
 function compute_circumradius_sq_3d(points::AbstractMatrix{Float64}, simplices::AbstractMatrix{Int64})
+    # Materialize native copies: callers pass zero-copy PyArrays over NumPy
+    # buffers, which are NOT thread-safe to read from the @threads loop below.
+    points = points isa Matrix{Float64} ? points : Matrix{Float64}(points)
+    simplices = simplices isa Matrix{Int64} ? simplices : Matrix{Int64}(simplices)
     n_simplices = size(simplices, 1)
     radii_sq = zeros(Float64, n_simplices)
 
@@ -2427,6 +2449,10 @@ end
 Compute squared circumradii for 2D triangles natively.
 """
 function compute_circumradius_sq_2d(points::AbstractMatrix{Float64}, simplices::AbstractMatrix{Int64})
+    # Materialize native copies: callers pass zero-copy PyArrays over NumPy
+    # buffers, which are NOT thread-safe to read from the @threads loop below.
+    points = points isa Matrix{Float64} ? points : Matrix{Float64}(points)
+    simplices = simplices isa Matrix{Int64} ? simplices : Matrix{Int64}(simplices)
     n_simplices = size(simplices, 1)
     radii_sq = zeros(Float64, n_simplices)
 
@@ -3067,6 +3093,9 @@ function simplify_jl(simplices_py)
     return final_simplices_normalized, final_v_map, final_s_map
 end
 function cknn_graph_jl(pts::AbstractMatrix{Float64}, k::Int, delta::Float64)
+    # Materialize a native copy: callers pass a zero-copy PyArray over a NumPy
+    # buffer, which is NOT thread-safe to read from the @threads loops below.
+    pts = pts isa Matrix{Float64} ? pts : Matrix{Float64}(pts)
     n = size(pts, 1)
     if n == 0 || k < 1
         return Matrix{Int64}(undef, 0, 2)
@@ -3085,8 +3114,10 @@ function cknn_graph_jl(pts::AbstractMatrix{Float64}, k::Int, delta::Float64)
         rho[i] = sqrt(partialsort!(dists_sq, k_actual + 1))
     end
 
-    # 2. Filter edges based on CkNN condition
-    thread_pairs = [Vector{NTuple{2, Int32}}() for _ in 1:Threads.nthreads()]
+    # 2. Filter edges based on CkNN condition. Size thread-local buffers by
+    # maxthreadid(): threadid() is not bounded by nthreads(), so indexing with
+    # it would otherwise BoundsError.
+    thread_pairs = [Vector{NTuple{2, Int32}}() for _ in 1:Threads.maxthreadid()]
     delta_sq = delta^2
 
     Threads.@threads for i in 1:(n-1)
@@ -3116,12 +3147,18 @@ end
 
 
 function cknn_graph_accelerated_jl(pts::AbstractMatrix{Float64}, rho::AbstractVector{Float64}, delta::Float64)
+    # Materialize native copies: callers pass zero-copy PyArrays over NumPy
+    # buffers, which are NOT thread-safe to read from the @threads loop below.
+    pts = pts isa Matrix{Float64} ? pts : Matrix{Float64}(pts)
+    rho = rho isa Vector{Float64} ? rho : Vector{Float64}(rho)
     n = size(pts, 1)
     if n == 0
         return Matrix{Int64}(undef, 0, 2)
     end
 
-    thread_pairs = [Vector{NTuple{2, Int32}}() for _ in 1:Threads.nthreads()]
+    # Size thread-local buffers by maxthreadid(): threadid() is not bounded by
+    # nthreads(), so indexing with it would otherwise BoundsError.
+    thread_pairs = [Vector{NTuple{2, Int32}}() for _ in 1:Threads.maxthreadid()]
     delta_sq = delta^2
 
     Threads.@threads for i in 1:(n-1)
@@ -3871,14 +3908,21 @@ function batch_exact_snf_sparse(
     n_batch  = length(batch_rows)
     results  = Vector{Vector{Int64}}(undef, n_batch)
 
+    # Pre-convert all Python data to native Julia vectors BEFORE threading.
+    # pyconvert and PyList/PyArray indexing touch Python state and are NOT
+    # thread-safe; doing them inside the @threads loop races and — because the
+    # body is wrapped in try/catch — silently corrupts results to Int64[].
+    rows_all = [pyconvert(Vector{Int64}, batch_rows[i]) for i in 1:n_batch]
+    cols_all = [pyconvert(Vector{Int64}, batch_cols[i]) for i in 1:n_batch]
+    vals_all = [pyconvert(Vector{Int64}, batch_vals[i]) for i in 1:n_batch]
+    m_all    = [Int(batch_m[i]) for i in 1:n_batch]
+    n_all    = [Int(batch_n[i]) for i in 1:n_batch]
+
     Threads.@threads for i in 1:n_batch
         try
-            rows_i = pyconvert(Vector{Int64}, batch_rows[i])
-            cols_i = pyconvert(Vector{Int64}, batch_cols[i])
-            vals_i = pyconvert(Vector{Int64}, batch_vals[i])
             results[i] = exact_snf_sparse(
-                rows_i, cols_i, vals_i,
-                Int(batch_m[i]), Int(batch_n[i]),
+                rows_all[i], cols_all[i], vals_all[i],
+                m_all[i], n_all[i],
             )
         catch
             results[i] = Int64[]
