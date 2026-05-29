@@ -1,5 +1,5 @@
 import numpy as np
-from pysurgery.core.complexes import SimplicialComplex
+from pysurgery.topology.complexes import SimplicialComplex
 
 """Test suite for scaling and performance of witness complex constructions.
 

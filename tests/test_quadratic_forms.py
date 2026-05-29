@@ -11,7 +11,7 @@ Key Concepts:
 """
 import numpy as np
 import pytest
-from pysurgery.core.quadratic_forms import QuadraticForm, arf_invariant_gf2
+from pysurgery.algebra.quadratic_forms import QuadraticForm, arf_invariant_gf2
 from pysurgery.core.exceptions import DimensionError
 
 

@@ -1,26 +1,26 @@
 from dataclasses import dataclass, field
 import re
 from typing import Literal, Tuple
-from .core.intersection_forms import IntersectionForm
-from .core.complexes import ChainComplex, _parse_coefficient_ring
-from .core.exceptions import DimensionError
-from .core.fundamental_group import (
+from pysurgery.algebra.intersection_forms import IntersectionForm
+from pysurgery.topology.complexes import ChainComplex, _parse_coefficient_ring
+from pysurgery.core.exceptions import DimensionError
+from pysurgery.topology.fundamental_group import (
     FundamentalGroup,
     GroupPresentation,
     simplify_presentation,
     infer_standard_group_descriptor,
 )
-from .core.pi1_group_ring_scaffold import evaluate_phase2_readiness
-from .core.k_theory import WhiteheadGroup, compute_whitehead_group
-from .core.foundations import CONTRACT_VERSION
-from .structure_set import (
+from pysurgery.topology.pi1_group_ring_scaffold import evaluate_phase2_readiness
+from pysurgery.algebra.k_theory import WhiteheadGroup, compute_whitehead_group
+from pysurgery.core.foundations import CONTRACT_VERSION
+from pysurgery.structure_set import (
     NormalInvariantsResult,
     SurgeryExactSequenceResult,
     StructureSet,
 )
-from .core.theorem_tags import infer_theorem_tag
-from .wall_groups import ObstructionResult, WallGroupL
-from .bridge.julia_bridge import julia_engine
+from pysurgery.core.theorem_tags import infer_theorem_tag
+from pysurgery.wall_groups import ObstructionResult, WallGroupL
+from pysurgery.bridge.julia_bridge import julia_engine
 import warnings
 import itertools
 import numpy as np
@@ -615,7 +615,7 @@ def _check_cohomology_equivalence(
             is_homeomorphic=None,
             reasoning=(
                 "INCONCLUSIVE: Cohomology comparison requires a shared coefficient ring; "
-                "received %r vs %r." % (c1.coefficient_ring, c2.coefficient_ring)
+                f"received {c1.coefficient_ring!r} vs {c2.coefficient_ring!r}."
             ),
             theorem=theorem,
             missing_data=["Common coefficient ring for cohomology invariants"],
@@ -1039,15 +1039,20 @@ def _search_integer_isometry(
 
     if (pos1 and pos2) or (neg1 and neg2):
         if julia_engine.available:
+            import time
+
+            t0 = time.time()
             try:
                 candidate = julia_engine.integral_lattice_isometry(q1, q2)
                 if candidate is not None and np.array_equal(
                     candidate.T @ q1 @ candidate, q2
                 ):
+                    print(f"[julia_isometry] {n}D solved in {time.time()-t0:.3f}s")
                     return candidate
-            except Exception:
-                # Fall through to Python exact solver.
-                pass
+            except Exception as e:
+                warnings.warn(
+                    f"Julia integral_lattice_isometry failed ({e!r}); falling back to Python."
+                )
 
         q1_def = q1 if pos1 else -q1
         q2_def = q2 if pos2 else -q2
@@ -1061,6 +1066,9 @@ def _search_integer_isometry(
 
         radii = [int(np.floor(np.sqrt(t / lam_min))) + 1 for t in diag_targets]
         search_radius = max(radii) if radii else 0
+        if search_radius > 5 or (n > 4 and search_radius**n > 100000):
+            return None
+
         values = range(-search_radius, search_radius + 1)
 
         # Enumerate all vectors of a prescribed quadratic norm in the ambient lattice.
@@ -1115,68 +1123,7 @@ def _search_integer_isometry(
 
         return backtrack(0)
 
-    # High-performance lattice isomorphism check for definite forms.
-    # We prune the search by only considering vectors v such that v^T Q1 v = Q2_jj.
-    # This is equivalent to finding all vectors in the lattice of Q1 with a specific norm.
-    diag_targets = np.diag(Q2).tolist()
-    
-    # 1. Pre-calculate all vectors of required norms in Q1
-    # For speed in Python, we only do this for small search radii.
-    lam_min = np.min(np.linalg.eigvalsh(Q1))
-    if lam_min <= 1e-10:
-        return None
-        
-    vectors_by_norm: dict[int, list[np.ndarray]] = {t: [] for t in set(diag_targets)}
-    
-    # Estimate search box
-    max_t = max(diag_targets)
-    r = int(np.floor(np.sqrt(max_t / lam_min))) + 1
-    if r > 3 and n > 3: # Safety cap for Python-side brute force
-         return None
-         
-    values = range(-r, r + 1)
-    max_total_vectors = 10000
-    count = 0
-    for entries in itertools.product(values, repeat=n):
-        v = np.array(entries, dtype=np.int64)
-        norm = int(v.T @ Q1 @ v)
-        if norm in vectors_by_norm:
-            vectors_by_norm[norm].append(v)
-            count += 1
-            if count > max_total_vectors:
-                return None
-
-    if any(not v for v in vectors_by_norm.values()):
-        return None
-
-    # 2. Backtracking search for the isometry matrix
-    # We choose columns one by one such that U[:, i].T Q1 U[:, j] = Q2[i, j]
-    cols: list[np.ndarray] = [np.zeros(n, dtype=np.int64) for _ in range(n)]
-    
-    def backtrack(idx: int) -> np.ndarray | None:
-        if idx == n:
-            U = np.column_stack(cols)
-            if abs(int(round(np.linalg.det(U)))) == 1:
-                if np.array_equal(U.T @ Q1 @ U, Q2):
-                    return U
-            return None
-            
-        target_norm = diag_targets[idx]
-        for v in vectors_by_norm[target_norm]:
-            # Check consistency with already chosen columns
-            ok = True
-            for prev in range(idx):
-                if int(v.T @ Q1 @ cols[prev]) != int(Q2[idx, prev]):
-                    ok = False
-                    break
-            if ok:
-                cols[idx] = v
-                res = backtrack(idx + 1)
-                if res is not None:
-                    return res
-        return None
-
-    return backtrack(0)
+    # Indefinite/degenerate search (non-lattice-isomorphism fallback)
 
 
 def analyze_homeomorphism_1d_result(
@@ -2271,8 +2218,24 @@ def analyze_homeomorphism_high_dim_result(
 
     wall = wall_obstruction
     if wall is None:
+        if descriptor is None:
+            _record_stage(
+                "wall_obstruction",
+                "Wall Obstruction",
+                "inconclusive",
+                "No supported pi_1 descriptor for Wall group computation.",
+            )
+            return _with_phase5_metadata(
+                HomeomorphismResult(
+                    status="inconclusive",
+                    is_homeomorphic=None,
+                    reasoning="INCONCLUSIVE: pi_1 descriptor is unresolved; cannot compute Wall obstruction.",
+                    theorem=theorem_label,
+                    missing_data=["Resolved pi_1 descriptor for Wall group"],
+                )
+            )
         try:
-            wall = WallGroupL(dimension=dim, pi=descriptor).compute_obstruction_result(
+            wall = WallGroupL(dimension=dim, pi=str(descriptor)).compute_obstruction_result(
                 wall_form
             )
         except Exception as e:

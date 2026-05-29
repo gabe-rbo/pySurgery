@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
 
-from pysurgery.core.bundles import SimplicialVectorBundle
-from pysurgery.core.characteristic_classes import (
+from pysurgery.geometry.bundles import SimplicialVectorBundle
+from pysurgery.geometry.characteristic_classes import (
     extract_euler_class,
     extract_stiefel_whitney_tangent,
 )
-from pysurgery.core.complexes import SimplicialComplex
-from pysurgery.core.fundamental_group import (
+from pysurgery.topology.complexes import SimplicialComplex
+from pysurgery.topology.fundamental_group import (
     extract_pi_1,
     infer_standard_group_descriptor,
 )

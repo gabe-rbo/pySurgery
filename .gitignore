@@ -1,3 +1,12 @@
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -47,6 +56,7 @@ coverage.xml
 *.cover
 *.py,cover
 .pytest_cache/
+.ruff_cache/
 pytestdebug.log
 
 # Hypothesis
@@ -172,3 +182,18 @@ logo
 
 # memory
 memory
+
+# claude
+.claude
+
+# experiments
+experiments/
+
+# antigravity
+.antigravitycli
+
+.pysurgery
+
+.CondaPkg
+
+scratch

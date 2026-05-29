@@ -15,12 +15,12 @@ Key Concepts:
 import numpy as np
 import pytest
 from hypothesis import given, strategies as st
-from pysurgery.core.intersection_forms import IntersectionForm
-from pysurgery.core.complexes import ChainComplex
-from pysurgery.core.quadratic_forms import QuadraticForm
-from pysurgery.core.kirby_calculus import KirbyDiagram
+from pysurgery.algebra.intersection_forms import IntersectionForm
+from pysurgery.topology.complexes import ChainComplex
+from pysurgery.algebra.quadratic_forms import QuadraticForm
+from pysurgery.manifolds.kirby_calculus import KirbyDiagram
 from pysurgery.wall_groups import l_group_symbol
-from pysurgery.core.fundamental_group import GroupPresentation
+from pysurgery.topology.fundamental_group import GroupPresentation
 import scipy.sparse as sp
 
 
@@ -196,9 +196,7 @@ def test_algebraic_surgery_zero_class_rejected():
 
 
 def test_torus_intersection_form():
-    # Placeholder for checking if intersection form functions run
-    # Since Q = [0 1; 1 0] or similar for T2
-    try:
-        import gudhi  # noqa
-    except ImportError:
-        pytest.skip("GUDHI not available")
+    from pysurgery.algebra.intersection_forms import IntersectionForm
+    Q = np.array([[0, 1], [1, 0]])
+    form = IntersectionForm(matrix=Q, dimension=4)
+    assert form.signature() == 0

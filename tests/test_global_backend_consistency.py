@@ -14,8 +14,8 @@ Key Concepts:
 
 import pytest
 import numpy as np
-from pysurgery.core.complexes import SimplicialComplex
-from pysurgery.core.metrics import compute_distance_matrix, frechet_distance
+from pysurgery.topology.complexes import SimplicialComplex
+from pysurgery.geometry.metrics import compute_distance_matrix, frechet_distance
 
 def test_homology_backend_consistency_sphere():
     """Verify that homology rank and torsion are consistent between Python and Julia backends.

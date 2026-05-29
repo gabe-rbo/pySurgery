@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.sparse as sp
 import warnings
-from pysurgery.core.complexes import CWComplex
+from pysurgery.topology.complexes import CWComplex
 from pysurgery.bridge.julia_bridge import julia_engine
 
 try:
@@ -12,7 +12,7 @@ except ImportError:
     HAS_TRIMESH = False
 
 
-def trimesh_to_cw_complex(mesh) -> CWComplex:
+def trimesh_to_cw_complex(mesh, backend: str = "auto") -> CWComplex:
     """Converts a Trimesh object (3D geometric mesh) into a topological CW Complex.
 
     What is Being Computed?:
@@ -22,8 +22,8 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
 
     Algorithm:
         1. Extract vertices and faces from the `trimesh` object.
-        2. If Julia is available and the mesh is large, delegate boundary 
-           assembly to `julia_engine`.
+        2. If Julia is available and the mesh is large (total face cycle length > 4000), 
+           delegate boundary assembly to `julia_engine`.
         3. Otherwise, use pure-Python assembly:
            a. Enumerate all unique edges from face cycles.
            b. Build ∂₁ (Edges → Vertices) with signs -1, 1.
@@ -37,6 +37,7 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
 
     Args:
         mesh (trimesh.Trimesh): A loaded Trimesh object.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         CWComplex: The abstract topological 2-skeleton of the mesh.
@@ -72,8 +73,17 @@ def trimesh_to_cw_complex(mesh) -> CWComplex:
     faces = np.asarray(mesh.faces, dtype=np.int64)
     n_faces = len(faces)
 
+    # Normalize backend
+    backend_norm = str(backend).lower().strip()
+
+    # Use total face-cycle length for more accurate dispatch gating
+    total_face_edges = int(np.sum(np.fromiter((len(f) for f in faces), dtype=np.int64)))
+    use_julia = (backend_norm == "julia") or (
+        backend_norm == "auto" and julia_engine.available and total_face_edges > 4_000
+    )
+
     # Try Julia acceleration for large meshes
-    if julia_engine.available and n_faces > 1000:
+    if use_julia:
         try:
             payload = julia_engine.compute_trimesh_boundary_data(faces, n_vertices)
             d1 = sp.csr_matrix(

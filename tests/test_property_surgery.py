@@ -14,8 +14,8 @@ Key Concepts:
 
 from hypothesis import given, settings, strategies as st
 import numpy as np
-from pysurgery.core.intersection_forms import IntersectionForm
-from pysurgery.core.characteristic_classes import extract_pontryagin_p1, verify_hirzebruch_signature
+from pysurgery.algebra.intersection_forms import IntersectionForm
+from pysurgery.geometry.characteristic_classes import extract_pontryagin_p1, verify_hirzebruch_signature
 
 @st.composite
 def symmetric_matrices(draw, min_size=1, max_size=8):

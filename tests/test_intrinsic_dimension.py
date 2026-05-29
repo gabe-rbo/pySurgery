@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from pysurgery.core.intrinsic_dimension import (
+from pysurgery.geometry.intrinsic_dimension import (
     estimate_intrinsic_dimension,
     levina_bickel_mle,
     local_pca_tangent_space_dimension,

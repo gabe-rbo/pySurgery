@@ -12,7 +12,7 @@ Key Concepts:
 """
 
 from hypothesis import given, settings
-from pysurgery.core.complexes import SimplicialComplex
+from pysurgery.topology.complexes import SimplicialComplex
 from strategies import point_clouds
 
 @settings(max_examples=50, deadline=None)

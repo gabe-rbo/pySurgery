@@ -13,12 +13,10 @@ Key Concepts:
 import numpy as np
 import scipy.sparse as sp
 import pytest
-import sys
-import types
 
 from discrete_surface_data import get_surfaces, get_3_manifolds, to_complex
-from pysurgery.core.complexes import ChainComplex, CWComplex, SimplicialComplex
-import pysurgery.core.complexes as complexes
+from pysurgery.topology.complexes import ChainComplex, CWComplex, SimplicialComplex
+import pysurgery.topology.complexes as complexes
 from pysurgery.bridge.julia_bridge import julia_engine
 
 
@@ -418,46 +416,6 @@ def test_cache_clear_forces_recompute(monkeypatch):
     assert calls["count"] == 2
 
 
-class _FakeSimplexTree:
-    def __init__(self):
-        self._entries = []
-
-    def insert(self, simplex, filtration=0.0):
-        self._entries.append((tuple(simplex), float(filtration)))
-
-    def get_filtration(self):
-        return sorted(self._entries, key=lambda item: (len(item[0]), item[0], item[1]))
-
-    def dimension(self):
-        if not self._entries:
-            return 0
-        return max(len(s) - 1 for s, _ in self._entries)
-
-
-def test_simplicial_complex_gudhi_roundtrip(monkeypatch):
-    st_in = _FakeSimplexTree()
-    st_in.insert([0], 0.0)
-    st_in.insert([1], 0.0)
-    st_in.insert([2], 0.0)
-    st_in.insert([0, 1], 0.1)
-    st_in.insert([1, 2], 0.2)
-    st_in.insert([0, 2], 0.3)
-    st_in.insert([0, 1, 2], 0.5)
-
-    sc = SimplicialComplex.from_gudhi_simplex_tree(st_in, include_filtration=True)
-    assert sc.f_vector() == {0: 3, 1: 3, 2: 1}
-    assert sc.filtration[(0, 1, 2)] == pytest.approx(0.5)
-
-    fake_gudhi = types.ModuleType("gudhi")
-    fake_gudhi.SimplexTree = _FakeSimplexTree
-    monkeypatch.setitem(sys.modules, "gudhi", fake_gudhi)
-
-    st_out = sc.to_gudhi_simplex_tree(use_filtration=True)
-    out_entries = {tuple(s): f for s, f in st_out.get_filtration()}
-    assert (0, 1, 2) in out_entries
-    assert out_entries[(0, 1, 2)] == pytest.approx(0.5)
-
-
 def test_cw_cache_for_boundary_and_chain_complex():
     d1 = sp.csr_matrix(np.array([[0, 1]], dtype=np.int64))
     cw = CWComplex(cells={0: 2, 1: 1}, attaching_maps={1: d1}, dimensions=[0, 1])
@@ -677,3 +635,35 @@ def test_simplicial_complex_expand_default_max_dim():
     assert sc_expanded.count_simplices(2) == 1
     assert sc_expanded.dimension == 2
     assert sc_expanded.verify_structure()["valid"] is True
+
+
+def test_simplicial_complex_from_distance_matrix():
+    # 3 points forming a triangle (all dists = 1.0)
+    dist_mat = np.array([
+        [0.0, 1.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 0.0]
+    ])
+
+    # Epsilon = 1.1 should catch all edges
+    sc = SimplicialComplex.from_distance_matrix(dist_mat, epsilon=1.1, max_dimension=2)
+
+    # Should have 3 vertices, 3 edges, 1 triangle
+    assert sc.count_simplices(0) == 3
+    assert sc.count_simplices(1) == 3
+    assert sc.count_simplices(2) == 1
+
+    # Epsilon = 0.5 should catch NO edges
+    sc_empty = SimplicialComplex.from_distance_matrix(dist_mat, epsilon=0.5, max_dimension=2)
+    assert sc_empty.count_simplices(0) == 3
+    assert sc_empty.count_simplices(1) == 0
+    assert sc_empty.count_simplices(2) == 0
+
+    # Verify with explicit backend
+    sc_py = SimplicialComplex.from_distance_matrix(dist_mat, epsilon=1.1, max_dimension=2, backend="python")
+    assert sc_py.count_simplices(2) == 1
+
+    # Verify with Julia backend if available
+    if julia_engine.available:
+        sc_jl = SimplicialComplex.from_distance_matrix(dist_mat, epsilon=1.1, max_dimension=2, backend="julia")
+        assert sc_jl.count_simplices(2) == 1

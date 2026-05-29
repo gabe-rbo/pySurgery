@@ -78,7 +78,7 @@ def test_jax_gw():
     dist_jax = jax_gromov_wasserstein(D, D, p, q, epsilon=0.001, max_iter=200)
     
     # Python version
-    from pysurgery.core.metrics import gromov_wasserstein_distance
+    from pysurgery.geometry.metrics import gromov_wasserstein_distance
     dist_py = gromov_wasserstein_distance(D, D, p, q, epsilon=0.001, max_iter=200)
     
     # For identical spaces, entropic GW should approach 0 as epsilon -> 0

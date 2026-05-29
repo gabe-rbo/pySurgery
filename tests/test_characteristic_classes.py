@@ -16,13 +16,13 @@ Key Concepts:
 """
 import numpy as np
 import pytest
-from pysurgery.core.characteristic_classes import (
+from pysurgery.geometry.characteristic_classes import (
     extract_stiefel_whitney_w2 as wu_class,
     extract_pontryagin_p1 as pontryagin_class,
     check_spin_structure,
     verify_hirzebruch_signature,
 )
-from pysurgery.core.intersection_forms import IntersectionForm
+from pysurgery.algebra.intersection_forms import IntersectionForm
 from pysurgery.core.exceptions import CharacteristicClassError
 
 

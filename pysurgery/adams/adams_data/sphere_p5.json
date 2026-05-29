@@ -1,0 +1,14 @@
+
+{
+  "space_label": "S^0",
+  "prime": 5,
+  "differentials": [
+    {
+      "r": 2,
+      "source": [0, 24],
+      "target": [2, 25],
+      "decision": "zero",
+      "reference": "Toda (1962), first alpha-generator at p=5"
+    }
+  ]
+}

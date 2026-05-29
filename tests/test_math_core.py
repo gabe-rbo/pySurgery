@@ -13,7 +13,7 @@ Key Concepts:
 import numpy as np
 import scipy.sparse as sp
 import pytest
-from pysurgery.core.math_core import (
+from pysurgery.algebra.math_core import (
     get_sparse_snf_diagonal,
     get_snf_diagonal,
     smith_normal_form,

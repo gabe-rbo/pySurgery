@@ -29,7 +29,7 @@ if [[ "$WANT_BUMP" =~ ^[Yy]$ ]]; then
         *) BUMP="patch" ;;
     esac
     if bump-my-version bump "$BUMP" --no-commit --no-tag --allow-dirty; then
-        git add pyproject.toml .bumpversion.cfg CITATION.cff
+        git add pyproject.toml .bumpversion.cfg CITATION.cff pysurgery/__init__.py
         FINAL_VERSION=$(python3 -c "import configparser; config = configparser.ConfigParser(); config.read('.bumpversion.cfg'); print(config['bumpversion']['current_version'])")
         echo "v$FINAL_VERSION" > .git/PY_SURGERY_RELEASE_PENDING
         echo "✅ Version updated to v$FINAL_VERSION. It will be released on push."

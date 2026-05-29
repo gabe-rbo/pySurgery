@@ -17,12 +17,12 @@ from itertools import combinations
 from typing import cast
 
 import numpy as np
-import pysurgery.core.geometrization_3d as g3d
+import pysurgery.geometry.geometrization_3d as g3d
 
-from pysurgery.core.complexes import SimplicialComplex
-from pysurgery.core.fundamental_group import FundamentalGroup
-from pysurgery.core.embedding import analyze_embedding
-from pysurgery.core.geometrization_3d import (
+from pysurgery.topology.complexes import SimplicialComplex
+from pysurgery.topology.fundamental_group import FundamentalGroup
+from pysurgery.geometry.embedding import analyze_embedding
+from pysurgery.geometry.geometrization_3d import (
     GeometrizationResult,
     Triangulated3Manifold,
     analyze_geometrization,

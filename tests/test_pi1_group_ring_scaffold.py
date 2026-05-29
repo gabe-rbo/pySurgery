@@ -11,8 +11,8 @@ Key Concepts:
     - **Descriptor**: A string representation (e.g., 'Z x Z_3') of the group family.
 """
 
-from pysurgery.core.fundamental_group import FundamentalGroup
-from pysurgery.core.pi1_group_ring_scaffold import evaluate_phase2_readiness
+from pysurgery.topology.fundamental_group import FundamentalGroup
+from pysurgery.topology.pi1_group_ring_scaffold import evaluate_phase2_readiness
 
 
 def test_phase2_readiness_reports_ready_for_trivial_descriptor():

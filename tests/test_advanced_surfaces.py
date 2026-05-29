@@ -12,9 +12,9 @@ Key Concepts:
 """
 import numpy as np
 import scipy.sparse as sp
-from pysurgery.core.complexes import ChainComplex
-from pysurgery.core.fundamental_group import extract_pi_1
-from pysurgery.core.complexes import CWComplex
+from pysurgery.topology.complexes import ChainComplex
+from pysurgery.topology.fundamental_group import extract_pi_1
+from pysurgery.topology.complexes import CWComplex
 
 
 def test_klein_bottle_homology():

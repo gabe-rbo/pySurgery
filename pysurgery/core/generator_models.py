@@ -108,6 +108,7 @@ class HomologyGenerator(BaseModel):
         dimension (int): Degree of the cycle (d).
         support_simplices (List[Tuple[int, ...]]): List of simplices in the cycle's support.
         support_edges (List[Tuple[int, int]]): List of edges in the cycle's support.
+        cycle_coefficients (Dict[Tuple[int, ...], int]): Explicit integer coefficients for each simplex in the support.
         weight (float): Metric weight (e.g., total length or area).
         certified_cycle (bool): Whether the cycle is verified to be a boundary-null chain.
     """
@@ -117,8 +118,11 @@ class HomologyGenerator(BaseModel):
     dimension: int
     support_simplices: List[Tuple[int, ...]]
     support_edges: List[Tuple[int, int]] = Field(default_factory=list)
+    cycle_coefficients: Dict[Tuple[int, ...], int] = Field(default_factory=dict)
     weight: float = 0.0
     certified_cycle: bool = True
+    summand_label: str = "Z"
+
 
 
 class HomologyBasisResult(BaseModel):

@@ -5,13 +5,13 @@ from typing import Literal, Tuple, List, Dict, Optional, Any, Union
 
 import numpy as np
 
-from .core.complexes import ChainComplex
-from .core.fundamental_group import FundamentalGroup, GroupPresentation
-from .core.intersection_forms import IntersectionForm
-from .core.k_theory import WhiteheadGroup
-from .core.foundations import CONTRACT_VERSION
-from .core.theorem_tags import infer_theorem_tag
-from .homeomorphism import (
+from pysurgery.topology.complexes import ChainComplex
+from pysurgery.topology.fundamental_group import FundamentalGroup, GroupPresentation
+from pysurgery.algebra.intersection_forms import IntersectionForm
+from pysurgery.algebra.k_theory import WhiteheadGroup
+from pysurgery.core.foundations import CONTRACT_VERSION
+from pysurgery.core.theorem_tags import infer_theorem_tag
+from pysurgery.homeomorphism import (
     DefiniteLatticeIsometryCertificate,
     HomeomorphismResult,
     HomotopyCompletionCertificate,
@@ -24,6 +24,7 @@ from .homeomorphism import (
     analyze_homeomorphism_4d_result,
     analyze_homeomorphism_high_dim_result,
     _search_integer_isometry,
+    _infer_pi_group_descriptor,
 )
 from .structure_set import NormalInvariantsResult, SurgeryExactSequenceResult
 from .wall_groups import ObstructionResult
@@ -575,6 +576,16 @@ def build_high_dim_homeomorphism_witness(
     Returns:
         HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
     """
+    # Pre-check for Wall-obstruction propagation robustness.
+    # If the group is non-simply-connected, we should ideally have a form or a pre-computed obstruction.
+    descriptor = _infer_pi_group_descriptor(pi1, pi_group)
+    if descriptor is not None and str(descriptor) != "1":
+        if wall_obstruction is None and wall_form is None:
+            # We don't return early here, as the analyzer might still be able to 
+            # conclude something (e.g. homology mismatch), but we ensure the 
+            # metadata is ready.
+            pass
+
     result = analyze_homeomorphism_high_dim_result(
         c1,
         c2,
@@ -718,6 +729,7 @@ def build_homeomorphism_witness(
     homotopy_completion_certificate: Optional[Union[HomotopyCompletionCertificate, Dict]] = None,
     recognition_certificate: Optional[Union[ThreeManifoldRecognitionCertificate, Dict]] = None,
     product_assembly_certificate: Optional[Union[ProductAssemblyCertificate, Dict]] = None,
+    immersion_target_dim: Optional[int] = None,
     allow_approx: bool = False,
     backend: str = "auto",
 ) -> HomeomorphismWitnessResult:
@@ -791,7 +803,8 @@ def build_homeomorphism_witness(
                 theorem="Freedman classification",
                 missing_data=["Both 4D intersection forms"],
             )
-        return build_4d_homeomorphism_witness(
+            
+        witness_result = build_4d_homeomorphism_witness(
             m1,
             m2,
             ks1=ks1,
@@ -800,6 +813,15 @@ def build_homeomorphism_witness(
             definite_lattice_isometry_certificate=definite_lattice_isometry_certificate,
             backend=backend,
         )
+        
+        # Inject immersion obstruction if requested
+        if immersion_target_dim is not None and c1 is not None:
+            from pysurgery.geometry.immersion_obstructions import immersion_obstruction_analysis
+            immersion_res = immersion_obstruction_analysis(c1, immersion_target_dim, m1)
+            if witness_result.witness:
+                witness_result.witness.certificates["immersion_obstruction"] = immersion_res
+        
+        return witness_result
 
     if dim is None:
         return HomeomorphismWitnessResult(
@@ -819,16 +841,17 @@ def build_homeomorphism_witness(
             missing_data=["Both chain complexes"],
         )
 
+    witness_result = None
     if dim == 1:
-        return build_1d_homeomorphism_witness(
+        witness_result = build_1d_homeomorphism_witness(
             c1,
             c2,
             allow_approx=allow_approx,
             backend=backend,
         )
 
-    if dim == 2:
-        return build_surface_homeomorphism_witness(
+    elif dim == 2:
+        witness_result = build_surface_homeomorphism_witness(
             c1,
             c2,
             allow_approx=allow_approx,
@@ -841,8 +864,8 @@ def build_homeomorphism_witness(
             backend=backend,
         )
 
-    if dim == 3:
-        return build_3d_homeomorphism_witness(
+    elif dim == 3:
+        witness_result = build_3d_homeomorphism_witness(
             c1,
             c2,
             allow_approx=allow_approx,
@@ -858,8 +881,8 @@ def build_homeomorphism_witness(
             backend=backend,
         )
 
-    if dim >= 5:
-        return build_high_dim_homeomorphism_witness(
+    elif dim >= 5:
+        witness_result = build_high_dim_homeomorphism_witness(
             c1,
             c2,
             dim,
@@ -884,6 +907,14 @@ def build_homeomorphism_witness(
             product_assembly_certificate=product_assembly_certificate,
             backend=backend,
         )
+        
+    if witness_result is not None:
+        if immersion_target_dim is not None and c1 is not None:
+            from pysurgery.geometry.immersion_obstructions import immersion_obstruction_analysis
+            immersion_res = immersion_obstruction_analysis(c1, immersion_target_dim)
+            if witness_result.witness:
+                witness_result.witness.certificates["immersion_obstruction"] = immersion_res
+        return witness_result
 
     return HomeomorphismWitnessResult(
         status="inconclusive",

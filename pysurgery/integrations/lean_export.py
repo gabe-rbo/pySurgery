@@ -65,16 +65,25 @@ def run_lean_check(
             command=lean_cmd,
         )
 
+    import os
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".lean", delete=False) as f:
         f.write(lean_code)
         lean_path = f.name
 
-    proc = subprocess.run(
-        [exe, lean_path],
-        capture_output=True,
-        text=True,
-        timeout=timeout_sec,
-    )
+    try:
+        proc = subprocess.run(
+            [exe, lean_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+    finally:
+        try:
+            os.unlink(lean_path)
+        except OSError:
+            pass
+
     return LeanCheckResult(
         available=True,
         exit_code=int(proc.returncode),

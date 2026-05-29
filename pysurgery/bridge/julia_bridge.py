@@ -6,6 +6,13 @@ from collections import OrderedDict
 import numpy as np
 import scipy.sparse as sp
 
+# CRITICAL FIX for Segmentation Faults:
+# Set this environment variable before any attempt to load or locate `juliacall`.
+# This ensures that when juliacall initializes the C-level libjulia runtime,
+# the required signal handlers are correctly bound for multi-threaded execution.
+if "PYTHON_JULIACALL_HANDLE_SIGNALS" not in os.environ:
+    os.environ["PYTHON_JULIACALL_HANDLE_SIGNALS"] = "yes"
+
 HAS_JULIACALL = importlib.util.find_spec("juliacall") is not None
 
 
@@ -115,12 +122,12 @@ class JuliaBridge:
                 os.path.dirname(__file__), "surgery_backend.jl"
             )
             self.jl.include(backend_script)
+            self.jl.seval("import SparseArrays")
             self.backend = self.jl.SurgeryBackend
             self._available = True
-            # Mark initialized before warm-up workloads so require_julia() checks
+            # Mark initialized so require_julia() checks
             # do not recursively re-enter _initialize().
             self._initialized = True
-            self._warm_up_compilers()
         except Exception as e:
             self.error = f"Failed to initialize Julia backend: {e!r}"
             self._available = False
@@ -245,19 +252,6 @@ class JuliaBridge:
         elif verbose:
             print("[pySurgery] All Julia packages already installed")
 
-    def _warm_up_compilers(self) -> None:
-        """Best-effort automatic warm-up on first Julia initialization.
-
-        Returns:
-            None
-        """
-        mode = os.getenv("PYSURGERY_JULIA_WARMUP_MODE", "minimal").strip().lower()
-        if mode in {"", "off", "0", "false", "none"}:
-            return
-        if mode not in {"minimal", "full"}:
-            mode = "minimal"
-        self._run_warmup(mode)
-
     def _minimal_warmup_workloads(self) -> list[tuple[str, callable]]:
         """Return a small workload set that compiles common topology paths.
 
@@ -356,7 +350,8 @@ class JuliaBridge:
                     ),
                     self.quick_mapper_jl({"V": [0, 1], "E": [(0, 1)]}, 1, -1.0),
                     self.simplify_jl([(0, 1), (1, 2), (0, 2)]),
-                    self.compute_cknn_graph(np.array([[0., 0.], [1., 1.]]), 1, 1.0)
+                    self.compute_cknn_graph(np.array([[0., 0.], [1., 1.]]), 1, 1.0),
+                    self.compute_persistence_barcodes({1: sp.eye(2, format="csc")}, "Z2")
                 ),
             ),
         ]
@@ -492,6 +487,37 @@ class JuliaBridge:
                     self.compute_circumradius_sq_3d(np.array([[0,0,0], [1,0,0], [0,1,0], [0,0,1]], dtype=float), np.array([[0, 1, 2, 3]], dtype=np.int64)),
                     self.compute_cknn_graph_accelerated(np.array([[0,0], [1,1]], dtype=float), np.array([1.0, 1.0]), 1.0),
                     self.simplify_jl([(0, 1), (1, 2), (0, 2)])
+                ),
+            ),
+            (
+                "linking_intersection",
+                lambda: (
+                    self.linking_intersection_pairing(np.array([1], dtype=np.int64), np.array([1], dtype=np.int64), [[0, 1]], [[0, 1, 2]], 3),
+                    self.linking_intersection_batch([np.array([1], dtype=np.int64)], np.array([1], dtype=np.int64), [[0, 1]], [[0, 1, 2]], 3),
+                    self.linking_intersect_2chains(np.array([1], dtype=np.int64), np.array([1], dtype=np.int64), [[0, 1]], [[0, 1, 2]], [[0, 1, 2, 3]])
+                )
+            ),
+            (
+                "linking_gauss_riemann",
+                # Compile the embedding-based Gauss linking integral against a
+                # small Hopf-link-style workload so test runs hit a hot kernel.
+                lambda: self.linking_gauss_riemann(
+                    np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64),
+                    np.array([[1.0, 0.0, 0.0], [1.0, 1.0, 0.0]], dtype=np.float64),
+                    np.array([1, 1], dtype=np.int64),
+                    np.array([[0.5, 0.5, -0.5], [0.5, 0.5, 0.5]], dtype=np.float64),
+                    np.array([[0.5, 0.5, 0.5], [0.5, 0.5, -0.5]], dtype=np.float64),
+                    np.array([1, 1], dtype=np.int64),
+                    24,
+                ),
+            ),
+            (
+                "knot_invariants",
+                # Pre-compile Seifert→Alexander and the signature pathway so
+                # the very first call doesn't pay an extra JIT cost.
+                lambda: (
+                    self.alexander_from_seifert(np.array([[-1, 1], [0, -1]], dtype=np.int64)),
+                    self.knot_signature(np.array([[-1, 1], [0, -1]], dtype=np.int64)),
                 ),
             ),
         ]
@@ -765,7 +791,13 @@ class JuliaBridge:
             self._coo_cache.move_to_end(key)
             return cached
 
-        coo = matrix.tocoo()
+        if sp.issparse(matrix) and matrix.format == "coo":
+            coo = matrix
+        elif sp.issparse(matrix):
+            coo = matrix.tocoo()
+        else:
+            coo = sp.csr_matrix(matrix).tocoo()
+
         triplets = (
             np.asarray(coo.row, dtype=np.int64),
             np.asarray(coo.col, dtype=np.int64),
@@ -838,6 +870,228 @@ class JuliaBridge:
             int(shape[1]),
         )
         return np.array(factors, dtype=np.int64)
+
+    def compute_markowitz_column_order(
+        self, matrix
+    ) -> np.ndarray:
+        """Return a 0-indexed column permutation minimising fill-in (Markowitz criterion).
+
+        What is Being Computed?:
+            For each column c the Markowitz score is
+            (col_nnz(c)−1) × min_{r:A[r,c]≠0}(row_nnz(r)−1).
+            Columns are sorted by score ascending, so unit/singleton columns
+            come first and exploit O(V+E) leaf-peeling.
+
+        Algorithm:
+            1. Build col_nnz and row_nnz from COO triplets.
+            2. For each column find the minimum row_nnz among its non-zeros.
+            3. Sort columns by (col_nnz−1) × (min_row_nnz−1).
+            4. Return 0-indexed permutation.
+
+        Preserved Invariants:
+            Column permutation is unimodular; the SNF diagonal is unchanged.
+
+        Args:
+            matrix: Sparse integer matrix (scipy.sparse or similar).
+
+        Returns:
+            np.ndarray: 0-indexed column permutation of length n.
+
+        Use When:
+            Pre-conditioning a sparse core before calling exact_snf_sparse to
+            reduce coefficient growth during elimination.
+
+        Example:
+            perm = julia_engine.compute_markowitz_column_order(boundary_matrix)
+            A_permuted = boundary_matrix[:, perm]
+        """
+        self.require_julia()
+        if matrix is None or (hasattr(matrix, "nnz") and matrix.nnz == 0):
+            n = matrix.shape[1] if matrix is not None else 0
+            return np.arange(n, dtype=np.int64)
+        rows, cols, vals = self._coo_triplets_cached(matrix)
+        perm = self.backend.snf_markowitz_column_order(
+            rows, cols, vals,
+            int(matrix.shape[0]),
+            int(matrix.shape[1]),
+        )
+        return np.array(perm, dtype=np.int64)
+
+    def compute_modular_rank_certificate(
+        self,
+        matrix,
+        primes: list[int] | None = None,
+    ) -> dict:
+        """Certify matrix rank via rank(A mod p) for multiple primes.
+
+        What is Being Computed?:
+            Computes rank(A mod p) for each prime p.  Because rank(A mod p) =
+            #{i : p ∤ d_i} (where d_i are SNF diagonal entries), agreement
+            across primes certifies the ℤ-rank with mathematical certainty when
+            gcd(product-of-primes, product-of-d_i) = 1 for all i.
+
+        Algorithm:
+            1. For each prime p: dense Gaussian elimination over GF(p).
+            2. Collect (prime, rank) pairs.
+            3. Check agreement; compute lower bound = max of all mod-p ranks.
+
+        Preserved Invariants:
+            rank(A mod p) ≤ rank(A over Q) for all p.  Lower bound is tight
+            when at least one chosen prime is coprime to all torsion coefficients.
+
+        Args:
+            matrix: Sparse integer matrix.
+            primes: List of primes to use.  Defaults to {2,3,5,7,11,13}.
+
+        Returns:
+            dict with keys:
+              primes         – list of primes used
+              ranks          – list of mod-p ranks
+              all_agree      – bool
+              lower_bound    – int (max of ranks)
+              certified_rank – int (agreed rank, or -1 if disagreement)
+              exact          – bool (True when all_agree)
+
+        Use When:
+            - Quickly verifying rank before full SNF computation.
+            - Cross-checking an exact SNF result.
+
+        Example:
+            cert = julia_engine.compute_modular_rank_certificate(boundary_matrix)
+            assert cert["all_agree"], "Rank inconsistency detected"
+        """
+        self.require_julia()
+        if primes is None:
+            primes = [2, 3, 5, 7, 11, 13]
+        if matrix is None or (hasattr(matrix, "nnz") and matrix.nnz == 0):
+            return {
+                "primes": primes, "ranks": [0] * len(primes),
+                "all_agree": True, "lower_bound": 0,
+                "certified_rank": 0, "exact": True,
+            }
+        rows, cols, vals = self._coo_triplets_cached(matrix)
+        primes_arr = np.array(primes, dtype=np.int64)
+        res = self.backend.modular_rank_certification_jl(
+            rows, cols, vals,
+            int(matrix.shape[0]),
+            int(matrix.shape[1]),
+            primes_arr,
+        )
+        return {
+            "primes":         list(np.array(res.primes, dtype=np.int64)),
+            "ranks":          list(np.array(res.ranks,  dtype=np.int64)),
+            "all_agree":      bool(res.all_agree),
+            "lower_bound":    int(res.lower_bound),
+            "certified_rank": int(res.certified_rank),
+            "exact":          bool(res.all_agree),
+        }
+
+    def compute_padic_snf_diagonal(
+        self,
+        matrix,
+        primes: list[int] | None = None,
+        max_e: int = 8,
+    ) -> np.ndarray:
+        """Reconstruct SNF diagonal via deterministic p-adic CRT lifting.
+
+        What is Being Computed?:
+            For each prime p the function builds the rank sequence
+            r_e = #{i : v_p(d_i) < e} by Gaussian elimination over ℤ/p^eℤ,
+            decodes v_p(d_k), and reconstructs d_k = ∏_p p^{v_p(d_k)}.
+            This path does NOT call IntegerSmithNormalForm; it is an independent
+            verification route.
+
+        Algorithm:
+            1. Compute total rank via floating-point for upper bound.
+            2. For each prime p ∈ primes, for e = 1..max_e:
+               a. _padic_rank_step(A, p, p^e) → r_e.
+               b. Decode v_p(d_k) = (first e with r_e ≥ k) − 1.
+            3. d_k = ∏_p p^{v_p(d_k)}; return sorted in non-decreasing order.
+
+        Preserved Invariants:
+            Exact when every prime factor of every d_k ≤ max(primes) and
+            max_e ≥ max_k v_p(d_k) for all p.
+
+        Args:
+            matrix: Sparse integer matrix.
+            primes: Primes to use.  Defaults to [2,3,5,7,11,13,17,19,23,29,31].
+            max_e:  Maximum p-adic depth per prime (default 8).
+
+        Returns:
+            np.ndarray: Non-zero SNF diagonal in non-decreasing order.
+
+        Use When:
+            - Cross-validating the exact SNF computed by IntegerSmithNormalForm.
+            - Working with matrices whose torsion is known to be small.
+
+        Example:
+            diag = julia_engine.compute_padic_snf_diagonal(boundary_2)
+            # Cross-check: should match compute_sparse_snf(...)
+        """
+        self.require_julia()
+        if primes is None:
+            primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31]
+        if matrix is None or (hasattr(matrix, "nnz") and matrix.nnz == 0):
+            return np.array([], dtype=np.int64)
+        rows, cols, vals = self._coo_triplets_cached(matrix)
+        primes_arr = np.array(primes, dtype=np.int64)
+        result = self.backend.padic_snf_diagonal_jl(
+            rows, cols, vals,
+            int(matrix.shape[0]),
+            int(matrix.shape[1]),
+            primes_arr,
+            int(max_e),
+        )
+        return np.array(result, dtype=np.int64)
+
+    def compute_batch_snf(self, matrices: list) -> list[np.ndarray]:
+        """Compute exact SNF for a batch of sparse matrices in parallel (Julia threads).
+
+        What is Being Computed?:
+            Calls exact_snf_sparse for each matrix independently, dispatching
+            work across Julia thread-pool workers via Threads.@threads.
+
+        Algorithm:
+            1. Convert each matrix to COO triplets.
+            2. Pass batch arrays to Julia; each worker runs leaf-peel + Markowitz +
+               IntegerSmithNormalForm/AbstractAlgebra independently.
+            3. Collect and return results in input order.
+
+        Preserved Invariants:
+            Each sub-computation is independent; thread safety is guaranteed by
+            Julia's task-local state.
+
+        Args:
+            matrices: List of sparse integer matrices (scipy.sparse or similar).
+
+        Returns:
+            list[np.ndarray]: SNF diagonal for each input matrix, in order.
+              Matrices that fail return an empty array.
+
+        Use When:
+            - Computing homology for many boundary dimensions simultaneously.
+            - Parallelising independent SNF computations on a multi-core machine.
+
+        Example:
+            diagonals = julia_engine.compute_batch_snf([d1, d2, d3])
+        """
+        self.require_julia()
+        if not matrices:
+            return []
+        batch_rows, batch_cols, batch_vals = [], [], []
+        batch_m = np.zeros(len(matrices), dtype=np.int64)
+        batch_n = np.zeros(len(matrices), dtype=np.int64)
+        for i, mat in enumerate(matrices):
+            r, c, v = self._coo_triplets_cached(mat)
+            batch_rows.append(r)
+            batch_cols.append(c)
+            batch_vals.append(v)
+            batch_m[i] = int(mat.shape[0])
+            batch_n[i] = int(mat.shape[1])
+        results_jl = self.backend.batch_exact_snf_sparse(
+            batch_rows, batch_cols, batch_vals, batch_m, batch_n
+        )
+        return [np.array(r, dtype=np.int64) for r in results_jl]
 
     def compute_sparse_rank_q(self, matrix) -> int:
         """Compute matrix rank over Q using Julia backend from sparse COO data.
@@ -935,7 +1189,7 @@ class JuliaBridge:
         # Convert columns to list of vectors
         basis_py = []
         for j in range(basis_mat.shape[1]):
-            basis_py.append(np.array(basis_mat[:, j], dtype=np.int64))
+            basis_py.append(basis_mat[:, j].astype(np.int64, copy=False))
         return basis_py
 
     def compute_sparse_cohomology_basis_mod_p(
@@ -988,7 +1242,7 @@ class JuliaBridge:
 
         basis_py = []
         for j in range(basis_mat.shape[1]):
-            basis_py.append(np.array(basis_mat[:, j], dtype=np.int64))
+            basis_py.append(basis_mat[:, j].astype(np.int64, copy=False))
         return basis_py
 
     def compute_boundary_payload_from_simplices(
@@ -1062,7 +1316,14 @@ class JuliaBridge:
         res_keys, res_vals = self.backend.group_ring_multiply(
             coeffs1, coeffs2, int(group_order)
         )
-        return {("1" if int(k) == 0 else f"g_{int(k)}"): int(v) for k, v in zip(res_keys, res_vals)}
+
+        def _key(k):
+            ki = int(k)
+            return "1" if ki == 0 else f"g_{ki}"
+
+        return {
+            _key(k): int(v) for k, v in zip(res_keys, res_vals)
+        }
 
     def compute_multisignature(self, matrix: np.ndarray, p: int) -> int:
         """Evaluates L_{4k}(Z_p) obstruction by computing multisignature.
@@ -1114,6 +1375,11 @@ class JuliaBridge:
         """
         self.require_julia()
         flat_rels = [" ".join(r) for r in relations]
+        # Short-circuit empty relations: free abelian group of rank len(generators).
+        # Bypassing the Julia call here also avoids a multiple-dispatch recursion
+        # bug in `abelianize_group` when `flat_rels` arrives as Vector{Any}.
+        if not flat_rels:
+            return int(len(generators)), []
         free_rank, torsions = self.backend.abelianize_group(generators, flat_rels)
         return int(free_rank), list(torsions)
 
@@ -1626,7 +1892,7 @@ class JuliaBridge:
         try:
             res = self.backend.compute_circumradius_sq_3d(
                 np.asarray(points, dtype=np.float64),
-                np.asarray(simplices, dtype=np.int64) + 1 # 1-based for Julia
+                np.asarray(simplices, dtype=np.int64),  # 0-based
             )
             return np.array(res, dtype=np.float64)
         except Exception as e:
@@ -1650,7 +1916,7 @@ class JuliaBridge:
         try:
             res = self.backend.compute_circumradius_sq_2d(
                 np.asarray(points, dtype=np.float64),
-                np.asarray(simplices, dtype=np.int64) + 1 # 1-based for Julia
+                np.asarray(simplices, dtype=np.int64),  # 0-based
             )
             return np.array(res, dtype=np.float64)
         except Exception as e:
@@ -1766,6 +2032,56 @@ class JuliaBridge:
             return G_simple_py, L_py
         except Exception as e:
             raise RuntimeError(f"quick_mapper_jl failed: {e!r}")
+
+    def compute_persistence_barcodes(self, boundary_matrices: dict[int, sp.spmatrix], field: str) -> list[dict]:
+        """Compute persistent homology barcodes via Julia backend.
+
+        Args:
+            boundary_matrices: Dictionary mapping dimension d to boundary matrix D_d.
+            field: Field for computation ('Z2' or 'Q').
+
+        Returns:
+            A list of dictionaries containing barcode data (birth, death, dim, multiplicity).
+        """
+        self.require_julia()
+        
+        jl_dict = self.jl.Dict[self.jl.Int, self.jl.SparseArrays.SparseMatrixCSC]()
+        
+        for d, mat in boundary_matrices.items():
+            if not sp.issparse(mat):
+                mat = sp.csr_matrix(mat)
+            
+            # Use cached COO triplets for speed
+            rows, cols, vals = self._coo_triplets_cached(mat)
+            
+            # Convert to SparseMatrixCSC in Julia
+            # Julia indices are 1-based, triplets from _coo_triplets_cached are 0-based
+            jl_mat = self.jl.SparseArrays.sparse(
+                self.jl.convert(self.jl.Vector[self.jl.Int], rows + 1),
+                self.jl.convert(self.jl.Vector[self.jl.Int], cols + 1),
+                self.jl.convert(self.jl.Vector[self.jl.Int64], vals),
+                int(mat.shape[0]),
+                int(mat.shape[1])
+            )
+            jl_dict[int(d)] = jl_mat
+            
+        jl_field = self.jl.Symbol(field)
+        
+        try:
+            jl_barcodes = self.backend.compute_persistence_barcodes(jl_dict, jl_field)
+        except Exception as e:
+            raise RuntimeError(f"Julia compute_persistence_barcodes failed: {e}")
+            
+        barcodes = []
+        for b in jl_barcodes:
+            barcodes.append({
+                "birth": int(b.birth) - 1, # Convert back to 0-indexed
+                "death": int(b.death) - 1,
+                "dim": int(b.dim),
+                "multiplicity": int(b.multiplicity)
+            })
+            
+        return barcodes
 
     def simplify_jl(self, simplices: list[tuple]) -> tuple[list[tuple], dict[int, list[int]], dict[tuple, list[tuple]]]:
         """Executes high-performance topology-preserving simplification in Julia.
@@ -1918,6 +2234,403 @@ class JuliaBridge:
             return [(tuple(sorted(int(x) for x in pair[0])), tuple(sorted(int(x) for x in pair[1]))) for pair in res]
         except Exception as e:
             raise RuntimeError(f"compute_discrete_morse_gradient_jl failed: {e!r}")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Proposal 5 (REVISED): Bounded Controlled Cohomology bridge methods
+    # ──────────────────────────────────────────────────────────────────────
+
+    def todd_coxeter_index(
+        self, generators: list[str], relations: list[str], max_index: int
+    ) -> tuple[bool, int, np.ndarray]:
+        """Run Todd-Coxeter coset enumeration over the trivial subgroup.
+
+        Args:
+            generators: Generator name strings.
+            relations: Space-separated relator strings (each token is a
+                generator or `gen^N` for integer N).
+            max_index: Maximum number of cosets to enumerate.
+
+        Returns:
+            Tuple `(converged, n_cosets, coset_table)` where `coset_table` is
+            an int64 array of shape `(n_cosets, 2*n_gens)`.
+        """
+        self.require_julia()
+        converged, n_cosets, table = self.backend.todd_coxeter_index_jl(
+            list(generators), list(relations), int(max_index)
+        )
+        n_cosets = int(n_cosets)
+        if not bool(converged):
+            return False, n_cosets, np.zeros((0, 0), dtype=np.int64)
+        table_np = np.array(table, dtype=np.int64)
+        return True, n_cosets, table_np
+
+    def cayley_table(
+        self, coset_table: np.ndarray, generators: list[str]
+    ) -> tuple[np.ndarray, np.ndarray, int, list[str]]:
+        """Build the Cayley table of a finite group from a Todd-Coxeter table.
+
+        Args:
+            coset_table: Output from `todd_coxeter_index`; shape
+                `(|G|, 2*n_gens)`.
+            generators: Generator name strings.
+
+        Returns:
+            Tuple `(cayley, inverse_indices, id_idx, words)` with all indices
+            **1-based** to match the Julia kernel's convention. `cayley[i, j]`
+            (1-based) is the index of the product of group elements i and j;
+            `inverse_indices[i]` (1-based) is the index of the inverse.
+        """
+        self.require_julia()
+        cayley_jl, inverse_jl, id_idx, words_jl = self.backend.cayley_table_jl(
+            np.asarray(coset_table, dtype=np.int64), list(generators)
+        )
+        cayley = np.array(cayley_jl, dtype=np.int64)
+        inverse = np.array(inverse_jl, dtype=np.int64)
+        words = [str(w) for w in words_jl]
+        return cayley, inverse, int(id_idx), words
+
+    def sphere_recognition_pl(self, simplices: list[list[int]], dim: int) -> tuple[bool, str]:
+        """Perform PL sphere recognition in Julia.
+
+        Returns:
+            (is_sphere, reason)
+        """
+        self.require_julia()
+        res = self.backend.sphere_recognition_pl(simplices, int(dim))
+        # res is a tuple (Bool, String)
+        return bool(res[0]), str(res[1])
+
+    def surgery_relative_boundary_sparse(
+        self, K_q: list[list[int]], K_qp1: list[list[int]], Kb_indices: list[int]
+    ):
+        """Build relative boundary matrix in Julia."""
+        self.require_julia()
+        return self.backend.surgery_relative_boundary_sparse(
+            K_q, K_qp1, [int(idx) + 1 for idx in Kb_indices]  # Julia uses 1-based
+        )
+
+    def linking_seifert_solve_z(self, B, b: np.ndarray) -> tuple[np.ndarray, bool, str]:
+        """Solve B*f = b over Z in Julia using SNF."""
+        self.require_julia()
+        f_jl, success, reason = self.backend.linking_seifert_solve_z(
+            B, np.asarray(b, dtype=np.int64)
+        )
+        return np.array(f_jl, dtype=np.int64), bool(success), str(reason)
+
+    def linking_gauss_riemann(
+        self,
+        Ka_starts: np.ndarray,
+        Ka_ends: np.ndarray,
+        Ka_mult: np.ndarray,
+        Kb_starts: np.ndarray,
+        Kb_ends: np.ndarray,
+        Kb_mult: np.ndarray,
+        n_samples: int = 24,
+    ) -> float:
+        """Compute the Gauss linking integral lk(K_a, K_b) in Julia.
+
+        `Ka_starts`/`Ka_ends` are (N_a, 3) arrays of oriented edge endpoints;
+        `Ka_mult` is (N_a,) integer multiplicities. Same shape for K_b.
+        Returns the value already divided by 4π (caller rounds to integer).
+        """
+        self.require_julia()
+        Ka_s = np.ascontiguousarray(Ka_starts, dtype=np.float64)
+        Ka_e = np.ascontiguousarray(Ka_ends, dtype=np.float64)
+        Ka_m = np.ascontiguousarray(Ka_mult, dtype=np.int64)
+        Kb_s = np.ascontiguousarray(Kb_starts, dtype=np.float64)
+        Kb_e = np.ascontiguousarray(Kb_ends, dtype=np.float64)
+        Kb_m = np.ascontiguousarray(Kb_mult, dtype=np.int64)
+        if Ka_s.size == 0 or Kb_s.size == 0:
+            return 0.0
+        val = self.backend.linking_gauss_riemann_jl(
+            Ka_s, Ka_e, Ka_m, Kb_s, Kb_e, Kb_m, int(n_samples)
+        )
+        return float(val)
+
+    def linking_intersection_pairing(
+        self,
+        a: np.ndarray,
+        f: np.ndarray,
+        Cp: list[list[int]],
+        Cqp1: list[list[int]],
+        n: int,
+    ) -> int:
+        """Compute simplicial intersection pairing in Julia."""
+        self.require_julia()
+        val = self.backend.linking_intersection_pairing(
+            np.asarray(a, dtype=np.int64),
+            np.asarray(f, dtype=np.int64),
+            Cp,
+            Cqp1,
+            int(n),
+        )
+        return int(val)
+
+    def linking_intersection_batch(
+        self,
+        a_series: list[np.ndarray],
+        f: np.ndarray,
+        Cp: list[list[int]],
+        Cqp1: list[list[int]],
+        n: int,
+    ) -> np.ndarray:
+        """Compute ⟨K_a_i, F⟩ for each a-vector in a_series, reusing precomputed Seifert chain f.
+
+        Args:
+            a_series: List of a-vectors (one per unlink pass). Each is a 1-D int64 array.
+            f:        Precomputed Seifert chain (solution to B·f = b_Kb).
+            Cp:       p-simplices of K (ambient), as list-of-lists.
+            Cqp1:     (q+1)-simplices of K (ambient), as list-of-lists.
+            n:        Ambient complex dimension.
+
+        Returns:
+            np.ndarray of shape (len(a_series),) with dtype int64 — one lk per a-vector.
+        """
+        self.require_julia()
+        a_series_converted = [np.asarray(a, dtype=np.int64) for a in a_series]
+        result = self.backend.linking_intersection_batch(
+            a_series_converted,
+            np.asarray(f, dtype=np.int64),
+            Cp,
+            Cqp1,
+            int(n),
+        )
+        return np.array(result, dtype=np.int64)
+
+    def linking_intersect_2chains(
+        self,
+        F_a: np.ndarray,
+        F_b: np.ndarray,
+        simplices_1: list[list[int]],
+        simplices_2: list[list[int]],
+        simplices_3: list[list[int]],
+    ) -> np.ndarray:
+        self.require_julia()
+        result = self.backend.linking_intersect_2chains(
+            np.asarray(F_a, dtype=np.int64),
+            np.asarray(F_b, dtype=np.int64),
+            simplices_1,
+            simplices_2,
+            simplices_3,
+        )
+        return np.array(result, dtype=np.int64)
+
+    def alexander_from_seifert(self, V: np.ndarray) -> dict | None:
+        """Compute Alexander polynomial det(tV - V^T) via Julia's AbstractAlgebra.
+
+        Args:
+            V: Seifert matrix as 2D int64 ndarray.
+
+        Returns:
+            dict {degree: coeff} or None on failure.
+        """
+        self.require_julia()
+        V_arr = np.asarray(V, dtype=np.int64)
+        rows = [list(V_arr[i]) for i in range(V_arr.shape[0])]
+        coeffs_jl, min_deg = self.backend.alexander_from_seifert_jl(rows)
+        coeffs = list(coeffs_jl)
+        result = {}
+        for k, c in enumerate(coeffs):
+            d = int(min_deg) + k
+            if int(c) != 0:
+                result[d] = int(c)
+        return result if result else {0: 1}
+
+    def knot_signature(self, V: np.ndarray) -> int:
+        """Compute knot signature σ(K) = sig(V + V^T) via Julia.
+
+        Args:
+            V: Seifert matrix as 2D int64 ndarray.
+
+        Returns:
+            int (#positive - #negative eigenvalues of V + V^T).
+        """
+        self.require_julia()
+        V_arr = np.asarray(V, dtype=np.int64)
+        rows = [list(V_arr[i]) for i in range(V_arr.shape[0])]
+        return int(self.backend.knot_signature_jl(rows))
+
+    def compute_cohomology_basis_jl(
+        self,
+        D_m,
+        D_mp1,
+        D_n,
+    ) -> tuple[np.ndarray, int, int, np.ndarray, np.ndarray]:
+        """Compute free H^m cohomology generators from sparse boundary matrices via Julia.
+
+        Replaces the Python path of smith_normal_decomp + SymPy.inv in IntersectionForm.from_complex
+        for the case β_m > 50, where SymPy matrix inversions become the bottleneck.
+
+        Args:
+            D_m:   scipy sparse boundary matrix ∂_m (nrows_Dm × ncols_Dm).
+            D_mp1: scipy sparse boundary matrix ∂_{m+1} (nrows_Dmp1 × ncols_Dmp1).
+            D_n:   scipy sparse boundary matrix ∂_n (nrows_Dn × ncols_Dn).
+
+        Returns:
+            (cocycles, n_rows, n_cols, free_col_indices, F) where:
+              - cocycles: (n_rows × n_cols) ndarray — full cocycle matrix.
+              - free_col_indices: 0-based int64 array of free-generator columns.
+              - F: fundamental class as int64 vector of length ncols_Dn.
+        """
+        self.require_julia()
+        import scipy.sparse as sp_mod
+
+        def _to_coo(mat, expected_shape):
+            if mat is None or mat.shape[0] == 0 or mat.shape[1] == 0:
+                nr, nc = expected_shape
+                return (
+                    np.zeros(0, dtype=np.int64),
+                    np.zeros(0, dtype=np.int64),
+                    np.zeros(0, dtype=np.int64),
+                    nr,
+                    nc,
+                )
+            coo = sp_mod.coo_matrix(mat.astype(np.int64))
+            return (
+                coo.row.astype(np.int64),
+                coo.col.astype(np.int64),
+                coo.data.astype(np.int64),
+                int(coo.shape[0]),
+                int(coo.shape[1]),
+            )
+
+        Dm_I, Dm_J, Dm_V, nrDm, ncDm     = _to_coo(D_m,   D_m.shape   if D_m is not None else (0, 0))
+        Dmp1_I, Dmp1_J, Dmp1_V, nrDmp1, ncDmp1 = _to_coo(D_mp1, D_mp1.shape if D_mp1 is not None else (0, 0))
+        Dn_I, Dn_J, Dn_V, nrDn, ncDn     = _to_coo(D_n,   D_n.shape   if D_n is not None else (0, 0))
+
+        cocycles_flat, n_rows, n_cols, free_cols, F = self.backend.compute_cohomology_basis_jl(
+            Dm_I, Dm_J, Dm_V, nrDm, ncDm,
+            Dmp1_I, Dmp1_J, Dmp1_V, nrDmp1, ncDmp1,
+            Dn_I, Dn_J, Dn_V, nrDn, ncDn,
+        )
+        n_rows = int(n_rows)
+        n_cols = int(n_cols)
+        cocycles_np = np.array(cocycles_flat, dtype=np.int64).reshape(n_rows, n_cols, order="F")
+        free_cols_np = np.array(free_cols, dtype=np.int64)
+        F_np = np.array(F, dtype=np.int64)
+        return cocycles_np, n_rows, n_cols, free_cols_np, F_np
+
+    def surgery_handle_attach(
+        self,
+        K_simplices: dict[int, list[list[int]]],
+        attaching_sphere: list[list[int]],
+        tubular_neighborhood: list[list[int]],
+        co_disk_simplices: list[list[int]],
+        vertex_offset: int,
+        index_k: int,
+        ambient_dim: int,
+    ) -> dict:
+        """Perform handle attachment in Julia."""
+        self.require_julia()
+        res = self.backend.surgery_handle_attach(
+            K_simplices,
+            attaching_sphere,
+            tubular_neighborhood,
+            co_disk_simplices,
+            int(vertex_offset),
+            int(index_k),
+            int(ambient_dim),
+        )
+        # Convert Julia Dict to Python dict
+        import juliacall
+        return juliacall.PythonCall.pyconvert(dict, res)
+
+    def cayley_convolve(
+        self, a: np.ndarray, b: np.ndarray, cayley: np.ndarray
+    ) -> np.ndarray:
+        """Group-ring multiplication via Cayley-table convolution."""
+        self.require_julia()
+        res = self.backend.cayley_convolve_jl(
+            np.asarray(a, dtype=np.int64),
+            np.asarray(b, dtype=np.int64),
+            np.asarray(cayley, dtype=np.int64),
+        )
+        return np.array(res, dtype=np.int64)
+
+    def lift_boundary_to_cover(
+        self,
+        rows: np.ndarray,
+        cols: np.ndarray,
+        group_indices: np.ndarray,
+        coeffs: np.ndarray,
+        n_g: int,
+        m_base: int,
+        n_base: int,
+        cayley: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Lift Z[G]-boundary data to the universal cover as COO triples.
+
+        All input indices are 1-based; outputs are 1-based as well — Python
+        callers should subtract 1 to obtain 0-based scipy.sparse indices.
+        """
+        self.require_julia()
+        out_rows, out_cols, out_vals = self.backend.lift_boundary_to_cover_jl(
+            np.asarray(rows, dtype=np.int64),
+            np.asarray(cols, dtype=np.int64),
+            np.asarray(group_indices, dtype=np.int64),
+            np.asarray(coeffs, dtype=np.int64),
+            int(n_g),
+            int(m_base),
+            int(n_base),
+            np.asarray(cayley, dtype=np.int64),
+        )
+        return (
+            np.array(out_rows, dtype=np.int64),
+            np.array(out_cols, dtype=np.int64),
+            np.array(out_vals, dtype=np.int64),
+        )
+
+    def fox_derivative_block(
+        self,
+        relator: list[int],
+        gen_idx: int,
+        cayley: np.ndarray,
+        gen_to_group: list[int],
+        inverse_indices: np.ndarray,
+        rho_images: list[np.ndarray],
+        degree: int,
+        complex_dtype: bool = False,
+    ) -> np.ndarray:
+        """Compute a Fox-derivative block ∂w/∂g_i evaluated through ρ.
+
+        Args:
+            relator: Relator word as a list of signed generator indices
+                (1-based; positive = generator, negative = inverse).
+            gen_idx: 1-based generator index to differentiate by.
+            cayley: Cayley table (1-based indices), int64.
+            gen_to_group: For each generator (1..n_gens), its 1-based index
+                in the Cayley table.
+            inverse_indices: For each group element, its 1-based inverse index.
+            rho_images: List `[ρ(g_1), …, ρ(g_n)]` where each `ρ(g_k)` is
+                a `(degree, degree)` numpy array.
+            degree: Representation degree.
+            complex_dtype: If True, evaluate in `complex128`; else `float64`.
+        """
+        self.require_julia()
+        if complex_dtype:
+            rho_packed = [np.asarray(R, dtype=np.complex128) for R in rho_images]
+            block = self.backend.fox_derivative_block_complex_jl(
+                list(int(s) for s in relator),
+                int(gen_idx),
+                np.asarray(cayley, dtype=np.int64),
+                list(int(g) for g in gen_to_group),
+                np.asarray(inverse_indices, dtype=np.int64),
+                rho_packed,
+                int(degree),
+            )
+            return np.array(block, dtype=np.complex128)
+        rho_packed = [np.asarray(R, dtype=np.float64) for R in rho_images]
+        block = self.backend.fox_derivative_block_real_jl(
+            list(int(s) for s in relator),
+            int(gen_idx),
+            np.asarray(cayley, dtype=np.int64),
+            list(int(g) for g in gen_to_group),
+            np.asarray(inverse_indices, dtype=np.int64),
+            rho_packed,
+            int(degree),
+        )
+        return np.array(block, dtype=np.float64)
+
 
     # Singleton instance
 julia_engine = JuliaBridge()

@@ -15,7 +15,7 @@ Key Concepts:
       to the union of balls around the points.
 """
 import numpy as np
-from pysurgery.core.complexes import SimplicialComplex
+from pysurgery.topology.complexes import SimplicialComplex
 
 def test_alpha_complex_tiny_S2():
     """Verify Alpha Complex construction for a 3D octahedron (S²).

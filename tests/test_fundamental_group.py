@@ -3,13 +3,13 @@ import scipy.sparse as sp
 import pytest
 
 from discrete_surface_data import get_surfaces, get_3_manifolds, to_complex
-from pysurgery.core.fundamental_group import (
+from pysurgery.topology.fundamental_group import (
     extract_pi_1,
     simplify_presentation,
     infer_standard_group_descriptor,
     FundamentalGroup,
 )
-from pysurgery.core.complexes import CWComplex
+from pysurgery.topology.complexes import CWComplex
 
 
 def test_extract_pi_1_trivial():

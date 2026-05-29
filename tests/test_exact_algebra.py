@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from pysurgery.core.exact_algebra import (
+from pysurgery.algebra.exact_algebra import (
     coerce_int_matrix,
     normalize_word_token,
     validate_group_descriptor,

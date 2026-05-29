@@ -1,12 +1,12 @@
 import math
 import numpy as np
 import pytest
-from pysurgery.core.gauss_bonnet import (
+from pysurgery.geometry.gauss_bonnet import (
     verify_gauss_bonnet_2d,
     verify_chern_gauss_bonnet_4d,
     chern_gauss_bonnet_integral_expected
 )
-from pysurgery.core.uniformization import SurfaceMesh
+from pysurgery.geometry.uniformization import SurfaceMesh
 
 def test_gauss_bonnet_2d_sphere():
     # A simple tetrahedron (sphere topology, chi=2)
@@ -104,8 +104,16 @@ def test_chern_gauss_bonnet_integral_expected():
     # 6D, chi=2 -> (2pi)^3 * 2 = 16 * pi^3
     assert math.isclose(chern_gauss_bonnet_integral_expected(6, 2), 16 * math.pi**3)
     
-    # Odd dimension
+    # Odd dimension, closed (must be chi=0)
     with pytest.raises(Exception):
-        chern_gauss_bonnet_integral_expected(3, 2)
+        chern_gauss_bonnet_integral_expected(3, 2, closed=True)
     
-    assert chern_gauss_bonnet_integral_expected(3, 0) == 0.0
+    assert chern_gauss_bonnet_integral_expected(3, 0, closed=True) == 0.0
+
+    # Odd dimension, not closed (can be chi != 0)
+    # A 3-disk has chi=1. Expected integral part (without boundary terms) is NaN/undefined.
+    val = chern_gauss_bonnet_integral_expected(3, 1, closed=False)
+    assert math.isnan(val)
+    
+    # chi=0 in odd dim always gives 0
+    assert chern_gauss_bonnet_integral_expected(3, 0, closed=False) == 0.0

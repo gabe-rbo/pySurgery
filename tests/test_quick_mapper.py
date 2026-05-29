@@ -11,7 +11,7 @@ Key Concepts:
 """
 import pytest
 import numpy as np
-from pysurgery.core.complexes import SimplicialComplex
+from pysurgery.topology.complexes import SimplicialComplex
 
 def test_from_point_cloud_cknn():
     """Test CkNN construction on a multi-scale point cloud.

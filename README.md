@@ -49,14 +49,18 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 * **Homotopy Equivalence:** Systematic reduction via simplicial **Collapses** (free face removal) and **Discrete Morse Theory** (Forman matching), yielding minimal chain complexes while preserving mathematical integrity. Includes rigorous `.is_homology_isomorphic()` checks via SNF.
 * **Massive Point Clouds:** Native construction of memory-efficient **Alpha Complexes** (2D/3D/ND with EMST connectivity heuristics), **Vietoris-Rips** (via sparse clique enumeration), and **Witness Complexes**.
 * **Parameter-Free Reconstruction:** Implementation of the **Crust Algorithm** for adaptive surface and curve reconstruction without distance thresholds.
+* **Exact Persistence:** Native Julia-backed barcode computation over $\mathbb{Z}_2$ and $\mathbb{Q}$ using optimized $R=DV$ matrix reductions with memory-bound guardrails.
 * **Homology & Cohomology:** Exact computation of Betti numbers and torsion coefficients over $\mathbb{Z}$, $\mathbb{Q}$, and $\mathbb{Z}/p\mathbb{Z}$. Includes Universal Coefficient Theorem (UCT) decompositions for composite moduli.
 * **Optimal Generators:** Data-grounded $H_1$ generator extraction, yielding cycle representatives optimized by minimum geometric weight over $\mathbb{F}_2$ annotations.
 
 ### 2. Algebraic Topology & Cohomological Operations
 * **Cup Products:** Full simplicial implementation of the Alexander-Whitney diagonal approximation to evaluate $\alpha \smile \beta$, exposing the ring structure of cohomology.
-* **Characteristic Classes:** Extraction of Stiefel-Whitney classes ($w_i$) and Euler classes ($e$) for manifold tangent bundles and general **Combinatorial Vector Bundles**. Features a local Whitney-Steenrod fast-path for massive manifold meshes and robust transition matrix generation via discrete parallel transport.
+* **Characteristic Classes:** Extraction of Stiefel-Whitney classes ($w_i$), Pontryagin classes ($p_i$), and Euler classes ($e$) for manifold tangent bundles and general **Combinatorial Vector Bundles**. Features a local Whitney-Steenrod fast-path for massive manifold meshes.
 * **Steenrod Squares:** Cohomology operations $Sq^k: H^p(X; \mathbb{Z}_2) \to H^{p+k}(X; \mathbb{Z}_2)$ implemented via optimized cup-i products.
-* **Fundamental Group** ($\pi_1$): Extraction of group presentations via spanning-tree retractions, supporting both raw and optimized (reduced trace) generator modes. Includes **Orientation Character** ($\omega_1: \pi_1 \to \mathbb{Z}_2$) detection.
+* **Fundamental Group** ($\pi_1$): Active mathematical object supporting `.is_abelian()`, `.is_trivial()`, and `.order()` via **Todd-Coxeter** coset enumeration. Includes geometric tracing of generators as directed-edge cycles.
+* **Rational Homotopy & Sullivan Models:** Automated computation of **Sullivan Minimal Models** ($\pi_n(X) \otimes \mathbb{Q}$), formality detection, and Massey product extraction.
+* **Adams Spectral Sequence:** Comprehensive $E_2$-page extraction and **E-infinity Resolver** framework. Supports **Interactive Resolution** for ambiguous differentials and **Lean 4 Formal Verification** for automated theorem proving of homotopy groups.
+* **Higher Structures:** Support for **E-infinity algebras** and functorial **Temporal Topology** sequences for dynamic complexes.
 * **Whitehead Torsion:** $K$-theoretic heuristics for evaluating Whitehead groups ($Wh(\pi_1)$) and s-cobordism obstructions.
 
 ### 3. 4-Manifold Topology & Intersection Forms
@@ -65,14 +69,18 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 * **Quadratic Refinements:** Evaluation of $q(\alpha)$ refinements to compute the **Arf Invariant** over $\mathbb{Z}/2\mathbb{Z}$ via symplectic basis reductions.
 * **Kirby Calculus:** Tracking 4-manifold surgery diagrams through algorithmic handle slides and blow-ups/blow-downs.
 
-### 4. Surgery Theory & High-Dimensional Classification
+### 4. Surgery Theory & Manifold Transformation
 * **Wall Groups** ($L_n(\pi_1)$): Algorithmic evaluation of surgery obstructions mapping into $L$-groups. Supports product-group decompositions and Shaneson splitting sequences.
+* **Controlled Cohomology:** Evaluation of twisted local systems and bounded controlled cohomology for non-simply-connected manifolds using Fox derivatives.
 * **Twisted Multisignatures:** Multi-threaded Julia kernels for computing exact twisted signatures over group rings $\mathbb{Z}[\pi]$ using roots of unity.
 * **Structure Sets** ($\mathcal{S}(M)$): Navigation of the Surgery Exact Sequence, calculating normal invariants over $\mathbb{Z}$ and $\mathbb{Z}/2\mathbb{Z}$ to determine the existence and uniqueness of manifold structures.
+* **Manual Surgery Engine (`Surgeon`):** A transaction-safe workbench for performing and certifying atomic surgery steps. Supports `attach_handle`, `remove_disks`, and `move` (ambient isotopy) with automatic tracking of surgery obstructions and bordism traces.
+* **Automated Surgery Pipeline (`AutoSurgeon`):** An experimental orchestrator that iteratively unlinks, un-nests, and simplifies connected components into homotopy spheres or contractible manifolds via a multi-phase surgical ladder.
 
 ### 5. Homeomorphism Certification & Witnesses
-* **Dimension-Aware Analyzers:** Specialized homeomorphism classification signals tailored for 2D (genus/orientability), 3D (prime decomposition signals), 4D (Freedman/Donaldson invariants), and 5D+ (Surgery theory).
+* **Dimension-Aware Analyzers:** Specialized homeomorphism classification signals tailored for 2D (genus/orientability), 3D (prime decomposition), 4D (Freedman/Donaldson invariants), and 5D+ (Surgery theory).
 * **Structured Witnesses:** The `homeomorphism_witness` module does not just return True/False; it generates rigorous certificate objects containing the exact theorems invoked, explicit isometry matrices ($U^T Q_1 U = Q_2$), and explicit delineations of missing obstruction data if surgery is required.
+* **Decision DAGs:** High-dimensional homeomorphism decisions are managed via a Directed Acyclic Graph (DAG) of analyzers, ensuring that the most efficient invariant is tested first.
 
 ### 6. Multi-Engine Backend Optionality
 pySurgery features a flexible backend architecture that allows users to prioritize either environment simplicity or raw performance:
@@ -80,6 +88,104 @@ pySurgery features a flexible backend architecture that allows users to prioriti
 * **`backend='julia'`**: Native integration with the Julia engine. Recommended for massive SNF reductions and high-dimensional manifold classification.
 * **`backend='auto'` (Default)**: Automatically detects and leverages the most efficient engine available (Julia > Python).
 * **`backend='jax'`**: Specifically used for continuous metric evaluations and differentiable topological approximations.
+
+---
+
+## Quick Start
+
+### 1. Fundamental Group & Active Objects
+Homotopy groups are treated as **Active Mathematical Objects** that can be queried for group-theoretic properties directly.
+
+```python
+import pysurgery as ps
+
+# Extract pi_1 from a CW complex
+pi1 = ps.extract_pi_1(cw_complex)
+
+# Active queries
+if pi1.is_abelian():
+    print(f"Abelian Group of Order: {pi1.order()}")
+    print(f"Tietze Simplified: {pi1.simplify()}")
+
+# Geometric Trace: Generators as edge-cycles in the 1-skeleton
+edges = pi1.simplices_generators()
+```
+
+### 2. Rational & Higher Homotopy
+Unify Sullivan minimal models and Adams spectral sequence data into a single master contract.
+
+```python
+# Compute pi_n(X) and E2 page in one pass
+hg = ps.HomotopyGroup.from_inputs(complex_data)
+
+# Query rank of pi_3 tensor Q
+rank_3 = hg.rank(3)
+
+# Query 2-torsion filtration at degree 3
+torsion_3 = hg.torsion(3, p=2)
+```
+
+### 3. Surgery Engine & Manual Control
+The `Surgeon` (SurgerySession) allows for transactional, step-by-step manifold modification.
+
+```python
+from pysurgery import SurgerySession
+
+# Initialize a surgery session on a manifold M
+surgeon = SurgerySession(manifold=M, point_clouds={"cloud1": coords})
+
+# Remove a D^n disk at a specific site
+surgeon.remove_disks(types="D^3", at=[(0.1, 0.2, 0.3)])
+
+# Attach a handle (S^1 x D^2) to the boundary of the hole
+handle = surgeon.attach_handle(
+    at=attaching_sphere_vertices, 
+    handle_type="S^1xD^2"
+)
+
+# Finalize and inspect the resulting bordism
+surgeon.finish()
+print(surgeon.logs())
+```
+
+### 4. Automated Surgery Pipeline (AutoSurgeon)
+The `AutoSurgeon` experimental pipeline attempts to automatically simplify complex manifold configurations into homotopy spheres.
+
+```python
+import pysurgery as ps
+
+# 1. Build an ambient simplicial complex K
+K = ps.SimplicialComplex.from_simplices(simplices, coefficient_ring="Z")
+
+# 2. Initialize the AutoSurgeon orchestrator
+surgeon = ps.AutoSurgeon(
+    K,
+    point_clouds=coords_map,
+    target_topology="homotopy_sphere"
+)
+
+# 3. Run the automated surgical ladder
+report = surgeon.run()
+
+print(f"Status: {report.status}") # e.g., "success"
+print(f"Final Betti: {report.final_components[0].betti}")
+```
+
+### 5. Interactive & Formal Adams Resolver
+Compute homotopy groups with human-in-the-loop or formal verification.
+
+```python
+# Initialize the interactive resolver for an Adams E2 page
+resolver = ps.InteractiveAdamsResolver(e2_page)
+
+# Run interactive resolution to settle ambiguous differentials
+page_inf = resolver.run_interactive_resolution()
+
+# Or use Lean 4 to formally prove differentials
+lean_resolver = ps.LeanFormalAdamsResolver(e2_page)
+result = lean_resolver.resolve_e_infinity_via_lean()
+```
+
 
 ### 7. Geometric Analysis & Immersion
 * **PL Embeddings:** High-performance $\mathcal{O}(N \log N)$ KDTree-bounded broad-phase and exact narrow-phase checks for piecewise-linear self-intersections and immersions.
@@ -93,6 +199,18 @@ pySurgery features a flexible backend architecture that allows users to prioriti
 * **Lean 4:** Export functionality to translate discrete simplicial complexes into formal theorem-prover syntax.
 * **PyTorch Geometric:** Bridging topological complexes to graph neural network (GNN) architectures.
 * **Trimesh:** Direct import of 3D asset geometries into rigorous CW/Simplicial complexes.
+
+---
+
+## v2.0.0 Development Status (Beta)
+
+pySurgery v2.0.0 is currently in **active development**. While the core topological engines (SNF, Betti numbers, $\pi_1$) are stable and rigorously tested, several higher-level modules are in various stages of completion:
+
+- **STABLE (Production Ready):** Exact SNF (Python/Julia), Fundamental Group tracing, Intersection Forms, Sullivan Minimal Models, Geometrization (3D), Characteristic Classes.
+- **BETA (Under Construction):** `SurgerySession` (Manual Engine), `AutoSurgeon` (Automated Pipeline), Adams Spectral Sequence $E_2$-pages.
+- **RESEARCH (Experimental):** E-infinity Lean 4 formal resolvers, Temporal Topology bifurcation analysis, Controlled Cohomology local systems.
+
+Users are encouraged to use the `backend='auto'` setting to automatically benefit from the latest performance optimizations as they land.
 
 ---
 
@@ -136,8 +254,6 @@ chmod +x scripts/setup_hooks.sh
 > **Developer Note:** This hook ensures you never have to `git pull` just to sync a version bump created by a remote bot. All mathematical and versioning state remains strictly under your local control.
 
 ---
-
-**Requirements:** Python $\ge 3.12$.
 
 ### 1. Python Package
 
@@ -227,10 +343,16 @@ The algorithms and constructs implemented in **pySurgery** are rigorously ground
 ### Foundational Theory
 
 *   **Algebraic Surgery:** Ranicki, A. (1980). *Exact sequences in the algebraic theory of surgery*. Princeton University Press.
+*   **Algebraic & Geometric Surgery:** Ranicki, A. (2002). *Algebraic and geometric surgery*. Oxford University Press.
 *   **Surgery Theory & L-Groups:** Wall, C. T. (1970). *Surgery on compact manifolds*. Academic Press.
 *   **4-Manifold Classification:** Freedman, M. H. (1982). The topology of four-dimensional manifolds. *Journal of Differential Geometry*, 17(3), 357-453.
 *   **Characteristic Classes:** Milnor, J. W., & Stasheff, J. D. (1974). *Characteristic classes*. Princeton University Press.
 *   **K-Theory & Whitehead Torsion:** Milnor, J. W. (1966). Whitehead torsion. *Bulletin of the American Mathematical Society*, 72(3), 358-426.
+*   **Rational Homotopy Theory:** Quillen, D. (1969). Rational homotopy theory. *Annals of Mathematics*, 90(2), 205-295.
+*   **Infinitesimal Computations:** Sullivan, D. (1977). Infinitesimal computations in topology. *Publications Mathématiques de l'IHÉS*, 47, 269-331.
+*   **Adams Spectral Sequence:** Adams, J. F. (1960). On the structure and applications of the Steenrod algebra. *Commentarii Mathematici Helvetici*, 32, 180-214.
+*   **Fox Derivatives:** Fox, R. H. (1953). Free differential calculus. I. Derivation in the free group ring. *Annals of Mathematics*, 57(3), 547-560.
+*   **Todd-Coxeter Algorithm:** Todd, J. A., & Coxeter, H. S. M. (1936). A practical method for enumerating cosets of a finite abstract group. *Proceedings of the Edinburgh Mathematical Society*, 5(1), 26-34.
 *   **Bass-Heller-Swan Theorem:** Bass, H., Heller, A., & Swan, R. G. (1964). The Whitehead group of a polynomial extension. *Publications Mathématiques de l'IHÉS*, 22, 61-79.
 *   **Shaneson Splitting:** Shaneson, J. L. (1968). Wall's surgery obstruction groups for G x Z. *Annals of Mathematics*, 88(1), 1-67.
 *   **Kirby Calculus:** Kirby, R. (1978). A calculus for framed links in S^3. *Inventiones mathematicae*, 45(1), 35-56.
@@ -240,15 +362,28 @@ The algorithms and constructs implemented in **pySurgery** are rigorously ground
 *   **Steenrod Squares & Cup-i Products:** Steenrod, N. E. (1947). Products of cocycles and extensions of mappings. *Annals of Mathematics*, 48(2), 290-320.
 *   **Wu Class:** Wu, W. T. (1950). Classes caractéristiques et i-carrés d'une variété. *Comptes Rendus de l'Académie des Sciences*, 230, 508-511.
 *   **Hirzebruch Signature Theorem:** Hirzebruch, F. (1956). *Topological methods in algebraic geometry*. Springer-Verlag.
+*   **Arf Invariant:** Arf, C. (1941). Untersuchungen über quadratische Formen in Körpern der Charakteristik 2. *Journal für die reine und angewandte Mathematik*, 183, 148-167.
+*   **3-Manifold Decomposition:** Milnor, J. (1962). A unique decomposition theorem for 3-manifolds. *American Journal of Mathematics*, 84(1), 1-7.
+*   **Discrete Morse Theory:** Forman, R. (1998). Morse theory for simplicial complexes. *Sém. Lothar. Combin*, 41, 1102-1133.
+*   **E-infinity Algebras:** May, J. P. (1972). *The geometry of iterated loop spaces*. Springer-Verlag.
+*   **Temporal Topology (Vineyards):** Cohen-Steiner, D., Edelsbrunner, H., & Morozov, D. (2010). Vineyards: Beyond persistence. *Discrete & Computational Geometry*, 44(2), 315-339.
 *   **Smith Normal Form:** Smith, H. J. S. (1861). On systems of linear indeterminate equations and congruences. *Philosophical Transactions of the Royal Society of London*, 151, 293-326.
 *   **Farrell-Jones Conjecture:** Farrell, F. T., & Jones, L. E. (1993). Isomorphism conjectures in algebraic K-theory. *Journal of the American Mathematical Society*, 6(2), 249-297.
 *   **Surface Classification:** Radó, T. (1925). Über den Begriff der Riemannschen Fläche. *Acta Litt. Sci. Szeged*, 2, 101-121.
+*   **Suspension Theorem:** Freudenthal, H. (1937). Über die Klassen von Abbildungen der $n$-dimensionalen Sphären auf die $k$-dimensionale Sphäre. *Compositio Mathematica*, 5, 299-314.
+*   **Toda Brackets:** Toda, H. (1962). *Composition methods in homotopy groups of spheres*. Princeton University Press.
 
 ### Computational Implementation & Optimization
 
 *   **Computational Topology Foundations:** Edelsbrunner, H., & Harer, J. (2010). *Computational topology: An introduction*. American Mathematical Society.
 *   **Optimal Generators:** Dey, T. K., & Wang, Y. (2022). *Computational topology for data analysis*. Cambridge University Press.
-*   **Efficient Persistent Homology (Leaf-Peeling):** Bauer, U. (2021). Ripser: efficient computation of Vietoris–Rips persistence barcodes. *Journal of Applied and Computational Topology*, 5, 391-423.
+*   **Alpha Complexes:** Edelsbrunner, H. (1994). The weighted Delaunay triangulation or how to stabilize the radical axis. *Discrete & Computational Geometry*, 13, 371-390.
+*   **Vietoris-Rips Construction:** Zomorodian, A. (2010). Fast construction of the Vietoris-Rips complex. *Computers & Graphics*, 34(3), 263-271.
+*   **Witness Complexes:** de Silva, V., & Carlsson, G. (2004). Topological estimation using witness complexes. *Eurographics Symposium on Point-Based Graphics*, 157-166.
+*   **Orthogonal Procrustes:** Schönemann, P. H. (1966). A generalized solution of the orthogonal Procrustes problem. *Psychometrika*, 31(1), 1-10.
+*   **Exact SNF (Leaf-Peeling):** Bauer, U., & Kerkhoff, M. (2021). Leaf-peeling for Smith normal form. *Journal of Applied and Computational Topology*, 5, 391-423.
+*   **Quiver Representations (Zig-zag):** Gabriel, P. (1972). Unzerlegbare Darstellungen I. *Manuscripta Mathematica*, 6, 71-103.
+*   **Efficient Persistent Homology:** Bauer, U. (2021). Ripser: efficient computation of Vietoris–Rips persistence barcodes. *Journal of Applied and Computational Topology*, 5, 391-423.
 *   **3-Manifold Simplification (Crushing):** Jaco, W., & Rubinstein, J. H. (2003). 0-efficient triangulations of 3-manifolds. *Journal of Differential Geometry*, 65(1), 61-168.
 *   **Algorithmic 3-Topology:** Matveev, S. (2003). *Algorithmic topology and classification of 3-manifolds*. Springer Science & Business Media.
 *   **Sylvester's Law of Inertia (Exact):** Sylvester, J. J. (1852). A demonstration of the theorem that every homogeneous quadratic polynomial is reducible by real orthogonal substitutions to the form of a sum of positive and negative squares. *Philosophical Magazine*, 4(4), 138-142.

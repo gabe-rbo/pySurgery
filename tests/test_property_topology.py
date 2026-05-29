@@ -14,8 +14,8 @@ Key Concepts:
 """
 
 from hypothesis import given, settings
-from pysurgery.core.complexes import SimplicialComplex
-from pysurgery.core.fundamental_group import extract_pi_1
+from pysurgery.topology.complexes import SimplicialComplex
+from pysurgery.topology.fundamental_group import extract_pi_1
 from strategies import simplicial_complexes_raw, connected_simplicial_complexes_raw
 
 @settings(max_examples=100, deadline=None)

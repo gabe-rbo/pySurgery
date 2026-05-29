@@ -12,8 +12,8 @@ Key Concepts:
     - **Characteristic Classes**: w₂ and p₁ invariants computed from the intersection form.
 """
 import numpy as np
-from pysurgery.core.intersection_forms import IntersectionForm
-from pysurgery.core.characteristic_classes import (
+from pysurgery.algebra.intersection_forms import IntersectionForm
+from pysurgery.geometry.characteristic_classes import (
     extract_stiefel_whitney_w2 as wu_class,
     extract_pontryagin_p1 as pontryagin_class,
 )

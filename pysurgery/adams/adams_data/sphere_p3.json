@@ -1,0 +1,13 @@
+{
+  "space_label": "S^0",
+  "prime": 3,
+  "differentials": [
+    {
+      "r": 2,
+      "source": [0, 12],
+      "target": [2, 13],
+      "decision": "zero",
+      "reference": "Toda (1962), first alpha-generator"
+    }
+  ]
+}

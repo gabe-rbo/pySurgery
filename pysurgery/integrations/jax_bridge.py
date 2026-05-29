@@ -213,27 +213,28 @@ if HAS_JAX:
         C2 = jnp.ones((n, 1)) @ jnp.dot(q[None, :], (D_B**2).T)
         const_C = C1 + C2
 
-        def body_T(i, T):
+        def body_T(i, carry):
+            T, u, v = carry
             # Compute current cost matrix based on current coupling T
             L = const_C - 2 * jnp.dot(jnp.dot(D_A, T), D_B.T)
             K = jnp.exp(-L / epsilon)
-            
+
             # Sinkhorn projections
             def body_sinkhorn(j, val):
-                u, v = val
-                u = p / (jnp.dot(K, v) + 1e-12)
-                v = q / (jnp.dot(K.T, u) + 1e-12)
-                return u, v
-            
-            u_init = jnp.ones(n) / n
-            v_init = jnp.ones(m) / m
-            u, v = lax.fori_loop(0, 20, body_sinkhorn, (u_init, v_init))
-            return u[:, None] * K * v[None, :]
-        
+                u_in, v_in = val
+                u_out = p / (jnp.dot(K, v_in) + 1e-12)
+                v_out = q / (jnp.dot(K.T, u_out) + 1e-12)
+                return u_out, v_out
+
+            u, v = lax.fori_loop(0, 20, body_sinkhorn, (u, v))
+            T_new = u[:, None] * K * v[None, :]
+            return T_new, u, v
+
         # Iteratively refine the coupling matrix T
         T_init = jnp.outer(p, q)
-        T_final = lax.fori_loop(0, max_iter, body_T, T_init)
-        
+        init_carry = (T_init, jnp.ones(n) / n, jnp.ones(m) / m)
+        T_final, _, _ = lax.fori_loop(0, max_iter, body_T, init_carry)
+
         # Final GW loss (quadratic)
         L_final = const_C - 2 * jnp.dot(jnp.dot(D_A, T_final), D_B.T)
         gw_sq = jnp.sum(L_final * T_final)
@@ -292,14 +293,6 @@ def jax_warmup():
         jax_pairwise_distance(data)
         
         # 4. Warm up GW
-        p = jnp.ones(5) / 5
-        q = jnp.ones(5) / 5
-        jax_gromov_wasserstein(jnp.eye(5), jnp.eye(5), p, q)
-        
-        return {"available": True, "status": "Warmup complete"}
-    except Exception as e:
-        return {"available": True, "status": f"Warmup failed: {e!r}"}
-    # 4. Warm up GW
         p = jnp.ones(5) / 5
         q = jnp.ones(5) / 5
         jax_gromov_wasserstein(jnp.eye(5), jnp.eye(5), p, q)

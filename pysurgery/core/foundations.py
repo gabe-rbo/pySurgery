@@ -156,6 +156,168 @@ COVERAGE_MATRIX: list[CoverageMatrixEntry] = [
             "Z-factor recursive splitting and factor-wise surrogate decomposition are implemented; exact product-group success requires assembly certification."
         ],
     ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Handle Surgery Mayer-Vietoris",
+        theorem_tag="surgery.handle.mayer_vietoris",
+        status="exact",
+        required_inputs=[
+            "SimplicialComplex K",
+            "HandleAttachment with embeddedness_verified=True and framing_verified=True",
+            "Exact SNF homology before/after",
+        ],
+        notes=[
+            "Exact when attaching sphere is PL-certified; heuristic path sets exact=False.",
+            "Torsion changes confined to dimensions {k-1, k} by Mayer-Vietoris.",
+        ],
+    ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Linking Number over Z via Seifert SNF",
+        theorem_tag="surgery.linking.relative_snf_z",
+        status="exact",
+        required_inputs=[
+            "Disjoint oriented subcomplexes K_a, K_b with dim_a + dim_b = n - 1",
+            "K_b null-homologous in K (Seifert chain exists)",
+            "Exact SNF of boundary matrix ∂_{q+1}",
+        ],
+        notes=[
+            "Always exact over Z; raises LinkingComputationError on any algebraic failure.",
+            "F2 heuristic path (surgery.linking.f2_torsion_blind) loses torsion information.",
+        ],
+    ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Delinking via Iterated Index-1 Handle Surgery",
+        theorem_tag="surgery.delinking.unlinking_number",
+        status="exact",
+        required_inputs=[
+            "Disjoint K_a, K_b with dim K_a = 1 (curves in ambient n-manifold)",
+            "Certified attaching spheres (exact path) or SNF heuristic (approx path)",
+            "Linking number computation at each step",
+        ],
+        notes=[
+            "Exact only when all sphere attachments are PL-certified and lk reaches 0.",
+            "Unlinking lower bound |lk_0| is sharp (Milnor 1961).",
+        ],
+    ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Auto Surgery Full Pipeline",
+        theorem_tag="auto.surgery.full_pipeline",
+        status="exact",
+        required_inputs=[
+            "SimplicialComplex K",
+            "AutoSurgeonConfig config",
+        ],
+        notes=[
+            "Executes multi-phase auto-surgery pipeline across unlink, separate, pi1, and homology kill phases."
+        ],
+    ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Auto Surgery Unlink Pair",
+        theorem_tag="auto.surgery.unlink",
+        status="exact",
+        required_inputs=[
+            "SimplicialComplex K",
+            "Component A",
+            "Component B",
+        ],
+        notes=[
+            "Disjoint components are topology-preservingly unlinked via cancelling-pair surgery."
+        ],
+    ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Auto Surgery Separate Nested",
+        theorem_tag="auto.surgery.separate_nested",
+        status="exact",
+        required_inputs=[
+            "SimplicialComplex K",
+            "Component outer",
+            "Component inner",
+        ],
+        notes=[
+            "Concentric nested components separated via ambient 1-handle surgery."
+        ],
+    ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Auto Surgery Kill Pi1",
+        theorem_tag="auto.surgery.kill_pi1",
+        status="exact",
+        required_inputs=[
+            "SimplicialComplex K",
+            "Generator of fundamental group",
+        ],
+        notes=[
+            "Kills pi1 generator via 2-handle surgery attachment."
+        ],
+    ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Auto Surgery Kill Homology Dim",
+        theorem_tag="auto.surgery.kill_homology_dim",
+        status="exact",
+        required_inputs=[
+            "SimplicialComplex K",
+            "Homology dimension k",
+        ],
+        notes=[
+            "Kills homology generators via index-(k+1) handle attachment."
+        ],
+    ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Auto Surgery Middle Obstruction",
+        theorem_tag="auto.surgery.middle_obstruction",
+        status="exact",
+        required_inputs=[
+            "SimplicialComplex K",
+        ],
+        notes=[
+            "Wall / Arf / signature obstruction verification at middle dimension."
+        ],
+    ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Auto Surgery Cut Site Detection",
+        theorem_tag="auto.surgery.cut_site",
+        status="exact",
+        required_inputs=[
+            "SimplicialComplex K",
+            "Component A",
+            "Component B",
+        ],
+        notes=[
+            "Locates a 1-strand isolated cut-site for unlinking."
+        ],
+    ),
+    CoverageMatrixEntry(
+        dimension_class="nD",
+        pi_family="all",
+        theorem="Surgery Cancelling Pair",
+        theorem_tag="surgery.cancelling_pair",
+        status="exact",
+        required_inputs=[
+            "SurgerySession session",
+            "Prior open step step_index",
+        ],
+        notes=[
+            "Glues cancelling handle after open disk removal step."
+        ],
+    ),
 ]
 
 

@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
-from pysurgery.core.complexes import CWComplex
+from pysurgery.topology.complexes import CWComplex
 import importlib.util
 
 HAS_TORCH = importlib.util.find_spec("torch") is not None
@@ -101,24 +101,36 @@ def pyg_to_cw_complex(data) -> CWComplex:
         if face_arr.ndim != 2 or face_arr.shape[0] < 3:
             raise ValueError("face must have shape [k, F] with k >= 3.")
 
-        d2_rows = []
-        d2_cols = []
-        d2_data = []
+        # Vectorized face cycle iteration
+        F = face_arr.T  # shape (n_faces, k)
+        u = F
+        v = np.roll(F, -1, axis=1)
 
-        for j in range(n_faces):
-            cycle = [int(v) for v in face_arr[:, j].tolist()]
-            for i in range(len(cycle)):
-                u = cycle[i]
-                v = cycle[(i + 1) % len(cycle)]
-                key = (u, v) if u < v else (v, u)
-                if key not in edge_to_idx:
-                    raise ValueError(
-                        f"Face references edge ({u}, {v}) that is missing from edge_index."
-                    )
-                sign = 1 if key == (u, v) else -1
-                d2_rows.append(edge_to_idx[key])
-                d2_cols.append(j)
-                d2_data.append(sign)
+        # Canonicalize edges and compute signs
+        canon_u = np.where(u < v, u, v)
+        canon_v = np.where(u < v, v, u)
+        sign = np.where(u < v, 1, -1)
+
+        # Efficient edge lookup using packed int64 keys
+        edge_keys = canon_u.astype(np.int64) * n_vertices + canon_v.astype(np.int64)
+        edge_lookup = {
+            int(k[0]) * n_vertices + int(k[1]): idx for k, idx in edge_to_idx.items()
+        }
+
+        flat_keys = edge_keys.ravel()
+        try:
+            d2_rows = np.fromiter(
+                (edge_lookup[int(k)] for k in flat_keys),
+                dtype=np.int64,
+                count=flat_keys.size,
+            )
+        except KeyError as e:
+            raise ValueError(
+                f"Face references an edge that is missing from edge_index: {e!r}"
+            )
+
+        d2_cols = np.repeat(np.arange(n_faces, dtype=np.int64), F.shape[1])
+        d2_data = sign.ravel()
 
         d2 = sp.csr_matrix(
             (d2_data, (d2_rows, d2_cols)), shape=(n_edges, n_faces), dtype=np.int64

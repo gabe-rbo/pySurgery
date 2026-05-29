@@ -1,8 +1,13 @@
-from typing import List, Optional
+import numpy as np
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict, Field
-from .core.complexes import ChainComplex
-from .core.exceptions import StructureSetError
-from .wall_groups import ObstructionResult, WallGroupL, l_group_symbol
+from pysurgery.topology.complexes import ChainComplex
+from pysurgery.core.exceptions import StructureSetError
+from pysurgery.wall_groups import ObstructionResult, WallGroupL, l_group_symbol
+
+if TYPE_CHECKING:
+    from pysurgery.algebra.exact_sequences import ExactSequence
+
 
 
 class NormalInvariantsResult(BaseModel):
@@ -92,6 +97,30 @@ class SurgeryExactSequenceResult(BaseModel):
         default_factory=lambda: LObstructionState()
     )
 
+    def to_formal_sequence(self) -> "ExactSequence":
+        """Convert this result into a formal ExactSequence object.
+        
+        The sequence is: L_{n+1}(pi) -> S(M) -> [M, G/TOP] -> L_n(pi)
+        """
+        from pysurgery.algebra.exact_sequences import Morphism, ExactSequence
+        
+        # Define ranks
+        rank_l_n_plus_1 = self.l_n_plus_1_state.value if self.l_n_plus_1_state.value is not None else 0
+        rank_normal = self.normal_invariants.rank_Z if self.normal_invariants else 0
+        rank_l_n = self.l_n_state.value if self.l_n_state.value is not None else 0
+        
+        # For the Structure Set S(M), if it's not computable, we treat it as unknown rank.
+        # But we can provide a Morphism with symbolic/zero matrices to represent the links.
+        
+        # Placeholder morphisms for the surgery sequence
+        # In a real computation, these would be the assembly map and the action map.
+        f = Morphism(np.zeros((0, rank_l_n_plus_1), dtype=object), rank_l_n_plus_1, 0) # L -> S
+        g = Morphism(np.zeros((rank_normal, 0), dtype=object), 0, rank_normal) # S -> [M, G/TOP]
+        h = Morphism(np.zeros((rank_l_n, rank_normal), dtype=object), rank_normal, rank_l_n) # [M, G/TOP] -> L
+        
+        modules = [f"L_{self.dimension+1}", "S(M)", "[M, G/TOP]", f"L_{self.dimension}"]
+        return ExactSequence(modules, [f, g, h])
+
     def to_report(self) -> str:
         n = self.dimension
         report = f"--- SURGERY EXACT SEQUENCE FOR {n}D MANIFOLD ---\n"
@@ -101,6 +130,29 @@ class SurgeryExactSequenceResult(BaseModel):
         for line in self.analysis:
             report += f"- {line}\n"
         return report
+
+    def predict_structure_set_size(self) -> Dict[str, Any]:
+        """Use exactness to predict the rank and torsion of the Structure Set S(M).
+        
+        Based on: Rank(S(M)) = Rank(Ker(h)) + Rank(Im(f))
+        """
+        if not self.normal_invariants:
+            return {"rank": "unknown"}
+            
+        # h: [M, G/TOP] -> L_n
+        # Rank(Ker h) = Rank([M, G/TOP]) - Rank(Im h)
+        rank_normal = self.normal_invariants.rank_Z
+        rank_l_n = self.l_n_state.value if self.l_n_state.value is not None else 0
+        
+        # Minimal rank of S(M) is Rank(Ker h)
+        # Maximal rank is Rank(Ker h) + Rank(L_{n+1})
+        min_rank = max(0, rank_normal - rank_l_n)
+        max_rank = min_rank + (self.l_n_plus_1_state.value if self.l_n_plus_1_state.value is not None else 0)
+        
+        return {
+            "rank_range": (min_rank, max_rank),
+            "exact_rank": min_rank if self.l_n_plus_1_state.zero_certified else None
+        }
 
 
 class LObstructionState(BaseModel):
@@ -246,11 +298,10 @@ class StructureSet(BaseModel):
                 r, _ = chain.cohomology(k, backend=backend)
                 rank_Z += r
             elif k % 4 == 2:
-                r_k, t_k = chain.homology(k, backend=backend)
-                _, t_km1 = chain.homology(k - 1, backend=backend)
-                z2_hom = sum(1 for t in t_k if t % 2 == 0)
-                z2_ext = sum(1 for t in t_km1 if t % 2 == 0)
-                rank_Z2 += r_k + z2_hom + z2_ext
+                r_k_z2, _ = chain.cohomology(k, backend=backend)  # over Z/2
+                rank_Z2 += r_k_z2
+                _, t_km1 = chain.cohomology(k - 1, backend=backend)
+                rank_Z2 += sum(1 for t in t_km1 if t == 2)
 
         return NormalInvariantsResult(
             dimension=n,

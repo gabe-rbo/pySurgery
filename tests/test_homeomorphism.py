@@ -36,10 +36,10 @@ from pysurgery.homeomorphism import (
     analyze_homeomorphism_high_dim_result,
     surgery_to_remove_impediments,
 )
-from pysurgery.core.intersection_forms import IntersectionForm
-from pysurgery.core.complexes import ChainComplex
-from pysurgery.core.fundamental_group import FundamentalGroup
-from pysurgery.core.k_theory import WhiteheadGroup
+from pysurgery.algebra.intersection_forms import IntersectionForm
+from pysurgery.topology.complexes import ChainComplex
+from pysurgery.topology.fundamental_group import FundamentalGroup
+from pysurgery.algebra.k_theory import WhiteheadGroup
 from pysurgery.structure_set import NormalInvariantsResult, SurgeryExactSequenceResult
 from pysurgery.wall_groups import ObstructionResult
 

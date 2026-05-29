@@ -21,7 +21,6 @@ import numpy as np
 from pysurgery.core.complexes import CWComplex
 from pysurgery.core.fundamental_group import extract_pi_1_with_traces
 from pysurgery.bridge.julia_bridge import julia_engine
-from pysurgery.integrations.gudhi_bridge import extract_complex_data
 
 
 def build_torus_4x4_chain_complex(R: float = 3.0, r: float = 1.0):
@@ -33,9 +32,8 @@ def build_torus_4x4_chain_complex(R: float = 3.0, r: float = 1.0):
 
     Algorithm:
         1. Generate 16 vertices by sampling the torus immersion in ℝ³.
-        2. Populate a GUDHI SimplexTree with 0-simplices (vertices) and 2-simplices (triangles).
-        3. Use `extract_complex_data` to convert the SimplexTree into boundary matrices.
-        4. Instantiate a `CWComplex` from the extracted data.
+        2. Build a `SimplicialComplex` from 0-simplices and 2-simplices.
+        3. Convert the `SimplicialComplex` to a `CWComplex`.
 
     Preserved Invariants:
         - Homotopy type of the torus (S¹ × S¹).
@@ -49,15 +47,15 @@ def build_torus_4x4_chain_complex(R: float = 3.0, r: float = 1.0):
     Returns:
         CWComplex: A complex representing the triangulated torus.
     """
-    import gudhi
+    from pysurgery.core.complexes import SimplicialComplex
 
     nu = nv = 4
     pts = []
+    simplices = []
 
     def idx(i: int, j: int) -> int:
         return i * nv + j
 
-    st = gudhi.SimplexTree()
     for i in range(nu):
         u = 2.0 * np.pi * i / nu
         for j in range(nv):
@@ -66,7 +64,7 @@ def build_torus_4x4_chain_complex(R: float = 3.0, r: float = 1.0):
             y = (R + r * np.cos(v)) * np.sin(u)
             z = r * np.sin(v)
             pts.append([x, y, z])
-            st.insert([idx(i, j)])
+            simplices.append((idx(i, j),))
 
     for i in range(nu):
         ip = (i + 1) % nu
@@ -76,11 +74,11 @@ def build_torus_4x4_chain_complex(R: float = 3.0, r: float = 1.0):
             b = idx(ip, j)
             c = idx(ip, jp)
             d = idx(i, jp)
-            st.insert([a, b, c])
-            st.insert([a, c, d])
+            simplices.append((a, b, c))
+            simplices.append((a, c, d))
 
-    boundaries, cells, _, _ = extract_complex_data(st)
-    cw = CWComplex(cells=cells, attaching_maps=boundaries, coefficient_ring="Z")
+    sc = SimplicialComplex.from_simplices(simplices, close_under_faces=True)
+    cw = sc.to_cw_complex()
     return cw
 
 

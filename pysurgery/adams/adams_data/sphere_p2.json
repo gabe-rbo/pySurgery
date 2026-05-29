@@ -1,0 +1,41 @@
+{
+  "space_label": "S^0",
+  "prime": 2,
+  "differentials": [
+    {
+      "r": 2,
+      "source": [0, 14],
+      "target": [2, 15],
+      "decision": "nonzero",
+      "reference": "Toda (1962), d2(h4) = h0 h3^2"
+    },
+    {
+      "r": 2,
+      "source": [0, 30],
+      "target": [2, 31],
+      "decision": "nonzero",
+      "reference": "Toda (1962), d2(h5) = h0 h4^2"
+    },
+    {
+      "r": 3,
+      "source": [0, 7],
+      "target": [3, 9],
+      "decision": "zero",
+      "reference": "Adams (1960), h3 survives to E4"
+    },
+    {
+      "r": 2,
+      "source": [1, 2],
+      "target": [3, 3],
+      "decision": "zero",
+      "reference": "h1^2 survives"
+    },
+    {
+      "r": 2,
+      "source": [2, 4],
+      "target": [4, 5],
+      "decision": "zero",
+      "reference": "h2^2 survives"
+    }
+  ]
+}

@@ -13,7 +13,7 @@ Key Concepts:
 """
 import numpy as np
 import pytest
-from pysurgery.core.kirby_calculus import KirbyDiagram
+from pysurgery.manifolds.kirby_calculus import KirbyDiagram
 from pysurgery.core.exceptions import KirbyMoveError
 
 

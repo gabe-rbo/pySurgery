@@ -17,8 +17,8 @@ import math
 
 import numpy as np
 
-from pysurgery.core.complexes import SimplicialComplex
-from pysurgery.core.uniformization import (
+from pysurgery.topology.complexes import SimplicialComplex
+from pysurgery.geometry.uniformization import (
     SurfaceMesh,
     circle_packing_uniformization,
     cotangent_laplacian,

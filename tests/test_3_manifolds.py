@@ -12,7 +12,7 @@ Key Concepts:
 """
 import numpy as np
 import scipy.sparse as sp
-from pysurgery.core.complexes import ChainComplex
+from pysurgery.topology.complexes import ChainComplex
 from pysurgery.homeomorphism import analyze_homeomorphism_3d
 
 

@@ -13,10 +13,10 @@ Key Concepts:
     - **Normal Invariants**: The set [M, G/TOP] representing normal maps.
 """
 import numpy as np
-from pysurgery.algebraic_poincare import AlgebraicPoincareComplex
-from pysurgery.core.complexes import ChainComplex
-from pysurgery.algebraic_surgery import AlgebraicSurgeryComplex
-from pysurgery.core.intersection_forms import IntersectionForm
+from pysurgery.homology.algebraic_poincare import AlgebraicPoincareComplex
+from pysurgery.topology.complexes import ChainComplex
+from pysurgery.surgery import AlgebraicSurgeryComplex
+from pysurgery.algebra.intersection_forms import IntersectionForm
 
 
 def test_assembly_map():

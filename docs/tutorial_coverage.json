@@ -164,6 +164,83 @@
         "build_tetrahedron_boundary",
         "build_torus_4x4"
       ]
+    },
+    {
+      "id": "theorem.auto.surgery.cut_site",
+      "kind": "theorem_tag",
+      "target": "auto.surgery.cut_site",
+      "notebooks": ["experiments/FullSurgery/demo_two_linked_circles.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
+    },
+    {
+      "id": "theorem.auto.surgery.full_pipeline",
+      "kind": "theorem_tag",
+      "target": "auto.surgery.full_pipeline",
+      "notebooks": ["experiments/FullSurgery/demo_two_linked_circles.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
+    },
+    {
+      "id": "theorem.auto.surgery.kill_homology_dim",
+      "kind": "theorem_tag",
+      "target": "auto.surgery.kill_homology_dim",
+      "notebooks": ["experiments/FullSurgery/demo_two_linked_circles.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
+    },
+    {
+      "id": "theorem.auto.surgery.kill_pi1",
+      "kind": "theorem_tag",
+      "target": "auto.surgery.kill_pi1",
+      "notebooks": ["experiments/FullSurgery/demo_two_linked_circles.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
+    },
+    {
+      "id": "theorem.auto.surgery.middle_obstruction",
+      "kind": "theorem_tag",
+      "target": "auto.surgery.middle_obstruction",
+      "notebooks": ["experiments/FullSurgery/demo_two_linked_circles.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
+    },
+    {
+      "id": "theorem.auto.surgery.separate_nested",
+      "kind": "theorem_tag",
+      "target": "auto.surgery.separate_nested",
+      "notebooks": ["experiments/FullSurgery/demo_sphere_in_sphere.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
+    },
+    {
+      "id": "theorem.auto.surgery.unlink",
+      "kind": "theorem_tag",
+      "target": "auto.surgery.unlink",
+      "notebooks": ["experiments/FullSurgery/demo_two_linked_circles.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
+    },
+    {
+      "id": "theorem.surgery.cancelling_pair",
+      "kind": "theorem_tag",
+      "target": "surgery.cancelling_pair",
+      "notebooks": ["experiments/FullSurgery/demo_two_linked_circles.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
+    },
+    {
+      "id": "theorem.surgery.delinking.unlinking_number",
+      "kind": "theorem_tag",
+      "target": "surgery.delinking.unlinking_number",
+      "notebooks": ["experiments/FullSurgery/demo_two_linked_circles.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
+    },
+    {
+      "id": "theorem.surgery.handle.mayer_vietoris",
+      "kind": "theorem_tag",
+      "target": "surgery.handle.mayer_vietoris",
+      "notebooks": ["experiments/FullSurgery/demo_sphere_in_sphere.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
+    },
+    {
+      "id": "theorem.surgery.linking.relative_snf_z",
+      "kind": "theorem_tag",
+      "target": "surgery.linking.relative_snf_z",
+      "notebooks": ["experiments/FullSurgery/demo_two_linked_circles.ipynb"],
+      "required_snippets": ["AutoSurgeon"]
     }
   ]
 }

@@ -14,8 +14,8 @@ Key Concepts:
 
 from hypothesis import given, settings
 import numpy as np
-from pysurgery.core.complexes import SimplicialComplex, CWComplex
-from pysurgery.core.fundamental_group import extract_pi_1
+from pysurgery.topology.complexes import SimplicialComplex, CWComplex
+from pysurgery.topology.fundamental_group import extract_pi_1
 from pysurgery.bridge.julia_bridge import julia_engine
 from strategies import simplicial_complexes_raw, point_clouds
 

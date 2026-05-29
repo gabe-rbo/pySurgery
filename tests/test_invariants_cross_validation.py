@@ -15,12 +15,12 @@ Key Concepts:
 import numpy as np
 import math
 import scipy.sparse as sp
-from pysurgery.core.complexes import SimplicialComplex, ChainComplex
-from pysurgery.core.gauss_bonnet import verify_gauss_bonnet_2d
-from pysurgery.core.intersection_forms import IntersectionForm
-from pysurgery.core.characteristic_classes import extract_pontryagin_p1, verify_hirzebruch_signature
-from pysurgery.core.fundamental_group import extract_pi_1, simplify_presentation
-from pysurgery.core.quadratic_forms import arf_invariant_gf2
+from pysurgery.topology.complexes import SimplicialComplex, ChainComplex
+from pysurgery.geometry.gauss_bonnet import verify_gauss_bonnet_2d
+from pysurgery.algebra.intersection_forms import IntersectionForm
+from pysurgery.geometry.characteristic_classes import extract_pontryagin_p1, verify_hirzebruch_signature
+from pysurgery.topology.fundamental_group import extract_pi_1, simplify_presentation
+from pysurgery.algebra.quadratic_forms import arf_invariant_gf2
 
 def test_euler_characteristic_cross_validation():
     """Verify Euler characteristic consistency across simplicial, chain, and geometric pathways.

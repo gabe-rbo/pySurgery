@@ -21,9 +21,9 @@ Common Workflows:
 import numpy as np
 import scipy.sparse as sp
 
-from pysurgery.core.complexes import CWComplex
-from pysurgery.core.fundamental_group import extract_pi_1, extract_pi_1_with_traces
-from pysurgery.core.homology_generators import (
+from pysurgery.topology.complexes import CWComplex
+from pysurgery.topology.fundamental_group import extract_pi_1, extract_pi_1_with_traces
+from pysurgery.homology.homology_generators import (
     compute_homology_basis_from_simplices,
     compute_optimal_h1_basis_from_simplices,
 )
@@ -289,11 +289,11 @@ def test_compute_optimal_h1_basis_from_simplices_julia_empty_result_does_not_fal
         )
 
     monkeypatch.setattr(
-        "pysurgery.core.homology_generators.generator_cycles_from_simplices",
+        "pysurgery.homology.homology_generators.generator_cycles_from_simplices",
         _unexpected_fallback,
     )
     monkeypatch.setattr(
-        "pysurgery.core.homology_generators.greedy_h1_basis", _unexpected_fallback
+        "pysurgery.homology.homology_generators.greedy_h1_basis", _unexpected_fallback
     )
 
     res = compute_optimal_h1_basis_from_simplices(simplices, num_vertices=3)

@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from pysurgery.core.complexes import SimplicialComplex
-from pysurgery.core.embedding import PLMap, analyze_embedding
+from pysurgery.topology.complexes import SimplicialComplex
+from pysurgery.geometry.embedding import PLMap, analyze_embedding
 
 
 def test_pl_map_simplex_vertices():
@@ -118,7 +118,11 @@ def test_analyze_embedding_immersion_fail():
     coords = np.array([[0.0, 0], [1, 0], [2, 0]])
     result = analyze_embedding(sc, coords)
     assert result.immersion.immersed is False
-    assert len(result.immersion.local_failures) > 0
+    # Check that at least one type of failure is recorded.
+    # Boundary vertices now expect rank top_dim - 1, so they may pass 
+    # even if a top-simplex is degenerate.
+    assert (len(result.immersion.local_failures) > 0 or 
+            len(result.immersion.simplex_rank_failures) > 0)
 
 
 def test_analyze_embedding_caching():

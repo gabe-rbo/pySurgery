@@ -17,9 +17,9 @@ Key Concepts:
 import numpy as np
 import scipy.sparse as sp
 
-from pysurgery.core.fundamental_group import FundamentalGroup
-from pysurgery.core.intersection_forms import IntersectionForm
-from pysurgery.core.k_theory import WhiteheadGroup
+from pysurgery.topology.fundamental_group import FundamentalGroup
+from pysurgery.algebra.intersection_forms import IntersectionForm
+from pysurgery.algebra.k_theory import WhiteheadGroup
 from pysurgery.homeomorphism_witness import (
     build_3d_homeomorphism_witness,
     build_4d_homeomorphism_witness,
@@ -28,7 +28,7 @@ from pysurgery.homeomorphism_witness import (
 )
 from pysurgery.structure_set import NormalInvariantsResult, SurgeryExactSequenceResult
 from pysurgery.wall_groups import ObstructionResult
-from pysurgery.core.complexes import ChainComplex
+from pysurgery.topology.complexes import ChainComplex
 
 
 def test_build_4d_definite_homeomorphism_witness_contains_explicit_isometry_matrix():

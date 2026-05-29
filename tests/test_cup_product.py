@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from discrete_surface_data import build_torus, to_complex
-from pysurgery.core.cup_product import alexander_whitney_cup
+from pysurgery.homology.cup_product import alexander_whitney_cup
 
 
 def test_alexander_whitney_cup():

@@ -12,7 +12,7 @@ Key Concepts:
 """
 
 import pytest
-from pysurgery.core.group_rings import GroupRingElement
+from pysurgery.algebra.group_rings import GroupRingElement
 from pysurgery.core.exceptions import GroupRingError
 
 
@@ -121,7 +121,7 @@ def test_group_ring_multiply_python_fallback_cyclic(monkeypatch):
         - Multiplicative identity (1 * x = x).
         - Distributivity over addition.
     """
-    from pysurgery.core import group_rings as gr
+    from pysurgery.algebra import group_rings as gr
 
     monkeypatch.setattr(gr.julia_engine, "available", False)
     a = GroupRingElement({"1": 1, "g_1": 2}, group_order=5)

@@ -25,17 +25,30 @@ REQUIRED_ITEM_KEYS = {"id", "kind", "target", "notebooks", "required_snippets"}
 
 
 def _read_text(path: Path) -> str:
-    """Read and return the content of a text file.
+    """Read and return the content of a text file, parsing Jupyter notebooks.
 
     Algorithm:
-        Reads file content using UTF-8 encoding, ignoring decoding errors.
+        - If the file is a Jupyter notebook (.ipynb), parse its JSON structure
+          and concatenate all source code/markdown cells.
+        - Otherwise, read as raw text.
+        - Uses UTF-8 encoding, ignoring decoding errors.
 
     Args:
         path: Path to the file to be read.
 
     Returns:
-        str: The full text content of the file.
+        str: The extracted text content of the file.
     """
+    if path.suffix == ".ipynb":
+        try:
+            nb = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+            parts = []
+            for cell in nb.get("cells", []):
+                src = cell.get("source", [])
+                parts.append("".join(src) if isinstance(src, list) else str(src))
+            return "\n".join(parts)
+        except Exception:
+            return path.read_text(encoding="utf-8", errors="ignore")
     return path.read_text(encoding="utf-8", errors="ignore")
 
 

@@ -12,8 +12,8 @@ Key Concepts:
 """
 import numpy as np
 import pytest
-from pysurgery.core.complexes import SimplicialComplex
-from pysurgery.core.homology_generators import compute_optimal_h1_basis_from_simplices
+from pysurgery.topology.complexes import SimplicialComplex
+from pysurgery.homology.homology_generators import compute_optimal_h1_basis_from_simplices
 from pysurgery.bridge.julia_bridge import julia_engine
 
 @pytest.mark.skipif(not julia_engine.available, reason="Julia backend not available")

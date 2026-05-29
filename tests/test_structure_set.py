@@ -18,7 +18,7 @@ import scipy.sparse as sp
 import pytest
 
 from pysurgery.structure_set import LObstructionState, StructureSet
-from pysurgery.core.complexes import ChainComplex
+from pysurgery.topology.complexes import ChainComplex
 from pysurgery.core.exceptions import StructureSetError
 from pysurgery.wall_groups import ObstructionResult
 

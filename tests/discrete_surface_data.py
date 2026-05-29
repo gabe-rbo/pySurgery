@@ -11,7 +11,7 @@ Key Concepts:
     - **Manifold Verification**: Used as ground-truth for invariant computation.
 """
 
-from pysurgery.core.complexes import SimplicialComplex
+from pysurgery.topology.complexes import SimplicialComplex
 
 def build_tetrahedron():
     """Construct a tetrahedron as a simplicial complex.

@@ -17,8 +17,8 @@ import scipy.sparse as sp
 import pytest
 
 from discrete_surface_data import get_surfaces, to_complex
-from pysurgery.algebraic_poincare import AlgebraicPoincareComplex
-from pysurgery.core.complexes import ChainComplex
+from pysurgery.homology.algebraic_poincare import AlgebraicPoincareComplex
+from pysurgery.topology.complexes import ChainComplex
 from pysurgery.core.exceptions import DimensionError
 
 

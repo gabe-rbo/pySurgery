@@ -1,6 +1,6 @@
 
-from pysurgery.core.complexes import SimplicialComplex
-from pysurgery.core.intrinsic_dimension import exact_intrinsic_dimension
+from pysurgery.topology.complexes import SimplicialComplex
+from pysurgery.geometry.intrinsic_dimension import exact_intrinsic_dimension
 
 def test_s1_intrinsic_dimension():
     # S^1 as a triangle (simplest triangulation)

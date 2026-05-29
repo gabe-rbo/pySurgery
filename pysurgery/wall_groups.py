@@ -1,12 +1,16 @@
-from typing import List, Optional, Union, Dict
+from typing import List, Optional, Union, Dict, TYPE_CHECKING
 from math import comb
 from collections import Counter
 from pydantic import BaseModel, Field
-from .core.intersection_forms import IntersectionForm
-from .core.quadratic_forms import QuadraticForm
-from .core.fundamental_group import GroupPresentation
-from .core.exceptions import SurgeryObstructionError
-from .bridge.julia_bridge import julia_engine
+
+if TYPE_CHECKING:
+    from pysurgery.topology.complexes import SimplicialComplex
+
+from pysurgery.algebra.intersection_forms import IntersectionForm
+from pysurgery.algebra.quadratic_forms import QuadraticForm
+from pysurgery.topology.fundamental_group import GroupPresentation
+from pysurgery.core.exceptions import SurgeryObstructionError
+from pysurgery.bridge.julia_bridge import julia_engine
 
 
 class ObstructionResult(BaseModel):
@@ -279,21 +283,17 @@ class LDirectSumElement(BaseModel):
         contrib: dict[tuple[int, int, str, str, Optional[int]], int] = {}
         for s in self.summands:
             if not s.computable or not s.exact or s.value is None:
-                raise ValueError(
-                    "Direct-sum arithmetic requires computable exact summands with explicit values."
-                )
+                raise ValueError("Direct-sum arithmetic requires exact summands.")
             key = s.group_key()
-            term = int(s.multiplicity) * int(s.value)
-            if s.modulus is not None:
-                mod = abs(int(s.modulus))
-                if mod != 0:
-                    term %= mod
-            contrib[key] = contrib.get(key, 0) + term
-            if s.modulus is not None:
-                mod = abs(int(s.modulus))
-                if mod != 0:
-                    contrib[key] %= mod
-        return contrib
+            contrib[key] = contrib.get(key, 0) + int(s.multiplicity) * int(s.value)
+
+        result = {}
+        for key, val in contrib.items():
+            shift, dim, pi, symbol, modulus = key
+            if modulus is not None and int(modulus) != 0:
+                val %= abs(int(modulus))
+            result[key] = val
+        return result
 
     def _combine(self, other: "LDirectSumElement", sign: int) -> "LDirectSumElement":
         if self.dimension != other.dimension or self.pi != other.pi:
@@ -538,6 +538,37 @@ class WallGroupL(BaseModel):
     ) -> LDirectSumElement:
         return self.compute_obstruction_result(form, backend=backend).to_direct_sum_element()
 
+    def obstruction_class(
+        self,
+        K: "SimplicialComplex",
+        *,
+        backend: str = "auto",
+    ) -> ObstructionResult:
+        """One-line dispatcher into compute_obstruction_*. Implements Gap G10."""
+        n = self.dimension
+        if n % 2 == 1:
+            return self.compute_obstruction_result(None, backend=backend)
+        
+        if n % 4 == 0:
+            from pysurgery.algebra.intersection_forms import IntersectionForm
+            form = IntersectionForm.from_complex(K, backend=backend)
+        else:
+            from pysurgery.algebra.quadratic_forms import QuadraticForm
+            form = QuadraticForm.from_complex(K, backend=backend)
+            
+        return self.compute_obstruction_result(form, backend=backend)
+
+    def is_trivial(self, obstruction: ObstructionResult) -> bool:
+        """Test whether the class is the identity in L_n(ℤ[π]). Implements Gap G10."""
+        if obstruction.zero_certified:
+            return True
+        if obstruction.value is not None:
+            return int(obstruction.value) == 0
+        if hasattr(obstruction, "summands") and obstruction.summands:
+            return all(s.get("zero_certified", False) or s.get("value") == 0 for s in obstruction.summands)
+        return False
+
+
     def _compute_for_single_factor(
         self, n: int, pi: str, form: Optional[IntersectionForm], backend: str = "auto"
     ) -> ObstructionResult:
@@ -724,8 +755,10 @@ class WallGroupL(BaseModel):
                 )
             if form is None:
                 raise SurgeryObstructionError(
-                    f"Intersection form required to compute Wall group L_{{{n}}}(Z_{p}) multisignature obstruction."
+                    f"Intersection form required to compute Wall group L_n(Z_{p}) "
+                    f"multisignature obstruction, where n={n}."
                 )
+
             # Normalize backend
             backend_norm = str(backend).lower().strip()
             use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
@@ -835,9 +868,10 @@ class WallGroupL(BaseModel):
             try:
                 for j in range(z_count + 1):
                     multiplicity = comb(z_count, j)
+                    form_j = form if j == 0 else None
                     base_res = WallGroupL(
                         dimension=n - j, pi=rest_pi
-                    ).compute_obstruction_result(form, backend=backend)
+                    ).compute_obstruction_result(form_j, backend=backend)
                     component_results.append(base_res)
                     summands.append(
                         {
@@ -868,7 +902,6 @@ class WallGroupL(BaseModel):
                         "Shaneson splitting applied",
                         "Insufficient form input for reduced factors",
                     ],
-                    summands=summands,
                     decomposition_kind="shaneson",
                     assembly_certified=False,
                 )

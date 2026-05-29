@@ -12,8 +12,8 @@ Key Concepts:
 """
 import numpy as np
 import scipy.sparse as sp
-from pysurgery.core.complexes import CWComplex
-from pysurgery.core.fundamental_group import extract_pi_1, extract_pi_1_with_traces
+from pysurgery.topology.complexes import CWComplex
+from pysurgery.topology.fundamental_group import extract_pi_1, extract_pi_1_with_traces
 
 def test_pi1_backend_consistency_circle():
     """Verify π₁ consistency for the circle (S¹).
