@@ -8,7 +8,7 @@ git config push.followTags true
 cat << 'EOF' > .git/hooks/pre-commit
 #!/bin/bash
 exec < /dev/tty
-CUR_VERSION=$(python3 -c "import configparser; config = configparser.ConfigParser(); config.read('.bumpversion.cfg'); print(config['bumpversion']['current_version'])")
+CUR_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
 NEXT_PATCH=$(python3 -c "v = '$CUR_VERSION'.split('.'); v[2] = str(int(v[2]) + 1); print('.'.join(v))")
 NEXT_MINOR=$(python3 -c "v = '$CUR_VERSION'.split('.'); v[1] = str(int(v[1]) + 1); v[2] = '0'; print('.'.join(v))")
 NEXT_MAJOR=$(python3 -c "v = '$CUR_VERSION'.split('.'); v[0] = str(int(v[0]) + 1); v[1] = '0'; v[2] = '0'; print('.'.join(v))")
@@ -29,8 +29,8 @@ if [[ "$WANT_BUMP" =~ ^[Yy]$ ]]; then
         *) BUMP="patch" ;;
     esac
     if bump-my-version bump "$BUMP" --no-commit --no-tag --allow-dirty; then
-        git add pyproject.toml .bumpversion.cfg CITATION.cff pysurgery/__init__.py
-        FINAL_VERSION=$(python3 -c "import configparser; config = configparser.ConfigParser(); config.read('.bumpversion.cfg'); print(config['bumpversion']['current_version'])")
+        git add pyproject.toml CITATION.cff pysurgery/__init__.py
+        FINAL_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
         echo "v$FINAL_VERSION" > .git/PY_SURGERY_RELEASE_PENDING
         echo "✅ Version updated to v$FINAL_VERSION. It will be released on push."
     else
