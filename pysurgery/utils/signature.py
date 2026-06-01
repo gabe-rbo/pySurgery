@@ -1,11 +1,11 @@
 from typing import Tuple
 
 def signature_via_snf(form) -> Tuple[int, int]:
-    """
-    Computes exact (signature, rank) for an IntersectionForm.
-    Prefers the exact IntersectionForm.signature() path.
-    Since IntersectionForm.rank() relies on floating-point arithmetic,
-    we compute the exact rank using compute_exact_sparse_snf.
+    """Computes exact (signature, rank) for an IntersectionForm.
+
+    Prefers the exact IntersectionForm.signature() path. Since
+    IntersectionForm.rank() relies on floating-point arithmetic, we compute the
+    exact rank using compute_exact_sparse_snf.
     """
     from pysurgery.algebra.exact_snf_julia import compute_exact_sparse_snf
     import scipy.sparse as sp

@@ -82,11 +82,14 @@ class HomeomorphismResult:
             self.theorem_tag = infer_theorem_tag(self.theorem)
 
     def to_legacy_tuple(self) -> Tuple[bool | None, str]:
+        """Return the legacy ``(is_homeomorphic, reasoning)`` tuple form."""
         return self.is_homeomorphic, self.reasoning
 
 
 @dataclass
 class HighDimDecisionStage:
+    """A single stage in the high-dimensional decision DAG with its outcome."""
+
     id: str
     title: str
     outcome: Literal["passed", "failed", "inconclusive", "skipped"]
@@ -95,6 +98,7 @@ class HighDimDecisionStage:
     data: dict[str, object] = field(default_factory=dict)
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return the stage as a plain legacy-compatible dictionary."""
         return {
             "id": self.id,
             "title": self.title,
@@ -107,12 +111,15 @@ class HighDimDecisionStage:
 
 @dataclass
 class HighDimDecisionDag:
+    """The ordered collection of decision stages for a high-dimensional analysis."""
+
     dimension: int
     theorem: str
     stages: list[HighDimDecisionStage] = field(default_factory=list)
     contract_version: str = CONTRACT_VERSION
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return the DAG and its stages as a plain legacy-compatible dictionary."""
         return {
             "dimension": self.dimension,
             "theorem": self.theorem,
@@ -123,6 +130,8 @@ class HighDimDecisionDag:
 
 @dataclass
 class HomotopyEquivalenceWitnessHook:
+    """A caller-supplied hook witnessing a homotopy equivalence between inputs."""
+
     provided: bool
     source: str
     exact: bool
@@ -130,6 +139,7 @@ class HomotopyEquivalenceWitnessHook:
     payload: dict[str, object] = field(default_factory=dict)
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return the witness hook as a plain legacy-compatible dictionary."""
         return {
             "provided": self.provided,
             "source": self.source,
@@ -164,9 +174,11 @@ class HomotopyCompletionCertificate:
     payload: dict[str, object] = field(default_factory=dict)
 
     def decision_ready(self) -> bool:
+        """Return True if the certificate is provided, exact, and validated."""
         return bool(self.provided and self.exact and self.validated)
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return the certificate as a plain legacy-compatible dictionary."""
         return {
             "provided": self.provided,
             "source": self.source,
@@ -182,6 +194,8 @@ class HomotopyCompletionCertificate:
 
 @dataclass
 class ThreeManifoldRecognitionCertificate:
+    """A certificate recognizing a 3-manifold, e.g. via geometrization."""
+
     provided: bool
     source: str
     exact: bool
@@ -192,9 +206,11 @@ class ThreeManifoldRecognitionCertificate:
     payload: dict[str, object] = field(default_factory=dict)
 
     def decision_ready(self) -> bool:
+        """Return True if the certificate is provided, exact, and validated."""
         return bool(self.provided and self.exact and self.validated)
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return the certificate as a plain legacy-compatible dictionary."""
         return {
             "provided": self.provided,
             "source": self.source,
@@ -210,6 +226,8 @@ class ThreeManifoldRecognitionCertificate:
 
 @dataclass
 class ProductAssemblyCertificate:
+    """A certificate for a product-structure assembly map result."""
+
     provided: bool
     source: str
     exact: bool
@@ -219,9 +237,11 @@ class ProductAssemblyCertificate:
     payload: dict[str, object] = field(default_factory=dict)
 
     def decision_ready(self) -> bool:
+        """Return True if the certificate is provided, exact, and validated."""
         return bool(self.provided and self.exact and self.validated)
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return the certificate as a plain legacy-compatible dictionary."""
         return {
             "provided": self.provided,
             "source": self.source,
@@ -236,6 +256,8 @@ class ProductAssemblyCertificate:
 
 @dataclass
 class DefiniteLatticeIsometryCertificate:
+    """A certificate exhibiting an isometry between two definite lattices."""
+
     provided: bool
     source: str
     exact: bool
@@ -246,6 +268,7 @@ class DefiniteLatticeIsometryCertificate:
     payload: dict[str, object] = field(default_factory=dict)
 
     def decision_ready(self) -> bool:
+        """Return True if provided, exact, validated, and an isometry is present."""
         return bool(
             self.provided
             and self.exact
@@ -254,6 +277,7 @@ class DefiniteLatticeIsometryCertificate:
         )
 
     def to_legacy_dict(self) -> dict[str, object]:
+        """Return the certificate as a plain legacy-compatible dictionary."""
         return {
             "provided": self.provided,
             "source": self.source,
@@ -1202,6 +1226,18 @@ def analyze_homeomorphism_1d(
     c2: ChainComplex,
     allow_approx: bool = False,
 ) -> Tuple[bool | None, str]:
+    """Legacy wrapper returning the ``(is_homeomorphic, reasoning)`` tuple for 1D.
+
+    See :func:`analyze_homeomorphism_1d_result` for the full analysis.
+
+    Args:
+        c1: ChainComplex for the first 1-manifold.
+        c2: ChainComplex for the second 1-manifold.
+        allow_approx: If True, allow fallback for non-exact homology.
+
+    Returns:
+        The legacy ``(is_homeomorphic, reasoning)`` tuple.
+    """
     return analyze_homeomorphism_1d_result(
         c1, c2, allow_approx=allow_approx
     ).to_legacy_tuple()
@@ -1241,10 +1277,17 @@ def analyze_homeomorphism_2d_result(
         - All higher topological invariants follow from these
     
     Args:
-        c1, c2: ChainComplex objects representing the two surfaces (must be 2D).
+        c1: ChainComplex representing the first surface (must be 2D).
+        c2: ChainComplex representing the second surface (must be 2D).
         allow_approx: If True, continue with warnings if homology computation fails.
+        cohomology_signature_1: Optional precomputed cohomology signature for c1.
+        cohomology_signature_2: Optional precomputed cohomology signature for c2.
+        cohomology_ring_signature_1: Optional precomputed cohomology ring signature for c1.
+        cohomology_ring_signature_2: Optional precomputed cohomology ring signature for c2.
+        cup_product_signature_1: Optional precomputed cup-product signature for c1.
+        cup_product_signature_2: Optional precomputed cup-product signature for c2.
         backend: 'auto', 'julia', or 'python' for homology computation.
-    
+
     Returns:
         HomeomorphismResult with status, is_homeomorphic (True/False/None), reasoning, evidence.
     
@@ -1375,6 +1418,14 @@ def analyze_homeomorphism_2d(
     cup_product_signature_1: dict | None = None,
     cup_product_signature_2: dict | None = None,
 ) -> Tuple[bool | None, str]:
+    """Legacy wrapper returning the ``(is_homeomorphic, reasoning)`` tuple for 2D.
+
+    See :func:`analyze_homeomorphism_2d_result` for the full analysis and the
+    meaning of the optional cohomology signature arguments.
+
+    Returns:
+        The legacy ``(is_homeomorphic, reasoning)`` tuple.
+    """
     return analyze_homeomorphism_2d_result(
         c1,
         c2,
@@ -1423,10 +1474,17 @@ def analyze_homeomorphism_3d_result(
         - Prime Decomposition: Unique decomposition into prime manifolds.
 
     Args:
-        c1, c2: ChainComplex objects for the 3-manifolds.
+        c1: ChainComplex for the first 3-manifold.
+        c2: ChainComplex for the second 3-manifold.
         allow_approx: If True, allow approximate/heuristic invariants.
-        pi1_1, pi1_2: Optional fundamental group presentations.
-        cohomology_signature_*: Optional cohomology ring data.
+        pi1_1: Optional fundamental group presentation for c1.
+        pi1_2: Optional fundamental group presentation for c2.
+        cohomology_signature_1: Optional precomputed cohomology signature for c1.
+        cohomology_signature_2: Optional precomputed cohomology signature for c2.
+        cohomology_ring_signature_1: Optional precomputed cohomology ring signature for c1.
+        cohomology_ring_signature_2: Optional precomputed cohomology ring signature for c2.
+        cup_product_signature_1: Optional precomputed cup-product signature for c1.
+        cup_product_signature_2: Optional precomputed cup-product signature for c2.
         recognition_certificate: Certificate from geometric recognition engines.
         backend: 'auto', 'julia', or 'python'.
 
@@ -1651,6 +1709,14 @@ def analyze_homeomorphism_3d(
     recognition_certificate: ThreeManifoldRecognitionCertificate | dict | None = None,
     backend: str = "auto",
 ) -> Tuple[bool | None, str]:
+    """Legacy wrapper returning the ``(is_homeomorphic, reasoning)`` tuple for 3D.
+
+    See :func:`analyze_homeomorphism_3d_result` for the full analysis and the
+    meaning of the optional invariant arguments.
+
+    Returns:
+        The legacy ``(is_homeomorphic, reasoning)`` tuple.
+    """
     return analyze_homeomorphism_3d_result(
         c1,
         c2,
@@ -1712,12 +1778,28 @@ def analyze_homeomorphism_high_dim_result(
         - h-Cobordism: Homeomorphism up to a cobordism that is a homotopy equivalence.
 
     Args:
-        c1, c2: ChainComplex objects.
+        c1: ChainComplex for the first manifold.
+        c2: ChainComplex for the second manifold.
         dim: Dimension n ≥ 5.
+        allow_approx: If True, allow approximate/heuristic invariants.
         pi1: Fundamental group presentation.
+        pi_group: Optional name or presentation of the fundamental group.
         whitehead_group: Pre-computed Whitehead group data.
         wall_obstruction: Pre-computed L-group obstruction.
+        wall_form: Optional Wall intersection form.
+        cohomology_signature_1: Optional precomputed cohomology signature for c1.
+        cohomology_signature_2: Optional precomputed cohomology signature for c2.
+        cohomology_ring_signature_1: Optional precomputed cohomology ring signature for c1.
+        cohomology_ring_signature_2: Optional precomputed cohomology ring signature for c2.
+        cup_product_signature_1: Optional precomputed cup-product signature for c1.
+        cup_product_signature_2: Optional precomputed cup-product signature for c2.
+        normal_invariants_1: Optional precomputed normal invariants for c1.
+        normal_invariants_2: Optional precomputed normal invariants for c2.
+        surgery_sequence: Optional precomputed surgery exact sequence result.
+        homotopy_equivalence_witness: Optional caller-supplied homotopy-equivalence witness.
+        homotopy_witness_hook: Optional structured homotopy-equivalence witness hook.
         homotopy_completion_certificate: Formal certificate of homotopy equivalence.
+        product_assembly_certificate: Optional product-assembly certificate.
         backend: 'auto', 'julia', or 'python'.
 
     Returns:
@@ -2592,6 +2674,14 @@ def analyze_homeomorphism_high_dim(
     product_assembly_certificate: ProductAssemblyCertificate | dict | None = None,
     backend: str = "auto",
 ) -> Tuple[bool | None, str]:
+    """Legacy wrapper returning the ``(is_homeomorphic, reasoning)`` tuple for n >= 5.
+
+    See :func:`analyze_homeomorphism_high_dim_result` for the full surgery-theoretic
+    analysis and the meaning of every optional argument.
+
+    Returns:
+        The legacy ``(is_homeomorphic, reasoning)`` tuple.
+    """
     return analyze_homeomorphism_high_dim_result(
         c1,
         c2,
@@ -2631,8 +2721,7 @@ def analyze_homeomorphism_4d_result(
     | None = None,
     backend: str = "auto",
 ) -> HomeomorphismResult:
-    """
-    Analyzes the potential for homeomorphism between two simply-connected 4-manifolds.
+    """Analyzes the potential for homeomorphism between two simply-connected 4-manifolds.
 
     Based on Freedman's Classification Theorem:
     Two such manifolds are homeomorphic if and only if:
@@ -2643,7 +2732,7 @@ def analyze_homeomorphism_4d_result(
         Freedman, M. H. (1982). The topology of four-dimensional manifolds. 
         Journal of Differential Geometry, 17(3), 357-453.
 
-    Returns
+    Returns:
     -------
     HomeomorphismResult
     """
@@ -2875,6 +2964,14 @@ def analyze_homeomorphism_4d(
     | None = None,
     backend: str = "auto",
 ) -> Tuple[bool | None, str]:
+    """Legacy wrapper returning the ``(is_homeomorphic, reasoning)`` tuple for 4D.
+
+    See :func:`analyze_homeomorphism_4d_result` for the full Freedman-style
+    intersection-form analysis and the meaning of every optional argument.
+
+    Returns:
+        The legacy ``(is_homeomorphic, reasoning)`` tuple.
+    """
     return analyze_homeomorphism_4d_result(
         m1,
         m2,

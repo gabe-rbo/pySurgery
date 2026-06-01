@@ -268,6 +268,7 @@ class SteenrodAlgebra:
         return {(): 1}
 
     def zero(self) -> SteenrodElement:
+        """The zero element of the Steenrod algebra."""
         return {}
 
     def Sq(self, i: int) -> SteenrodElement:
@@ -301,6 +302,7 @@ class SteenrodAlgebra:
     # ── Algebra operations ─────────────────────────────────────────────────
 
     def add(self, a: SteenrodElement, b: SteenrodElement) -> SteenrodElement:
+        """Add two Steenrod elements, reducing coefficients mod p."""
         out = dict(a)
         for k, v in b.items():
             nv = (out.get(k, 0) + v) % self.prime
@@ -311,6 +313,7 @@ class SteenrodAlgebra:
         return out
 
     def is_zero(self, a: SteenrodElement) -> bool:
+        """Return True if every coefficient of ``a`` vanishes mod p."""
         return all((v % self.prime) == 0 for v in a.values())
 
     def degree_of(self, seq: AdmissibleSequence) -> int:
@@ -426,6 +429,7 @@ class SteenrodAlgebra:
         return results
 
     def is_admissible(self, seq: AdmissibleSequence) -> bool:
+        """Return True if ``seq`` is an admissible Steenrod monomial."""
         if self.prime == 2:
             if len(seq) == 0:
                 return True
@@ -720,9 +724,11 @@ class SteenrodAlgebra:
         return {k: v for k, v in result.items() if v != 0}
 
     def _find_first_violation_odd(self, ops: List[Tuple]) -> Optional[int]:
-        """Return the index of the first P^a in ops that begins a non-admissible
-        pair (P^a P^b with a < p b, or P^a β P^b with a ≤ p b). Returns None
-        if ops is admissible (no rewriting needed at the P-P-pair level).
+        """Return the index of the first non-admissible P^a pair in ops.
+
+        The offending pair is P^a P^b with a < p b, or P^a β P^b with a ≤ p b.
+        Returns None if ops is admissible (no rewriting needed at the
+        P-P-pair level).
         """
         p = self.prime
         for i, op in enumerate(ops):
@@ -828,9 +834,9 @@ class SteenrodAlgebra:
     def _concat_seqs_odd(
         self, a: AdmissibleSequence, b: AdmissibleSequence
     ) -> Optional[AdmissibleSequence]:
-        """Concatenate two canonical odd-prime encoded tuples by merging the
-        trailing β-bit of `a` with the leading β-bit of `b`.
+        """Concatenate two canonical odd-prime encoded tuples.
 
+        Merges the trailing β-bit of `a` with the leading β-bit of `b`.
         Returns the merged tuple, or None if the merge produces β^2 = 0.
         """
         if not a:
@@ -969,8 +975,10 @@ class SteenrodAction:
     # ── Action of a single Sq^i / P^i / β on a basis class ─────────────────
 
     def _apply_basic_op(self, op_idx: int, label: str) -> Dict[str, int]:
-        """Apply a single basic operation (Sq^i for p=2, or coded op for p odd)
-        to the basis class `label`. Returns a sparse dict label → coef.
+        """Apply a single basic operation to the basis class `label`.
+
+        The operation is Sq^i for p=2, or a coded op for p odd. Returns a
+        sparse dict mapping label → coefficient.
         """
         # check sq_table cache (user-provided)
         key = (op_idx, label)
@@ -1002,9 +1010,10 @@ class SteenrodAction:
     def _try_cartan_decomposition(
         self, op_idx: int, label: str, p: int
     ) -> Optional[Dict[str, int]]:
-        """If `label` is a cup product of two factors with a rule in
-        cup_table, apply Cartan: Sq^n(xy) = Σ Sq^i(x)·Sq^j(y).
+        """Apply the Cartan formula when `label` factors as a cup product.
 
+        If `label` is a cup product of two factors with a rule in cup_table,
+        apply Cartan: Sq^n(xy) = Σ Sq^i(x)·Sq^j(y).
         Returns None when no decomposition is found.
         """
         # search cup_table for a representation label = x · y (with coef 1)
@@ -1469,8 +1478,7 @@ class _MinimalResolution:
         from_t: int,
         to_t: int,
     ) -> Dict[int, int]:
-        """Given a kernel vector at (F_{s-1})_{from_t}, lift via adm-action to
-        a vector at (F_{s-1})_{to_t}.
+        """Lift a kernel vector at (F_{s-1})_{from_t} via adm-action to (F_{s-1})_{to_t}.
 
         kernel_vec is keyed by indices into _free_module_index(s_minus_1, from_t).
         Result is keyed by indices into _free_module_index(s_minus_1, to_t).
@@ -1728,6 +1736,7 @@ class AdamsE2Page(BaseModel):
 
     @model_validator(mode="after")
     def _check_diffs(self) -> "AdamsE2Page":
+        """Validate the classification and dimensions of recorded differentials."""
         for fl in self.forced_vanishings:
             if fl.classification != "forced_zero":
                 raise ValueError("forced_vanishings must have classification='forced_zero'.")
@@ -1747,6 +1756,7 @@ class AdamsE2Page(BaseModel):
         return self
 
     def e2_dim(self, s: int, t: int) -> int:
+        """Dimension of the E_2 page at bidegree (s, t), or 0 if absent."""
         return self.e2_grid.get((s, t), 0)
 
     def stem(self, n: int) -> Dict[int, int]:
@@ -1754,6 +1764,7 @@ class AdamsE2Page(BaseModel):
         return {s: self.e2_grid[(s, t)] for (s, t) in self.e2_grid if t - s == n}
 
     def decision_ready(self) -> bool:
+        """Return True if the page is exact and its computation succeeded."""
         return self.exact and self.status == "success"
 
 

@@ -1,5 +1,4 @@
-"""Unstable Adams spectral sequence E_2: generic approximation via the
-excess-filtered cobar of A_p^*.
+"""Unstable Adams spectral sequence E_2 via the excess-filtered cobar of A_p^*.
 
 Math context:
     The unstable category U of A_p-modules consists of modules M with the
@@ -457,7 +456,8 @@ def unstable_adams_e2_page(
         fp_ring: Input cohomology ring (use a reduced ring for the
             tightest bound).
         prime: 2, 3, or 5.
-        s_max, t_max: truncation window.
+        s_max: maximum homological degree s in the truncation window.
+        t_max: maximum internal degree t in the truncation window.
         method: 'auto' | 'u_resolution' | 'cobar_approx'.
         backend: 'auto' | 'python' | 'numba' | 'julia'. Passed through
             to the underlying engine.

@@ -4722,8 +4722,8 @@ function surgery_handle_attach(
         kept = Vector{Int}[]
         for s in dim_simps
             key = Tuple(sort(s))
-            if key in tubular_nbhd && !(key in attaching_sphere)
-                continue  # Remove open tube interior
+            if d == n && key in tubular_nbhd && !(key in attaching_sphere)
+                continue  # Remove open tube interior (top-dim only)
             end
             push!(kept, s)
         end

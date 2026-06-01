@@ -9,9 +9,7 @@ from pysurgery.topology.persistent_homology import compute_zigzag_persistence, c
 
 
 class TemporalBarcode(BaseModel):
-    """
-    Parameter-indexed intervals tracking the persistence of topological features across a temporal sequence.
-    """
+    """Parameter-indexed intervals tracking the persistence of topological features across a temporal sequence."""
     dimension: int
     births: List[float]
     deaths: List[float]
@@ -21,9 +19,7 @@ class TemporalBarcode(BaseModel):
 
 
 class BifurcationEvent(BaseModel):
-    """
-    A critical moment (phase transition) where the topology undergoes significant structural changes.
-    """
+    """A critical moment (phase transition) where the topology undergoes significant structural changes."""
     parameter_value: float
     type: str
     evidence: Dict[str, float]
@@ -89,9 +85,9 @@ def intersect_complexes(K1: SimplicialComplex, K2: SimplicialComplex) -> Simplic
 
 
 def build_union_intersection_zigzag(point_cloud_sequence: List[np.ndarray], epsilon: float = 0.5, max_dimension: int = 2, complex_type: str = 'Rips') -> List[SimplicialComplex]:
-    """
-    Constructs the union-intersection zigzag sequence over a discrete set of temporal parameters.
-    K_0 <- K_0 \\cap K_1 -> K_1 <- K_1 \\cap K_2 -> ... -> K_n
+    r"""Construct the union-intersection zigzag sequence over discrete temporal parameters.
+
+    K_0 <- K_0 \\cap K_1 -> K_1 <- K_1 \\cap K_2 -> ... -> K_n.
 
     Args:
         point_cloud_sequence: List of point clouds.
@@ -127,8 +123,8 @@ def build_union_intersection_zigzag(point_cloud_sequence: List[np.ndarray], epsi
 
 
 def compute_temporal_homology(zigzag_seq: List[SimplicialComplex], dimension: int, parameters: Optional[List[float]] = None, field: str = 'Z2') -> TemporalBarcode:
-    """
-    Computes temporal homology using the Julia persistence kernel.
+    """Compute temporal homology using the Julia persistence kernel.
+
     Extracts parameter-indexed intervals mapping algebraic intervals back to the temporal indices.
 
     Args:
@@ -174,8 +170,7 @@ def compute_temporal_homology(zigzag_seq: List[SimplicialComplex], dimension: in
 
 
 def compute_topological_loss(barcodes: TemporalBarcode, target_features: TemporalBarcode, epsilon: float = 0.01) -> float:
-    """
-    Computes Gromov-Wasserstein metric (via JAX layer) for diagram distances.
+    """Computes Gromov-Wasserstein metric (via JAX layer) for diagram distances.
 
     Args:
         barcodes: The computed TemporalBarcode.
@@ -214,9 +209,7 @@ def detect_bifurcations(temporal_barcodes: List[TemporalBarcode], threshold: flo
 
 
 class TemporalAnalysisResult(BaseModel):
-    """
-    Combined result of temporal topology analysis, containing barcodes and bifurcations.
-    """
+    """Combined result of temporal topology analysis, containing barcodes and bifurcations."""
     barcodes: Dict[int, TemporalBarcode]
     bifurcations: List[BifurcationEvent]
 
@@ -246,8 +239,7 @@ def analyze_temporal_evolution(
     max_rips_dimension: int = 2,
     bifurcation_threshold: float = 1.0
 ) -> TemporalAnalysisResult:
-    """
-    Orchestrates the full temporal topology analysis pipeline.
+    """Orchestrates the full temporal topology analysis pipeline.
 
     Args:
         point_cloud_sequence: Sequence of point clouds evolving in time.

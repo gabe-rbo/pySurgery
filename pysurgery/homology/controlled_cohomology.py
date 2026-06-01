@@ -146,6 +146,7 @@ class FiniteGroupOrderResult:
     contract_version: str = field(default_factory=lambda: CONTRACT_VERSION)
 
     def decision_ready(self) -> bool:
+        """Return True when the result is exact and the group is non-empty."""
         return self.exact and self.order >= 1
 
 
@@ -175,6 +176,7 @@ class UniversalCoverResult:
     contract_version: str = field(default_factory=lambda: CONTRACT_VERSION)
 
     def decision_ready(self) -> bool:
+        """Return True when the lift is exact and the group is non-empty."""
         return self.exact and self.group_order >= 1
 
 
@@ -204,6 +206,7 @@ class TwistedChainResult:
     contract_version: str = field(default_factory=lambda: CONTRACT_VERSION)
 
     def decision_ready(self) -> bool:
+        """Return True when the twisted boundary maps are exact."""
         return self.exact
 
 
@@ -237,6 +240,7 @@ class ControlledCohomologyResult:
     contract_version: str = field(default_factory=lambda: CONTRACT_VERSION)
 
     def decision_ready(self) -> bool:
+        """Return True when the (co)homology computation is rigorous."""
         return self.exact
 
 
@@ -272,6 +276,7 @@ class TwistedIntersectionFormResult:
     contract_version: str = field(default_factory=lambda: CONTRACT_VERSION)
 
     def decision_ready(self) -> bool:
+        """Return True when the form matrix entries are exact."""
         return self.exact
 
     def as_intersection_form(self) -> IntersectionForm:
@@ -298,6 +303,7 @@ class TwistedObstructionResult:
     contract_version: str = field(default_factory=lambda: CONTRACT_VERSION)
 
     def decision_ready(self) -> bool:
+        """Return True when both the form and the Wall obstruction are exact."""
         return self.exact and bool(getattr(self.obstruction, "exact", False))
 
 
@@ -366,6 +372,7 @@ class FiniteGroupRing:
 
     @property
     def order(self) -> int:
+        """Order |G| of the finite group."""
         return self._order_result.order
 
     @property
@@ -380,10 +387,12 @@ class FiniteGroupRing:
 
     @property
     def identity_index(self) -> int:
+        """1-based Cayley index of the identity element."""
         return self._order_result.identity_index
 
     @property
     def element_words(self) -> List[str]:
+        """Reduced word representative for each group element."""
         return list(self._order_result.element_words)
 
     @property
@@ -393,10 +402,12 @@ class FiniteGroupRing:
 
     @property
     def generators(self) -> List[str]:
+        """Generator names of the underlying presentation."""
         return list(self._generators)
 
     @property
     def order_result(self) -> FiniteGroupOrderResult:
+        """Underlying `FiniteGroupOrderResult` witness for |G|."""
         return self._order_result
 
     def zero(self) -> np.ndarray:
@@ -459,6 +470,16 @@ class FiniteGroupRing:
     def from_pi1(
         cls, pi1: FundamentalGroup, *, max_index: int = 10_000
     ) -> "FiniteGroupRing":
+        """Construct a `FiniteGroupRing` from a fundamental group.
+
+        Args:
+            pi1: The fundamental group presentation, which must be finite.
+            max_index: Todd-Coxeter coset-enumeration cap for the finiteness
+                check.
+
+        Returns:
+            A `FiniteGroupRing` over ℤ[π₁].
+        """
         return cls(pi1, max_index=max_index)
 
 
@@ -707,11 +728,34 @@ class TwistedRepresentation(BaseModel):
         )
 
     def matrix_for_token(self, token: str) -> np.ndarray:
+        """Return ρ for a generator token (e.g. 'g' or 'g^-1').
+
+        Args:
+            token: Generator token whose image is stored in `images_word`.
+
+        Returns:
+            The d×d matrix ρ(token).
+
+        Raises:
+            GroupRingError: If no image is stored for the token.
+        """
         if token in self.images_word:
             return self.images_word[token]
         raise GroupRingError(f"No image stored for token {token!r}.")
 
     def matrix_for_element(self, group_idx_1based: int) -> np.ndarray:
+        """Return ρ for a finite-group element by 1-based Cayley index.
+
+        Args:
+            group_idx_1based: 1-based Cayley index of the group element.
+
+        Returns:
+            The d×d matrix ρ(g) stored in `images`.
+
+        Raises:
+            GroupRingError: If no image is stored (e.g. a Path-B
+                representation built without a `FiniteGroupRing`).
+        """
         if group_idx_1based not in self.images:
             raise GroupRingError(
                 f"No image stored for group element {group_idx_1based}; "
@@ -819,30 +863,37 @@ class UniversalCover:
 
     @property
     def pi1(self) -> FundamentalGroup:
+        """Fundamental group of the base complex (in trace-generator names)."""
         return self._pi1
 
     @property
     def group_ring(self) -> FiniteGroupRing:
+        """Group ring ℤ[π₁] backing the cover construction."""
         return self._group_ring
 
     @property
     def order(self) -> int:
+        """Order |π₁| of the deck transformation group."""
         return self._group_ring.order
 
     @property
     def cover_cells(self) -> Dict[int, int]:
+        """Cell counts per dimension in the cover (= |π₁| × base counts)."""
         return dict(self._cover_cells)
 
     @property
     def lifted_attaching(self) -> Dict[int, sp.csr_matrix]:
+        """Lifted boundary matrices over ℤ on the cover (copies)."""
         return {k: v.copy() for k, v in self._lifted.items()}
 
     @property
     def deck_action(self) -> Dict[int, Dict[int, np.ndarray]]:
+        """Per-element deck permutations of cover cells, keyed by dimension."""
         return {g: {k: v.copy() for k, v in dim_perm.items()}
                 for g, dim_perm in self._deck.items()}
 
     def as_cw_complex(self) -> CWComplex:
+        """Return the universal cover as a `CWComplex` over ℤ."""
         return CWComplex(
             cells=self._cover_cells,
             attaching_maps=self._lifted,
@@ -851,9 +902,11 @@ class UniversalCover:
         )
 
     def as_chain_complex(self) -> ChainComplex:
+        """Return the cellular chain complex of the universal cover."""
         return self.as_cw_complex().cellular_chain_complex()
 
     def as_result(self) -> UniversalCoverResult:
+        """Package the lifted cover data into a `UniversalCoverResult`."""
         return UniversalCoverResult(
             cover_cells=dict(self._cover_cells),
             lifted_attaching={k: v.copy() for k, v in self._lifted.items()},
@@ -1181,26 +1234,32 @@ class TwistedChainComplex:
 
     @property
     def pi1(self) -> FundamentalGroup:
+        """Fundamental group of the base complex (in trace-generator names)."""
         return self._pi1
 
     @property
     def representation(self) -> TwistedRepresentation:
+        """The twisting representation ρ defining the local system."""
         return self._rep
 
     @property
     def path(self) -> str:
+        """Strategy used to build the boundaries ('cover' or 'fox')."""
         return self._path
 
     @property
     def boundaries(self) -> Dict[int, np.ndarray]:
+        """Twisted boundary maps `d^ρ_n` keyed by dimension (copies)."""
         return {k: v.copy() for k, v in self._boundaries.items()}
 
     def cell_dimensions(self) -> List[int]:
+        """Return the sorted dimensions present in the complex."""
         dims = set(self._base.cells.keys())
         dims.update(self._boundaries.keys())
         return sorted(dims)
 
     def as_chain_result(self) -> TwistedChainResult:
+        """Package the twisted boundary maps into a `TwistedChainResult`."""
         return TwistedChainResult(
             boundaries=self.boundaries,
             cell_dimensions=self.cell_dimensions(),
@@ -1237,6 +1296,12 @@ class TwistedChainComplex:
                                  cohomology=True)
 
     def homology_all(self) -> ControlledCohomologyResult:
+        """Compute H_n(M; ℒ_ρ) for every dimension n present in the complex.
+
+        Returns:
+            A `ControlledCohomologyResult` with `dimension=None` and per-dimension
+            (rank, torsion) pairs in `homology_by_dim`.
+        """
         results: Dict[int, Tuple[int, List[int]]] = {}
         dims = self.cell_dimensions()
         for n in dims:

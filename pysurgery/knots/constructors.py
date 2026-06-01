@@ -35,8 +35,9 @@ def _delaunay_s3_from_points(
     ring_points: List[Tuple[int, int, int]],
     bbox_extent: float = 10.0,
 ) -> Tuple[SimplicialComplex, dict]:
-    """Build a triangulated 3-ball containing the given point set, attach
-    geometric coordinates, and return (complex, point_to_index map).
+    """Build a triangulated 3-ball containing the given point set.
+
+    Attaches geometric coordinates and returns ``(complex, point_to_index map)``.
 
     The 3-ball is the convex hull of `ring_points` ∪ {north pole}, tetrahedralised
     by scipy's Delaunay. Since H_1(B^3) = 0, every 1-cycle inside is null-homologous
@@ -341,8 +342,9 @@ def _delaunay_knot_from_polyline(
     polyline: List[Tuple[float, float, float]],
     pole_height_factor: float = 4.0,
 ) -> Tuple[SimplicialComplex, SimplicialComplex]:
-    """Build a Delaunay 3-ball around a closed polyline and return
-    `(ambient_complex, K)` with K = the polyline as a 1-cycle.
+    """Build a Delaunay 3-ball around a closed polyline.
+
+    Returns `(ambient_complex, K)` with K = the polyline as a 1-cycle.
 
     The ambient triangulation has |polyline|+1 vertices (one north pole) and is
     minimal in the sense that every polyline edge appears as a Delaunay edge of

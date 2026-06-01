@@ -145,6 +145,7 @@ class LeanProofAttempt(BaseModel):
     contract_version: str = CONTRACT_VERSION
 
     def decision_ready(self) -> bool:
+        """Return True if Lean reached a definitive verdict (proven or refuted)."""
         return self.result in ("proven", "refuted")
 
 

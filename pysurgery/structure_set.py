@@ -41,6 +41,7 @@ class NormalInvariantsResult(BaseModel):
     exact: bool = True
 
     def to_report(self) -> str:
+        """Render the normal invariants [M, G/TOP] as a human-readable report."""
         report = (
             f"--- NORMAL INVARIANTS [M, G/TOP] FOR {self.dimension}D MANIFOLD ---\n"
         )
@@ -122,6 +123,7 @@ class SurgeryExactSequenceResult(BaseModel):
         return ExactSequence(modules, [f, g, h])
 
     def to_report(self) -> str:
+        """Render the surgery exact sequence and its analysis as a report."""
         n = self.dimension
         report = f"--- SURGERY EXACT SEQUENCE FOR {n}D MANIFOLD ---\n"
         report += f"L_{n + 1}(1) ---> S_TOP(M) ---> [M, G/TOP] ---> L_{n}(1)\n"
@@ -189,10 +191,19 @@ class LObstructionState(BaseModel):
         return self.model_dump().get(key)
 
     def to_legacy_dict(self) -> dict:
+        """Return the state as a plain dict for backward-compatible callers."""
         return self.model_dump()
 
     @classmethod
     def from_obstruction(cls, ob: Optional[ObstructionResult]) -> "LObstructionState":
+        """Build an LObstructionState from an ObstructionResult.
+
+        Args:
+            ob: The L-group obstruction result, or None for an empty state.
+
+        Returns:
+            LObstructionState: State populated from ``ob`` (empty if None).
+        """
         if ob is None:
             return cls()
         return cls(

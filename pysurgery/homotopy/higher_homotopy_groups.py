@@ -377,6 +377,7 @@ class HomotopyGroupApproximation(BaseModel):
         return tuple(v)
 
     def decision_ready(self) -> bool:
+        """Return True when the result is a formal proof at near-certain confidence."""
         return self.known_exact and self.confidence_score >= 0.99
 
 
@@ -387,8 +388,7 @@ def _confidence_from_interactive(
     converged: ConvergedAdamsPage,
     e2_page: Optional[AdamsE2Page] = None,
 ) -> float:
-    """Average ``user_confidence`` over decisive verifications, weighted by
-    the fraction of original flags that received a decision.
+    """Average decisive ``user_confidence``, weighted by the decided fraction.
 
     The original flag count is read off ``e2_page.ambiguous_differentials``
     (when supplied); flags silently dropped via "skip" or rejected for

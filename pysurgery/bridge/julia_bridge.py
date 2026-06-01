@@ -47,6 +47,29 @@ class JuliaBridge:
         backend: The SurgeryBackend Julia module proxy.
     """
 
+    # Julia packages that surgery_backend.jl `using`/`import`s and must be present
+    # for the module to load. (LinearAlgebra/SparseArrays/Statistics/Random are
+    # stdlib but listed so a bare environment resolves them explicitly.)
+    _REQUIRED_JULIA_PACKAGES = (
+        "PythonCall",
+        "Combinatorics",
+        "PrecompileTools",
+        "AbstractAlgebra",
+        "IntegerSmithNormalForm",
+        "JSON",
+        "Statistics",
+        "Random",
+        "LinearAlgebra",
+        "SparseArrays",
+    )
+    # Packages used only by optional geometric kernels (graph paths, Delaunay/
+    # alpha/crust). Their absence degrades gracefully rather than failing to load.
+    _OPTIONAL_JULIA_PACKAGES = (
+        "Graphs",
+        "SimpleWeightedGraphs",
+        "DelaunayTriangulation",
+    )
+
     _instance = None
     _lock = threading.RLock()
 
@@ -168,24 +191,9 @@ class JuliaBridge:
             print("[pySurgery] Checking Julia package dependencies...")
 
         # Core packages required for surgery_backend.jl to load
-        required_packages = [
-            "Combinatorics",
-            "PrecompileTools",
-            "AbstractAlgebra",
-            "IntegerSmithNormalForm",
-            "Statistics",
-            "Random",
-            "LinearAlgebra",
-            "SparseArrays",
-            "JSON",
-        ]
-        
+        required_packages = list(self._REQUIRED_JULIA_PACKAGES)
         # Optional packages for geometric kernels (don't fail if missing)
-        optional_packages = [
-            "Graphs",
-            "SimpleWeightedGraphs",
-            "DelaunayTriangulation",
-        ]
+        optional_packages = list(self._OPTIONAL_JULIA_PACKAGES)
 
         # Detect missing packages
         missing_required = []
@@ -251,6 +259,103 @@ class JuliaBridge:
                     print("[pySurgery] Precompilation skipped or failed (non-critical)")
         elif verbose:
             print("[pySurgery] All Julia packages already installed")
+
+    def install_dependencies(
+        self,
+        *,
+        optional: bool = True,
+        precompile: bool = True,
+        reinitialize: bool = True,
+        verbose: bool = True,
+    ) -> dict:
+        """Install every Julia package the SurgeryBackend needs, via ``Pkg``.
+
+        Unlike the automatic, environment-gated ``_ensure_julia_packages``, this
+        is an explicit, unconditional install of all required packages (and, by
+        default, the optional geometric-kernel packages). Use it to provision a
+        fresh Julia environment, or to repair one where ``surgery_backend.jl``
+        failed to load because a dependency was missing. Works even when the
+        backend is currently unavailable, since it only needs the Julia ``Main``.
+
+        Args:
+            optional: Also install the optional geometric-kernel packages
+                (``Graphs``, ``SimpleWeightedGraphs``, ``DelaunayTriangulation``).
+            precompile: Run ``Pkg.precompile()`` after adding packages.
+            reinitialize: Reload the backend afterwards so it becomes usable in
+                this process without restarting Python.
+            verbose: Print progress messages.
+
+        Returns:
+            A report dict: ``{"installed": [...], "failed": {pkg: err}, ...,
+            "precompiled": bool, "available": bool}``.
+        """
+        if not HAS_JULIACALL:
+            raise RuntimeError(
+                "juliacall is not installed. Install it first via `pip install juliacall`."
+            )
+
+        # Obtain a Julia Main handle even if the backend itself failed to load.
+        jl = self.jl
+        if jl is None:
+            if "JULIA_NUM_THREADS" not in os.environ:
+                os.environ["JULIA_NUM_THREADS"] = str(os.cpu_count() or 1)
+            if "PYTHON_JULIACALL_HANDLE_SIGNALS" not in os.environ:
+                os.environ["PYTHON_JULIACALL_HANDLE_SIGNALS"] = "yes"
+            from juliacall import Main as jl_main
+            jl = self.jl = jl_main
+
+        required = list(self._REQUIRED_JULIA_PACKAGES)
+        packages = required + (list(self._OPTIONAL_JULIA_PACKAGES) if optional else [])
+        report: dict = {"installed": [], "failed": {}, "precompiled": False, "available": False}
+
+        def _add(pkgs: list[str]) -> None:
+            """Batch-add; on failure fall back to per-package to isolate the bad one."""
+            if not pkgs:
+                return
+            try:
+                expr = ", ".join(f'"{p}"' for p in pkgs)
+                jl.seval(f"Pkg.add([{expr}])")
+                report["installed"].extend(pkgs)
+            except Exception:
+                for p in pkgs:
+                    try:
+                        jl.seval(f'Pkg.add("{p}")')
+                        report["installed"].append(p)
+                    except Exception as exc:
+                        report["failed"][p] = repr(exc)
+
+        with self._lock:
+            jl.seval("import Pkg")
+            if verbose:
+                print(f"[pySurgery] Installing Julia packages: {', '.join(packages)}")
+            _add(packages)
+
+            if precompile and not report["failed"]:
+                try:
+                    if verbose:
+                        print("[pySurgery] Pkg.precompile() (may take a minute) ...")
+                    jl.seval("Pkg.precompile()")
+                    report["precompiled"] = True
+                except Exception as exc:
+                    report["failed"]["__precompile__"] = repr(exc)
+
+        if reinitialize:
+            # Reload the backend now that dependencies are present.
+            self._initialized = False
+            self._available = False
+            self.error = None
+            self.backend = None
+            self._initialize()
+        report["available"] = bool(self._available)
+
+        if verbose:
+            if report["failed"]:
+                print(f"[pySurgery] Completed with failures: {sorted(report['failed'])}")
+            if report["available"]:
+                print("[pySurgery] Julia backend is available.")
+            elif reinitialize and self.error:
+                print(f"[pySurgery] Backend still unavailable: {self.error}")
+        return report
 
     def _minimal_warmup_workloads(self) -> list[tuple[str, callable]]:
         """Return a small workload set that compiles common topology paths.
@@ -486,6 +591,10 @@ class JuliaBridge:
                     self.compute_circumradius_sq_2d(np.array([[0,0], [1,0], [0,1]], dtype=float), np.array([[0, 1, 2]], dtype=np.int64)),
                     self.compute_circumradius_sq_3d(np.array([[0,0,0], [1,0,0], [0,1,0], [0,0,1]], dtype=float), np.array([[0, 1, 2, 3]], dtype=np.int64)),
                     self.compute_cknn_graph_accelerated(np.array([[0,0], [1,1]], dtype=float), np.array([1.0, 1.0]), 1.0),
+                    # Vietoris-Rips builder: the dominant kernel in FiltrationReport's
+                    # hot path; compile it here so the first filtration report does
+                    # not pay its JIT cost.
+                    self.compute_vietoris_rips(np.array([[0,0,0], [1,0,0], [0,1,0], [0,0,1]], dtype=float), 1.5, 2),
                     self.simplify_jl([(0, 1), (1, 2), (0, 2)])
                 ),
             ),
@@ -520,6 +629,90 @@ class JuliaBridge:
                     self.knot_signature(np.array([[-1, 1], [0, -1]], dtype=np.int64)),
                 ),
             ),
+        ]
+
+    def _coverage_warmup_workloads(self) -> list[tuple[str, callable]]:
+        """Return warm-up workloads for the backend kernels not covered elsewhere.
+
+        Completes coverage of the JuliaBridge surface: a full warmup that also runs
+        these compiles every ``self.backend`` kernel. Risky/structured kernels are
+        isolated in their own entries so a single failure does not block the others
+        (warm-up is fault-tolerant).
+
+        Returns:
+            A list of (name, workload_callable) tuples for the remaining kernels.
+        """
+        tetra = np.array([[0., 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float64)
+        tetra_max = np.array([[0, 1, 2, 3]], dtype=np.int64)
+        grid = np.array([[float(i), float(j), 0.0] for i in range(3) for j in range(3)],
+                        dtype=np.float64)
+
+        def _exact_snf_certs():
+            m = sp.csr_matrix(np.array([[2, 1], [0, 3]], dtype=np.int64))
+            self.compute_batch_snf([sp.csr_matrix(np.eye(2, dtype=np.int64))])
+            self.compute_markowitz_column_order(m)
+            self.compute_modular_rank_certificate(m)
+            self.compute_padic_snf_diagonal(sp.csr_matrix(np.array([[2, 0], [0, 1]], dtype=np.int64)))
+
+        def _alpha_witness_morse():
+            self.compute_alpha_threshold_emst(tetra, tetra_max)
+            self.compute_alpha_complex_simplices(tetra, tetra_max, 100.0, 2)
+            self.compute_witness_complex_simplices(grid, np.array([0, 4, 8], dtype=np.int64), 2.0, 2)
+            self.compute_discrete_morse_gradient_jl([[0], [1], [2], [0, 1], [1, 2], [0, 2], [0, 1, 2]])
+
+        def _cohomology_basis():
+            d1 = sp.csr_matrix(np.array([[-1, 0, -1], [1, -1, 0], [0, 1, 1]], dtype=np.int64))
+            d2 = sp.csr_matrix(np.array([[1], [-1], [1]], dtype=np.int64))
+            d3 = sp.csr_matrix(np.zeros((1, 0), dtype=np.int64))
+            self.compute_cohomology_basis_jl(d1, d2, d3)
+
+        def _controlled_cohomology_chain():
+            # Z/2 = <a | a^2>: exercises Todd-Coxeter, the Cayley table, group-ring
+            # convolution, Fox derivatives (real+complex) and the cover lift.
+            ok, order, table = self.todd_coxeter_index(["a"], ["a a"], 12)
+            cayley, inverse, id_idx, words = self.cayley_table(table, list("a"))
+            self.cayley_convolve(np.array([1, 0], dtype=np.int64),
+                                 np.array([0, 1], dtype=np.int64), cayley)
+            gen_group_idx = 2 if int(id_idx) == 1 else 1   # 'a' is the non-identity element
+            # The Fox kernel indexes rho by GROUP element (1..order), so supply one
+            # (degree x degree) matrix per group element (trivial rep here).
+            rho = [np.array([[1.0]], dtype=np.float64) for _ in range(int(order))]
+            for cdtype in (False, True):
+                self.fox_derivative_block(
+                    [1, 1], 1, cayley, [gen_group_idx], inverse, rho, 1, complex_dtype=cdtype,
+                )
+            self.lift_boundary_to_cover(
+                np.array([1], dtype=np.int64), np.array([1], dtype=np.int64),
+                np.array([1], dtype=np.int64), np.array([1], dtype=np.int64),
+                int(order), 1, 1, cayley,
+            )
+
+        def _surgery_linking():
+            self.sphere_recognition_pl(
+                [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], 2)   # boundary of a 3-simplex = S^2
+            Cq, Cqp1 = [[0, 1], [1, 2], [0, 2]], [[0, 1, 2]]
+            B = self.surgery_relative_boundary_sparse(Cq, Cqp1, [0])
+            b = np.zeros(len(Cq), dtype=np.int64); b[0] = 1
+            self.linking_seifert_solve_z(B, b)
+
+        def _surgery_handle():
+            K = {0: [[0], [1], [2]], 1: [[0, 1], [1, 2], [0, 2]], 2: [[0, 1, 2]]}
+            self.surgery_handle_attach(K, [[0], [1]], [[0], [1]], [[0, 1]], 3, 1, 2)
+
+        def _crust():
+            pts = np.array([[0., 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0.5, 0.5, 0.6]],
+                           dtype=np.float64)
+            combined = np.array([[0, 1, 2], [1, 2, 3], [0, 1, 4]], dtype=np.int64)
+            self.compute_crust_simplices(pts, combined, 4)
+
+        return [
+            ("exact_snf_certificates", _exact_snf_certs),
+            ("alpha_witness_morse", _alpha_witness_morse),
+            ("cohomology_basis_jl", _cohomology_basis),
+            ("controlled_cohomology_chain", _controlled_cohomology_chain),
+            ("surgery_linking", _surgery_linking),
+            ("surgery_handle_attach", _surgery_handle),
+            ("crust_simplices", _crust),
         ]
 
     def compute_normal_surface_residual_norms(
@@ -659,6 +852,7 @@ class JuliaBridge:
             workloads = list(self._minimal_warmup_workloads())
             if mode == "full":
                 workloads.extend(self._full_warmup_workloads())
+                workloads.extend(self._coverage_warmup_workloads())
 
             report = {
                 "mode": mode,
@@ -2405,6 +2599,18 @@ class JuliaBridge:
         simplices_2: list[list[int]],
         simplices_3: list[list[int]],
     ) -> np.ndarray:
+        """Compute the intersection number of two 2-chains via the Julia backend.
+
+        Args:
+            F_a: First 2-chain coefficient vector as int64 ndarray.
+            F_b: Second 2-chain coefficient vector as int64 ndarray.
+            simplices_1: 1-simplices of the underlying complex.
+            simplices_2: 2-simplices of the underlying complex.
+            simplices_3: 3-simplices of the underlying complex.
+
+        Returns:
+            np.ndarray with dtype int64 holding the intersection result.
+        """
         self.require_julia()
         result = self.backend.linking_intersect_2chains(
             np.asarray(F_a, dtype=np.int64),
@@ -2531,9 +2737,10 @@ class JuliaBridge:
             int(index_k),
             int(ambient_dim),
         )
-        # Convert Julia Dict to Python dict
-        import juliacall
-        return juliacall.PythonCall.pyconvert(dict, res)
+        # Convert the Julia Dict{Int, Vector{Vector{Int}}} back to a Python dict.
+        # (Do not use `pyconvert(dict, res)`: pyconvert's first argument must be a
+        # Julia *type*, not the Python `dict` object.)
+        return {int(d): [[int(v) for v in s] for s in simps] for d, simps in res.items()}
 
     def cayley_convolve(
         self, a: np.ndarray, b: np.ndarray, cayley: np.ndarray

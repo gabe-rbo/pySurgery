@@ -93,6 +93,7 @@ class UserVerifiedDifferential(BaseModel):
     contract_version: str = CONTRACT_VERSION
 
     def decision_ready(self) -> bool:
+        """Return True if a non-skip verdict was given with positive confidence."""
         return self.decision in ("zero", "nonzero") and self.user_confidence > 0.0
 
 
@@ -169,6 +170,7 @@ class ConvergedAdamsPage(BaseModel):
     contract_version: str = CONTRACT_VERSION
 
     def decision_ready(self) -> bool:
+        """Return True if the page resolved successfully (status == "success")."""
         return self.status == "success"
 
 
@@ -181,15 +183,21 @@ class ResolverProtocol(Protocol):
 
     def identify_ambiguous_differentials(
         self, page: ResolvingPage
-    ) -> list[AdamsDifferentialFlag]: ...
+    ) -> list[AdamsDifferentialFlag]:
+        """Return the d_r differentials on ``page`` whose value is undecided."""
+        ...
 
     def compute_next_page(
         self,
         page: ResolvingPage,
         verifications: list[Any],
-    ) -> ResolvingPage: ...
+    ) -> ResolvingPage:
+        """Build E_{r+1} from ``page`` and the given differential verifications."""
+        ...
 
-    def resolve_e_infinity(self) -> ConvergedAdamsPage: ...
+    def resolve_e_infinity(self) -> ConvergedAdamsPage:
+        """Iterate the resolution to convergence and return the E_∞ page."""
+        ...
 
 
 __all__ = [

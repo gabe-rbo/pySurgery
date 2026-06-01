@@ -54,11 +54,17 @@ from pysurgery.core.theorem_tags import ADAMS_EINF_INTERACTIVE, ADAMS_EINF_PARTI
 class CLIIO(Protocol):
     """Injectable I/O so tests can drive the loop without real stdin/stdout."""
 
-    def write(self, msg: str) -> None: ...
+    def write(self, msg: str) -> None:
+        """Emit ``msg`` to the output channel."""
+        ...
 
-    def prompt(self, msg: str, choices: tuple[str, ...]) -> str: ...
+    def prompt(self, msg: str, choices: tuple[str, ...]) -> str:
+        """Prompt the user with ``msg`` and return one of ``choices``."""
+        ...
 
-    def confirm(self, msg: str) -> bool: ...
+    def confirm(self, msg: str) -> bool:
+        """Ask the user ``msg`` and return their yes/no answer."""
+        ...
 
 
 class _DefaultCLIIO:

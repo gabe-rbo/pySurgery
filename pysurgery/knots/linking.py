@@ -7,6 +7,8 @@ from pysurgery.manifolds.surgery import compute_linking_number, compute_linking_
 from pysurgery.bridge.julia_bridge import julia_engine
 
 class LinkType(Enum):
+    """Enumeration of classified link types for multi-component links."""
+
     UNLINKED = "Unlinked"
     HOPF = "Hopf"
     BORROMEAN = "Borromean"
@@ -52,7 +54,9 @@ def linking_matrix(ambient_complex: SimplicialComplex, components: List[Simplici
     Args:
         ambient_complex: The ambient simplicial complex (e.g. S^3).
         components: A list of 1-cycle SimplicialComplexes.
-        
+        backend: Computation backend passed to the linking-number routine
+            ("auto", "julia", or "python").
+
     Returns:
         np.ndarray: The symmetric linking matrix where L[i, j] = lk(K_i, K_j).
     """
@@ -84,7 +88,9 @@ def _intersect_2chains_in_3complex(
         ambient_complex: The ambient 3-dimensional SimplicialComplex.
         F_a: The first 2-chain (coefficient array).
         F_b: The second 2-chain (coefficient array).
-        
+        backend: Computation backend ("auto", "julia", or "python"); selects the
+            Julia kernel when available, otherwise the pure-Python fallback.
+
     Returns:
         np.ndarray: The intersection 1-chain.
     """
@@ -139,7 +145,7 @@ def milnor_triple_invariant(
     K_c: SimplicialComplex,
     backend: str = "auto"
 ) -> int:
-    """Computes the Milnor triple invariant mu_bar(123) for three components.
+    r"""Computes the Milnor triple invariant mu_bar(123) for three components.
     
     This invariant is computed by finding Seifert chains F_a, F_b for K_a, K_b,
     intersecting them to get a 1-chain F_a \\cap F_b, and taking the linking number
@@ -152,7 +158,9 @@ def milnor_triple_invariant(
         K_a: First component (1-cycle).
         K_b: Second component (1-cycle).
         K_c: Third component (1-cycle).
-        
+        backend: Computation backend passed to the linking and intersection
+            routines ("auto", "julia", or "python").
+
     Returns:
         int: The Milnor triple invariant mu_bar(123).
         
@@ -229,8 +237,10 @@ def _components_bbox_disjoint(
     K_a: SimplicialComplex,
     K_b: SimplicialComplex,
 ) -> bool:
-    """Return True if K_a and K_b have geometrically disjoint axis-aligned
-    bounding boxes (computed from the ambient complex's vertex coordinates).
+    """Return True if K_a and K_b have geometrically disjoint bounding boxes.
+
+    The axis-aligned bounding boxes are computed from the ambient complex's
+    vertex coordinates.
 
     A True result implies the two cycles cannot have any higher-order linking,
     so Milnor μ̄(112), μ̄(123), … all vanish without needing Seifert chains.
@@ -409,6 +419,8 @@ def are_linked(
     Args:
         ambient_complex: Ambient simplicial complex.
         components: List of component subcomplexes (1-cycles).
+        backend: Computation backend passed to the linking and Milnor-invariant
+            routines ("auto", "julia", or "python").
 
     Returns:
         bool: True if any linking is detected.
@@ -467,6 +479,8 @@ def link_type(
     Args:
         ambient_complex: Ambient simplicial complex.
         components: List of 1-cycle subcomplexes.
+        backend: Computation backend passed to the underlying linking and
+            Milnor-invariant routines ("auto", "julia", or "python").
 
     Returns:
         LinkType enum value.

@@ -303,6 +303,7 @@ def build_surface_homeomorphism_witness(
         cohomology_ring_signature_2: Optional ring signature for M2.
         cup_product_signature_1: Optional cup products for M1.
         cup_product_signature_2: Optional cup products for M2.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
@@ -572,6 +573,7 @@ def build_high_dim_homeomorphism_witness(
         homotopy_witness_hook: Optional hook for external homotopy witnesses.
         homotopy_completion_certificate: Optional completion certificate.
         product_assembly_certificate: Optional assembly certificate.
+        backend: 'auto', 'julia', or 'python'.
 
     Returns:
         HomeomorphismWitnessResult: A HomeomorphismWitnessResult.
@@ -784,6 +786,8 @@ def build_homeomorphism_witness(
         homotopy_completion_certificate: Completion certificate (high-D).
         recognition_certificate: 3D recognition certificate.
         product_assembly_certificate: Product assembly certificate (high-D).
+        immersion_target_dim: Optional Euclidean target dimension for
+            immersion-obstruction analysis of M1.
         allow_approx: Whether to allow approximate analysis.
         backend: 'auto', 'julia', or 'python'.
 

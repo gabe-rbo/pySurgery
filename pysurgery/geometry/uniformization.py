@@ -13,7 +13,7 @@ Core ideas:
 The implementation is intentionally self-contained and uses only NumPy + SciPy
 sparse linear algebra.
 
-References
+References:
 ----------
 - Chow & Luo, ``Combinatorial Ricci Flows on Surfaces``.
 - Thurston, ``The Geometry and Topology of Three-Manifolds`` (circle packing ideas).

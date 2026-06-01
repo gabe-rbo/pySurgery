@@ -1,5 +1,4 @@
-"""
-pysurgery/homology/topological_sequences.py
+"""pysurgery/homology/topological_sequences.py.
 
 Construction of standard topological exact sequences.
 """

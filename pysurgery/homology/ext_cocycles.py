@@ -50,6 +50,7 @@ class ExtCocycle(BaseModel):
     coefs: Dict[int, int] = Field(default_factory=dict)
 
     def is_zero(self) -> bool:
+        """Return True if every coefficient vanishes mod prime."""
         return all((c % self.prime) == 0 for c in self.coefs.values())
 
     def normalized(self) -> "ExtCocycle":

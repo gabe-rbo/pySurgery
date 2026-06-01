@@ -715,7 +715,8 @@ def u_resolution_e2_page(
             yields the disjoint-basepoint X_+ Ext (which contains the
             ghost S^0 cell).
         prime: 2 (Slice 3). Odd primes pending.
-        s_max, t_max: truncation window.
+        s_max: maximum homological degree s in the truncation window.
+        t_max: maximum internal degree t in the truncation window.
         backend: see above.
 
     Returns:

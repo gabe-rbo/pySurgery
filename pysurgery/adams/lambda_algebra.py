@@ -279,8 +279,7 @@ def enumerate_admissibles_p2(
     *,
     hard_cap: int = 1 << 18,
 ) -> List[LambdaMonomial]:
-    """All admissible Λ-monomials at p=2 of length s, internal degree t,
-    and excess ≤ max_excess.
+    """Enumerate admissible Λ-monomials of length s, internal degree t, excess ≤ max_excess at p=2.
 
     Returned monomials are in lex order on (i_1, i_2, …, i_s) descending
     by i_1 then i_2 etc. (canonical ordering matches Curtis/Tangora).
@@ -343,8 +342,7 @@ def _build_differential_matrix_p2(
     basis_hi: List[LambdaMonomial],
     max_excess: int,
 ) -> sp.csr_matrix:
-    """Sparse matrix of d : Λ_s → Λ_{s+1} restricted to admissibles with
-    excess ≤ max_excess, in F_2.
+    """Build the sparse F_2 matrix of d : Λ_s → Λ_{s+1} on excess-bounded admissibles.
 
     Columns index `basis_lo` (source, length s); rows index `basis_hi`
     (target, length s+1). Entries are 0/1 mod 2.
@@ -428,8 +426,7 @@ def verify_d_squared_zero_p2(
     t_max: int,
     excess_max: int,
 ) -> Tuple[bool, List[Tuple[LambdaMonomial, LambdaElement]]]:
-    """Check d² = 0 on every admissible monomial of length ≤ weight_max,
-    internal degree ≤ t_max, excess ≤ excess_max.
+    """Check d² = 0 on every admissible monomial within the given degree/excess bounds.
 
     Returns (ok, failures) where each failure is (input_monomial, d²(input)).
     A clean run returns (True, []).
@@ -516,7 +513,9 @@ def lambda_e2_page(
     t_max: int = 20,
     backend: Literal["auto", "python", "numba", "julia"] = "auto",
 ) -> AdamsE2Page:
-    """WIP — DO NOT USE. The Λ-algebra differential formula in this module
+    """WIP — DO NOT USE; raises NotImplementedError.
+
+    The Λ-algebra differential formula in this module
     is mathematically incorrect at length ≥ 2 (d² ≠ 0 on λ_4, λ_8, …).
     The single-generator differential is right, so Ext^{1,*} matches
     Tangora 1990 (h_0..h_4 at t = 1, 2, 4, 8, 16), but Ext^{s,*} for

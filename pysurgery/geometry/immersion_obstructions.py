@@ -13,11 +13,15 @@ from pysurgery.geometry.characteristic_classes import (
 from pysurgery.homology.cup_product import alexander_whitney_cup
 
 class StructuralObstruction(BaseModel):
+    """Result signalling a structural obstruction (e.g. a failed Hirzebruch check)."""
+
     exact: bool = False
     reason: str = ""
     contract_version: str = "2026.04-phase10"
 
 class NonImmersibilityWitness(BaseModel):
+    """Certificate that a manifold does not immerse, citing the witnessing class."""
+
     exact: bool = False
     immersible: bool = False
     reason: str = ""
@@ -26,16 +30,22 @@ class NonImmersibilityWitness(BaseModel):
     contract_version: str = "2026.04-phase10"
 
 class ImmersibilityInconclusive(BaseModel):
+    """Result indicating the checked immersion obstructions vanish, leaving it undecided."""
+
     exact: bool = False
     reason: str = ""
     contract_version: str = "2026.04-phase10"
 
 class PontryaginClasses(BaseModel):
+    """Container for the rational Pontryagin classes of a manifold."""
+
     exact: bool = False
     classes: list = []
     contract_version: str = "2026.04-phase10"
 
 class EulerClass(BaseModel):
+    """Container for the integer-valued combinatorial Euler class."""
+
     exact: bool = False
     value: int
     contract_version: str = "2026.04-phase10"
@@ -110,9 +120,7 @@ def compute_dual_stiefel_whitney_classes(manifold: SimplicialComplex) -> List[np
 
 
 def check_dual_stiefel_whitney_non_immersibility(manifold: SimplicialComplex, target_dim: int):
-    """
-    Checks if M^n can immerse into R^{n+k} using dual SW classes.
-    """
+    """Checks if M^n can immerse into R^{n+k} using dual SW classes."""
     n = manifold.dimension
     k = target_dim - n
 
@@ -145,9 +153,7 @@ def check_dual_stiefel_whitney_non_immersibility(manifold: SimplicialComplex, ta
     )
 
 def extract_pontryagin(manifold: SimplicialComplex, degree: int, intersection_form: Any = None) -> int:
-    """
-    Placeholder for higher Pontryagin classes.
-    """
+    """Placeholder for higher Pontryagin classes."""
     if degree == 1 and manifold.dimension >= 4:
         # Fallback to evaluation on the 4-skeleton if it's exactly 4D
         if manifold.dimension == 4 and intersection_form is not None:
@@ -155,6 +161,7 @@ def extract_pontryagin(manifold: SimplicialComplex, degree: int, intersection_fo
     return 0
 
 def rational_pontryagin_classes(manifold: SimplicialComplex, intersection_form: Any = None) -> PontryaginClasses:
+    """Collect the rational Pontryagin classes p_i for degrees up to dim/4."""
     p_classes = []
     for i in range(1, manifold.dimension // 4 + 1):
         p_i = extract_pontryagin(manifold, degree=i, intersection_form=intersection_form) 
@@ -171,9 +178,10 @@ def combinatorial_euler_class(manifold: SimplicialComplex) -> EulerClass:
     return manifold.euler_class()
 
 def compute_rational_pontryagin_obstruction(manifold: SimplicialComplex, target_dim: int, intersection_form: Any = None):
-    """
-    Computes Pontryagin classes and uses the Hirzebruch Signature Theorem
-    and combinatorial Euler classes to find obstructions.
+    """Find immersion obstructions from rational Pontryagin and Euler data.
+
+    Computes the Pontryagin classes and uses the Hirzebruch Signature Theorem
+    and combinatorial Euler classes to detect non-immersibility.
     """
     p_result = rational_pontryagin_classes(manifold, intersection_form)
     p_classes = p_result.classes
@@ -231,9 +239,10 @@ def compute_rational_pontryagin_obstruction(manifold: SimplicialComplex, target_
     )
 
 def immersion_obstruction_analysis(manifold: SimplicialComplex, target_dim: int, intersection_form: Any = None):
-    """
-    Orchestrates the full immersion obstruction analysis using both Dual Stiefel-Whitney
-    and Rational Pontryagin paths.
+    """Orchestrate the full immersion obstruction analysis.
+
+    Runs both the dual Stiefel-Whitney and rational Pontryagin paths, returning
+    the first witness of non-immersibility found or an inconclusive result.
     """
     # 1. Dual Stiefel-Whitney Path
     sw_res = check_dual_stiefel_whitney_non_immersibility(manifold, target_dim)

@@ -136,7 +136,6 @@ def generate_lean_isomorphism_certificate(
         with open("certificate.lean", "w") as f:
             f.write(lean_code)
     """
-
     Q1 = np.asarray(Q1)
     Q2 = np.asarray(Q2)
     P = np.asarray(P)

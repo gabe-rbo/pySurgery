@@ -1187,6 +1187,7 @@ class GroupPresentation(BaseModel):
     factors: List[str] = Field(default_factory=list)
 
     def normalized(self) -> str:
+        """Return a canonical string label for the group."""
         k = self.kind.strip().lower()
         if k in {"trivial", "1"}:
             return "1"

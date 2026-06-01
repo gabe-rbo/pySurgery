@@ -85,6 +85,7 @@ class DualSteenrodAlgebra:
     # ── degree ────────────────────────────────────────────────────────────────
 
     def degree(self, mon: Monomial) -> int:
+        """Return the internal degree of a dual-Steenrod-algebra monomial (cached)."""
         if mon in self._deg_cache:
             return self._deg_cache[mon]
         poly, ext = mon

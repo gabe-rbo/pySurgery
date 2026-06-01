@@ -11,6 +11,8 @@ class BackendUnavailable(RuntimeError):
 
 
 class Barcode(BaseModel):
+    """A single persistence interval (birth, death) in a given homological dimension."""
+
     birth: int
     death: int
     dim: int
@@ -19,6 +21,8 @@ class Barcode(BaseModel):
 
 
 class BarcodeResult(BaseModel):
+    """Collection of persistence barcodes with field and backend metadata."""
+
     barcodes: List[Barcode]
     field: str
     exact: bool = True
@@ -31,8 +35,7 @@ def compute_barcodes_exact(
     field: str = 'Z2',
     backend: Literal["auto", "julia", "python"] = "auto",
 ) -> BarcodeResult:
-    """
-    Compute persistent homology barcodes.
+    """Compute persistent homology barcodes.
 
     Args:
         filtered_complex: Object providing `.boundary_matrix(d)` or `.get_boundary_matrix(d)`.
@@ -91,8 +94,7 @@ def compute_barcodes_exact(
 
 
 def _python_persistence_fallback(filtered_complex, dimension: int, field: str) -> BarcodeResult:
-    """
-    Pure-Python column reduction for persistent homology over Z2 or Q.
+    """Pure-Python column reduction for persistent homology over Z2 or Q.
 
     Implements the standard persistence reduction algorithm on boundary matrices.
     Column reduction over a field is exact; results carry exact=True.
@@ -179,8 +181,8 @@ def _python_persistence_fallback(filtered_complex, dimension: int, field: str) -
 
 
 def compute_zigzag_persistence(complex_sequence: list, field: str = 'Q') -> BarcodeResult:
-    """
-    Computes zigzag persistence for a sequence of complexes.
+    """Compute zigzag persistence for a sequence of complexes.
+
     Builds the union/intersection zigzag sequence and routes to Julia kernel.
     """
     from pysurgery.topology.complexes import SimplicialComplex
@@ -200,8 +202,7 @@ def compute_zigzag_persistence(complex_sequence: list, field: str = 'Q') -> Barc
 
 
 def compute_topological_loss(barcodes: List[Barcode], target: List[Barcode], epsilon: float = 0.01, max_iter: int = 50):
-    """
-    Computes a differentiable Gromov-Wasserstein topological loss between two sets of barcodes.
+    """Computes a differentiable Gromov-Wasserstein topological loss between two sets of barcodes.
 
     Note: this uses JAX/Sinkhorn with epsilon regularization — the result is approximate,
     not exact. Do not use a BarcodeResult from this function to claim exact=True.

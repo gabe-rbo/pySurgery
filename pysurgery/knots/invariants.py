@@ -1,5 +1,4 @@
-"""
-pysurgery/knots/invariants.py
+"""pysurgery/knots/invariants.py.
 
 State-of-the-art knot invariants computed from simplicial complexes.
 
@@ -96,10 +95,11 @@ def _knot_polyline_coords(
 
 
 def _is_generic_projection(pts3: np.ndarray, ex: np.ndarray, ey: np.ndarray, ez: np.ndarray) -> bool:
-    """Check that the projection is non-degenerate for a generic knot diagram:
-    no two distinct vertices project to the same (x, y), and `_find_crossings`
-    can resolve every crossing's over/under (no in-segment z-coincidence at the
-    crossing point).
+    """Check that the projection is non-degenerate for a generic knot diagram.
+
+    Requires that no two distinct vertices project to the same (x, y), and that
+    `_find_crossings` can resolve every crossing's over/under (no in-segment
+    z-coincidence at the crossing point).
     """
     xy = pts3 @ np.column_stack([ex, ey])
     d = xy[:, None, :] - xy[None, :, :]
@@ -146,7 +146,9 @@ def _segment_cross_2d(
     p1: np.ndarray, p2: np.ndarray, p3: np.ndarray, p4: np.ndarray,
     eps: float = 1e-9,
 ) -> Optional[Tuple[float, float]]:
-    """If segments (p1, p2) and (p3, p4) cross in their interiors, return (t, s)
+    """Return the interior crossing parameters of two 2D segments, or None.
+
+    If segments (p1, p2) and (p3, p4) cross in their interiors, returns (t, s)
     where the intersection is p1 + t*(p2-p1) = p3 + s*(p4-p3); else None.
     """
     d1 = p2 - p1
@@ -228,9 +230,11 @@ def _find_crossings(
 
 
 def _assign_arcs(n_segs: int, crossings: List[Dict]) -> Tuple[List[List[int]], List[Dict]]:
-    """Partition the polyline into arcs (maximal runs not interrupted by an
-    under-crossing).  Returns:
+    """Partition the polyline into arcs split at under-crossings.
 
+    An arc is a maximal run of the polyline not interrupted by an under-crossing.
+
+    Returns:
         arcs:        list of segment-id lists; arcs[k] is the list of polyline
                      segment indices covered (partially or wholly) by arc k.
                      This is informational; the precise arc boundary points are
@@ -770,8 +774,10 @@ def seifert_matrix(
 
 
 def _is_closed_1cycle(K_sub: SimplicialComplex) -> bool:
-    """True iff K_sub's 1-skeleton, oriented by sorted-vertex convention, is a
-    Z-cycle: at every vertex v the signed degree (incoming − outgoing) is zero.
+    """Return True iff K_sub's 1-skeleton is an integral 1-cycle.
+
+    The 1-skeleton is oriented by the sorted-vertex convention and is a Z-cycle
+    when at every vertex v the signed degree (incoming − outgoing) is zero.
 
     This is the precondition checked by `compute_linking_number`; cycles
     produced by `_build_positive_pushoff` can fail it when adjacent vertices
@@ -1029,8 +1035,10 @@ def _is_planar_polygon(
     ambient_complex: SimplicialComplex,
     K: SimplicialComplex,
 ) -> bool:
-    """Fast geometric test: True if K's vertices lie (approximately) in a 2-plane
-    and form a simple polygon. Planar simple polygons in R^3 are always unknots.
+    """Fast geometric test for a planar unknot.
+
+    Returns True if K's vertices lie (approximately) in a 2-plane and form a
+    simple polygon. Planar simple polygons in R^3 are always unknots.
     """
     coords = ambient_complex.simplices_to_point_cloud
     if not coords:

@@ -55,6 +55,7 @@ class ExtElement(BaseModel):
     coords: Tuple[Tuple[int, int], ...] = ()
 
     def is_zero(self) -> bool:
+        """Return True if every coordinate coefficient vanishes mod prime."""
         return all(c % self.prime == 0 for _, c in self.coords)
 
 

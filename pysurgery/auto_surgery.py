@@ -20,6 +20,12 @@ from pysurgery.homology.homology_generators import hk_generators_z
 # ── Pydantic Models ───────────────────────────────────────────────────────────
 
 class GeneratorCycle(BaseModel):
+    """A named 1-cycle representing a homotopy/homology generator.
+
+    Records the cycle as ordered edges, the underlying vertex path, the root
+    vertex of its connected component, and its orientation character.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str
     cycle: List[Tuple[int, int]]
@@ -28,6 +34,13 @@ class GeneratorCycle(BaseModel):
     orientation_character: int = 1
 
 class CutSite(BaseModel):
+    """A candidate location at which to perform a cut/surgery.
+
+    Holds the target simplex, an optional centroid, a desirability score, and
+    flags describing whether cutting there keeps the component connected and
+    how many local strands pass through.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     simplex: Tuple[int, ...]
     centroid: Optional[Tuple[float, ...]] = None
@@ -39,6 +52,12 @@ class CutSite(BaseModel):
     theorem_tag: str = "auto.surgery.cut_site"
 
 class ComponentInfo(BaseModel):
+    """Topological summary of a single connected component.
+
+    Captures the component's dimension, manifold/closed status, Betti numbers,
+    a π₁ descriptor, its vertex ids, and the extracted subcomplex.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str
     dimension: int
@@ -50,18 +69,32 @@ class ComponentInfo(BaseModel):
     subcomplex: SimplicialComplex
 
 class LinkedPair(BaseModel):
+    """A pair of components ``a`` and ``b`` with nonzero linking number ``lk``."""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     a: str
     b: str
     lk: int
 
 class Pi1Killer(BaseModel):
+    """A surgery prescription for killing one π₁ generator.
+
+    Pairs the generating cycle with a framing and the descriptor of the
+    generator expected to be eliminated by the surgery.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     cycle: List[Tuple[int, int]]
     framing: Any
     expected_kill: str
 
 class HomologyKiller(BaseModel):
+    """A surgery prescription for killing one degree-``k`` homology generator.
+
+    Pairs the representing cycle with its dimension ``k``, a framing, and the
+    homology class expected to be eliminated by the surgery.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     cycle: Any
     k: int
@@ -69,6 +102,13 @@ class HomologyKiller(BaseModel):
     expected_kill: Any
 
 class NestedPair(BaseModel):
+    """A pair where component ``inner`` is nested inside component ``outer``.
+
+    Records the codimension of the outer component, whether the detection is
+    exact, and the kind of witness (algebraic, winding, bounding-box, etc.)
+    that established the nesting.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     outer: str
     inner: str
@@ -78,6 +118,13 @@ class NestedPair(BaseModel):
     theorem_tag: str = "auto.surgery.detect_nested"
 
 class UnlinkPass(BaseModel):
+    """Record of a single unlinking surgery attempt.
+
+    Stores the chosen cut site and isotopy id, the linking number before and
+    after, whether Betti/π₁/manifold invariants matched, and whether the pass
+    was rolled back (with any error message).
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     cut_site: CutSite
     isotopy_id: str
@@ -90,6 +137,12 @@ class UnlinkPass(BaseModel):
     error: Optional[str] = None
 
 class UnlinkReport(BaseModel):
+    """Full report of unlinking two components ``a`` and ``b``.
+
+    Aggregates every UnlinkPass, the cut-site history, the final linking
+    number, the surgery mode used, and whether topology was preserved.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     a: str
     b: str
@@ -103,6 +156,12 @@ class UnlinkReport(BaseModel):
     contract_version: str = "2026.04-phase10"
 
 class NestReport(BaseModel):
+    """Full report of separating a nested ``inner`` from ``outer``.
+
+    Records the connecting arc (simplices and endpoints), whether the pair is
+    still nested afterward, and pre/post topology snapshots.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     outer: str
     inner: str
@@ -116,6 +175,12 @@ class NestReport(BaseModel):
     contract_version: str = "2026.04-phase10"
 
 class Pi1KillStep(BaseModel):
+    """Record of one step in the π₁-killing process.
+
+    Holds the cycle and framing surgered, the generator it targeted, and
+    whether the handle was attached and the generator verified killed.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     cycle: Optional[List[Tuple[int, int]]] = None
     framing: Optional[Any] = None
@@ -125,6 +190,12 @@ class Pi1KillStep(BaseModel):
     reason: Optional[str] = None
 
 class Pi1KillReport(BaseModel):
+    """Full report of killing π₁ on a single component.
+
+    Aggregates each Pi1KillStep along with the final π₁ descriptor for the
+    component (``"1"`` when the fundamental group is trivial).
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str
     steps: List[Pi1KillStep]
@@ -135,6 +206,15 @@ class Pi1KillReport(BaseModel):
 
     @classmethod
     def trivial(cls, name: str, exact: bool = True) -> Pi1KillReport:
+        """Build an empty report for a component already having trivial π₁.
+
+        Args:
+            name: The component name.
+            exact: Whether the determination is exact.
+
+        Returns:
+            A Pi1KillReport with no steps and a final descriptor of ``"1"``.
+        """
         return cls(
             name=name,
             steps=[],
@@ -144,6 +224,12 @@ class Pi1KillReport(BaseModel):
         )
 
 class HKillStep(BaseModel):
+    """Record of one step in killing a homology summand.
+
+    Holds the surgered cycle, the targeted summand, whether the handle was
+    attached, the Betti numbers afterward, and any error encountered.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     cycle: List[Tuple[int, ...]]
     summand: str
@@ -153,6 +239,12 @@ class HKillStep(BaseModel):
     exact: bool
 
 class HKillReport(BaseModel):
+    """Full report of killing degree-``k`` homology on a single component.
+
+    Aggregates each HKillStep performed while eliminating the H_k generators
+    of the named component.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str
     k: int
@@ -162,6 +254,12 @@ class HKillReport(BaseModel):
     contract_version: str = "2026.04-phase10"
 
 class ObstructionReport(BaseModel):
+    """Result of checking the middle-dimensional surgery obstruction.
+
+    Records the component, its dimension and middle degree, the kind of
+    obstruction, its computed class, and whether the obstruction vanishes.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str
     dimension: int = 0
@@ -176,6 +274,16 @@ class ObstructionReport(BaseModel):
 
     @classmethod
     def from_ladder_error(cls, e: Exception) -> "ObstructionReport":
+        """Build a non-vanishing report from a homology-ladder failure.
+
+        Args:
+            e: The exception raised when the homology ladder aborted; its
+                ``name`` attribute (if a string) names the component.
+
+        Returns:
+            An ObstructionReport of kind ``"ladder_aborted"`` that does not
+            vanish and carries the error message in its obstruction class.
+        """
         name = getattr(e, "name", "unknown")
         if not isinstance(name, str):
             name = "unknown"
@@ -189,6 +297,13 @@ class ObstructionReport(BaseModel):
 
 
 class AutoSurgeonConfig(BaseModel):
+    """Tunable parameters for the AutoSurgeon pipeline.
+
+    Groups settings by phase (unlinking, un-nesting, per-component reduction)
+    plus cross-cutting options such as the compute backend, framing
+    requirements, target topology, and ambient-space specification.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     # Phase 1
     max_unlink_surgeries: int = 32
@@ -224,6 +339,13 @@ class AutoSurgeonConfig(BaseModel):
 
 
 class AutoSurgeryReport(BaseModel):
+    """Complete result of running the AutoSurgeon pipeline.
+
+    Records the final status, the initial and final component summaries, the
+    per-phase reports (unlink, un-nest, π₁-kill, homology-kill, obstruction),
+    the session logs (plain and LaTeX), and the cobordism trace.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
     status: Literal["success", "halted_by_obstruction", "halted_by_error"]
     exact: bool
@@ -1937,6 +2059,23 @@ class AutoSurgeon:
             self.config = config
 
     def run(self) -> AutoSurgeryReport:
+        """Execute the full surgery pipeline and return its report.
+
+        Validates each component as a homology manifold, resolves the ambient
+        space, then runs the phases in order: unlink linked pairs, separate
+        nested pairs, and per component kill π₁, climb the homology ladder,
+        check the middle-dimensional obstruction, and (optionally) remove a
+        top cell for strict contractibility.
+
+        Returns:
+            An AutoSurgeryReport summarizing every phase. Its ``status`` is
+            ``"success"``, ``"halted_by_obstruction"`` if an obstruction does
+            not vanish, or ``"halted_by_error"`` if a phase raised.
+
+        Raises:
+            NonManifoldComponentError: If any component is not a homology
+                manifold.
+        """
         # ── Phase 0: ingest & validate ────────────────────────────────────────
         infos = detect_components_with_status(self.K, backend=self.config.backend)
         for info in infos:

@@ -970,9 +970,11 @@ class ExactCoupleSpectralSequence(SpectralSequence):
         self._derived: list[ExactCouple] = [couple]
 
     def initial_page_number(self) -> int:
+        """Return the initial page index r₀ = 1 for an exact couple."""
         return 1
 
     def compute_initial_page(self) -> dict[tuple[int, int], SpectralEntry]:
+        """Return E^1, the E-term of the underlying exact couple."""
         return dict(self.couple.E)
 
     def compute_next_page(self, page: SpectralPage) -> SpectralPage:
@@ -1109,9 +1111,11 @@ class SerreSpectralSequence(SpectralSequence):
         self.fibre_homology = {int(k): v for k, v in fibre_homology.items()}
 
     def initial_page_number(self) -> int:
+        """Return the initial page index r₀ = 2 for the Serre sequence."""
         return 2
 
     def compute_initial_page(self) -> dict[tuple[int, int], SpectralEntry]:
+        """Return E^2 = H_p(B) ⊗ H_q(F) as the tensor of base and fibre homology."""
         return _build_e2_tensor(
             self.base_homology, self.fibre_homology, self.coefficient_ring
         )
@@ -1167,9 +1171,11 @@ class LeraySerreSpectralSequence(SpectralSequence):
         self.fibre_cohomology = {int(k): v for k, v in fibre_cohomology.items()}
 
     def initial_page_number(self) -> int:
+        """Return the initial page index r₀ = 2 for the Leray-Serre sequence."""
         return 2
 
     def compute_initial_page(self) -> dict[tuple[int, int], SpectralEntry]:
+        """Return E^2 = H^p(B) ⊗ H^q(F) as the tensor of base and fibre cohomology."""
         return _build_e2_tensor(
             self.base_cohomology, self.fibre_cohomology, self.coefficient_ring
         )
@@ -1250,12 +1256,15 @@ class AdamsSpectralSequence(SpectralSequence):
     # Adams differential bidegree differs from the generic cohomological one;
     # override the convention.
     def differential_bidegree(self, r: int) -> Bidegree:
+        """Bidegree (r, r-1) of the Adams differential d^r."""
         return (r, r - 1)
 
     def initial_page_number(self) -> int:
+        """Return the initial page index r₀ = 2 for the Adams sequence."""
         return 2
 
     def compute_initial_page(self) -> dict[tuple[int, int], SpectralEntry]:
+        """Return E^2 from the supplied Adams E_2 entries."""
         return dict(self.e2_entries)
 
 
@@ -1324,9 +1333,11 @@ class AtiyahHirzebruchSpectralSequence(SpectralSequence):
         self.cohomology_theory_name = str(cohomology_theory_name)
 
     def initial_page_number(self) -> int:
+        """Return the initial page index r₀ = 2 for the Atiyah-Hirzebruch sequence."""
         return 2
 
     def compute_initial_page(self) -> dict[tuple[int, int], SpectralEntry]:
+        """Return E^2 = H^p(X) ⊗ π_q as the tensor of cohomology and coefficients."""
         return _build_e2_tensor(
             self.x_cohomology, self.coefficient_pi, self.coefficient_ring
         )

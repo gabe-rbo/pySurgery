@@ -573,14 +573,21 @@ class SurgeryInvariantBroken(SurgeryError):
 
 
 class SurgeryProtocolError(SurgeryError):
-    """The atomic protocol detected an internal inconsistency (e.g., a method
-    body forgot to call txn.commit()); the session was rolled back."""
+    """The atomic protocol detected an internal inconsistency; rolled back.
+
+    For example, a method body forgot to call txn.commit(), so the session
+    was rolled back.
+    """
     pass
 
 
 class TopologyNotRestoredError(SurgeryError):
-    """A cancelling-pair (or other topology-preserving) macro did not restore
-    the pre-state Betti / π₁ / manifold invariants. Inner steps already rolled back."""
+    """A topology-preserving macro did not restore the pre-state invariants.
+
+    A cancelling-pair (or other topology-preserving) macro failed to restore
+    the pre-state Betti / π₁ / manifold invariants. Inner steps already rolled
+    back.
+    """
     pass
 
 

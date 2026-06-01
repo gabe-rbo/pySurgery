@@ -1095,18 +1095,22 @@ class ChainComplex(BaseModel):
 
     @property
     def boundaries(self) -> Dict[int, csr_matrix]:
+        """Return the boundary matrices keyed by dimension."""
         return self._boundaries_field
 
     @property
     def dimensions(self) -> List[int]:
+        """Return the list of dimensions present in the complex."""
         return self._dimensions_field
 
     @property
     def cells(self) -> Dict[int, int]:
+        """Return the number of cells in each dimension."""
         return self._cells_field
 
     @property
     def basis_symbols(self) -> Dict[int, List[Any]]:
+        """Return the basis symbols (cell labels) keyed by dimension."""
         return self._basis_symbols_field
 
     def _structure_signature(self) -> tuple[object, ...]:
@@ -1134,7 +1138,7 @@ class ChainComplex(BaseModel):
         return self.boundaries.get(int(n))
 
     def n_simplices(self, n: int) -> List[Any]:
-        """Return a list of basis elements for C_n. 
+        """Return a list of basis elements for C_n.
         
         For general ChainComplex, these are just index tuples unless basis_symbols provided.
         """
@@ -2454,6 +2458,7 @@ class SimplicialComplex(ChainComplex):
             epsilon: Distance threshold for edges.
             max_dimension: Maximum simplex dimension to include (e.g., 2 for triangles).
             coefficient_ring: Coefficient ring for the complex.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             A SimplicialComplex instance with geometric coordinates attached.
@@ -2661,6 +2666,7 @@ class SimplicialComplex(ChainComplex):
             delta: Scaling parameter.
             max_dimension: Maximum dimension of simplices.
             coefficient_ring: Coefficient ring label.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             A SimplicialComplex instance.
@@ -2915,6 +2921,7 @@ class SimplicialComplex(ChainComplex):
         Args:
             points: An (N, D) array of point coordinates.
             coefficient_ring: Coefficient ring label.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             A SimplicialComplex representing the reconstructed manifold.
@@ -2958,6 +2965,139 @@ class SimplicialComplex(ChainComplex):
         sc._coordinates = pts
         sc._generate_point_cloud_mappings(pts)
         return sc
+
+    @classmethod
+    def _from_delaunay_filtered(cls, points, value_fn, threshold, max_dimension, coefficient_ring):
+        """Build the Delaunay complex and tag each simplex with an appearance value.
+
+        Constructs the Delaunay triangulation (faces up to ``max_dimension``), tags
+        every simplex with its appearance value via ``value_fn(table, coords)``, and
+        optionally keeps only simplices appearing by ``threshold``. The per-simplex
+        values are stored on ``sc.filtration``.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            value_fn: Callable ``(simplices_table, coords) -> {simplex: value}``
+                producing the monotone appearance value for each simplex.
+            threshold: Appearance-value cutoff; ``None`` keeps the full complex.
+            max_dimension: Maximum simplex dimension to include.
+            coefficient_ring: Coefficient ring label.
+
+        Returns:
+            A SimplicialComplex with ``.filtration`` populated and geometric
+            coordinates attached.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+        n = pts.shape[0]
+        if n == 0:
+            sc = cls.from_simplices([], coefficient_ring=coefficient_ring)
+            sc._coordinates = pts
+            sc.filtration = {}
+            return sc
+        dim = pts.shape[1]
+        if n < dim + 1:
+            # Too few points for a full-dimensional Delaunay; return the vertices.
+            sc = cls.from_simplices([(i,) for i in range(n)], coefficient_ring=coefficient_ring)
+            sc._coordinates = pts
+            sc.filtration = {(i,): 0.0 for i in range(n)}
+            sc._generate_point_cloud_mappings(pts)
+            return sc
+
+        from scipy.spatial import Delaunay
+        dt = Delaunay(pts, qhull_options="QJ")
+        md = min(int(max_dimension), dim)
+        faces = set()
+        for s in dt.simplices:
+            s = tuple(sorted(int(v) for v in s))
+            for d in range(md + 1):
+                for f in itertools.combinations(s, d + 1):
+                    faces.add(tuple(sorted(f)))
+
+        sc = cls.from_simplices([list(f) for f in faces],
+                                coefficient_ring=coefficient_ring, close_under_faces=True)
+        sc._coordinates = pts
+        vals = value_fn(sc._simplices_table, pts)
+
+        if threshold is not None:
+            tol = abs(float(threshold)) * 1e-9 + 1e-12
+            kept = {d: [s for s in sc.n_simplices(d) if vals.get(s, 0.0) <= threshold + tol]
+                    for d in sorted(sc._simplices_table)}
+            kept = {d: v for d, v in kept.items() if v}
+            sc = cls(simplices=kept, coefficient_ring=coefficient_ring)
+            sc._coordinates = pts
+            vals = {s: vals[s] for d in kept for s in kept[d]}
+
+        sc.filtration = vals
+        sc._generate_point_cloud_mappings(pts)
+        return sc
+
+    @classmethod
+    def from_delaunay_rips(
+        cls,
+        points: np.ndarray,
+        threshold: float | None = None,
+        max_dimension: int = 2,
+        *,
+        coefficient_ring: str = "Z",
+        backend: str = "auto",
+    ) -> "SimplicialComplex":
+        """Build the Delaunay-Rips complex from a point cloud.
+
+        The complex is the Delaunay triangulation (faces up to ``max_dimension``);
+        each simplex's appearance value is its longest edge (the Rips value),
+        stored on ``sc.filtration``. Far sparser than the full Rips complex while
+        preserving the same flag-style filtration on the Delaunay edges.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            threshold: If given, keep only simplices whose longest edge is
+                <= ``threshold``; otherwise keep the full Delaunay complex.
+            max_dimension: Maximum simplex dimension to include.
+            coefficient_ring: Coefficient ring label.
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            A SimplicialComplex with per-simplex Rips appearance values on
+            ``.filtration`` and geometric coordinates attached.
+        """
+        from .filtration_values import rips_filtration_values
+        return cls._from_delaunay_filtered(
+            points, rips_filtration_values, threshold, max_dimension, coefficient_ring
+        )
+
+    @classmethod
+    def from_delaunay_cech(
+        cls,
+        points: np.ndarray,
+        threshold: float | None = None,
+        max_dimension: int = 2,
+        *,
+        coefficient_ring: str = "Z",
+        backend: str = "auto",
+    ) -> "SimplicialComplex":
+        """Build the Delaunay-Cech complex from a point cloud.
+
+        The complex is the Delaunay triangulation (faces up to ``max_dimension``);
+        each simplex's appearance value is the radius of the smallest enclosing
+        ball of its vertices (the Cech value), stored on ``sc.filtration``. This
+        reproduces Cech persistence on the much smaller Delaunay complex.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            threshold: If given, keep only simplices whose enclosing-ball radius
+                is <= ``threshold``; otherwise keep the full Delaunay complex.
+            max_dimension: Maximum simplex dimension to include.
+            coefficient_ring: Coefficient ring label.
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            A SimplicialComplex with per-simplex Cech appearance values on
+            ``.filtration`` and geometric coordinates attached.
+        """
+        from .filtration_values import cech_filtration_values
+        return cls._from_delaunay_filtered(
+            points, cech_filtration_values, threshold, max_dimension, coefficient_ring
+        )
 
     @classmethod
     def from_witness(
@@ -3722,7 +3862,7 @@ class SimplicialComplex(ChainComplex):
 
     @property
     def is_boundary_manifold(self) -> bool:
-        """Verify if the simplicial complex is a manifold with a non-empty boundary.
+        r"""Verify if the simplicial complex is a manifold with a non-empty boundary.
 
         What is Being Computed?:
             The existence of a boundary $\partial M \neq \emptyset$.
@@ -3740,7 +3880,7 @@ class SimplicialComplex(ChainComplex):
         return not self.is_closed_manifold
 
     def boundary(self) -> "SimplicialComplex":
-        """Extract the boundary subcomplex of this simplicial complex.
+        r"""Extract the boundary subcomplex of this simplicial complex.
 
         What is Being Computed?:
             The boundary $\partial K$ of a $d$-dimensional complex. For a manifold, 
@@ -4071,8 +4211,9 @@ class SimplicialComplex(ChainComplex):
         
         Args:
             max_dim: The maximum dimension of simplices to include.
-                     If None, defaults to the maximum dimension of the space 
+                     If None, defaults to the maximum dimension of the space
                      (number of vertices - 1).
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             SimplicialComplex: The expanded flag complex.
@@ -4358,6 +4499,7 @@ class SimplicialComplex(ChainComplex):
         Args:
             max_loops: Maximum number of label propagation iterations.
             min_modularity_gain: Minimum gain required to continue iterations.
+            backend: 'auto', 'julia', or 'python'.
 
         Returns:
             tuple: (simplified_complex, simplex_map)
@@ -4927,7 +5069,7 @@ class SimplicialComplex(ChainComplex):
 
 
 class DynamicComplex(SimplicialComplex):
-    """A simplicial complex that supports efficient real-time updates to its homology.
+    r"""A simplicial complex that supports efficient real-time updates to its homology.
     
     Overview:
         Maintains reduced boundary matrices and homology invariants incrementally.

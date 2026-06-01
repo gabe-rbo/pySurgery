@@ -16,7 +16,7 @@ The implementation is intentionally conservative: it prefers exact positive
 certificates when the input data are strong enough and otherwise returns an
 inconclusive or heuristic result rather than overclaiming.
 
-References
+References:
 ----------
 - Haken, W. (1961). Theorie der Normalflächen. Acta Mathematica, 105(3-4), 245-375.
 - Jaco, W., & Rubinstein, J. H. (2003). 0-efficient triangulations of 3-manifolds. 
@@ -764,7 +764,6 @@ def _normal_surface_matching_matrix(manifold: Triangulated3Manifold) -> csr_matr
     Returns:
         csr_matrix: The face-matching matrix.
     """
-
     rows: list[int] = []
     cols: list[int] = []
     data: list[int] = []
@@ -1527,7 +1526,6 @@ def analyze_geometrization(
         if result.status == "success":
             print(f"Manifold classified as: {result.classification}")
     """
-
     tri = _coerce_manifold(manifold, name=name)
     homology = {n: tri.homology(n, backend=backend) for n in range(4)}
     candidates = normal_surface_candidates(tri, backend=backend)

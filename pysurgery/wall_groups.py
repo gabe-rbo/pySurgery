@@ -61,6 +61,7 @@ class ObstructionResult(BaseModel):
     zero_certified: bool = False
 
     def model_post_init(self, __context) -> None:
+        """Derive assembly certification and zero/obstructs flags from the raw fields."""
         if (
             not self.assembly_certified
             and self.computable
@@ -91,11 +92,13 @@ class ObstructionResult(BaseModel):
         self.obstructs = not self.zero_certified
 
     def legacy_output(self) -> Union[int, str]:
+        """Return the scalar obstruction value, or the diagnostic message if unavailable."""
         if self.computable and self.value is not None:
             return int(self.value)
         return self.message
 
     def to_direct_sum_element(self) -> "LDirectSumElement":
+        """Convert this result into a formal direct-sum element for arithmetic."""
         return LDirectSumElement.from_obstruction(self)
 
     @classmethod
@@ -105,6 +108,7 @@ class ObstructionResult(BaseModel):
         *,
         collapse_integral: bool = False,
     ) -> "ObstructionResult":
+        """Build an ObstructionResult from a direct-sum element."""
         return element.to_obstruction_result(collapse_integral=collapse_integral)
 
 
@@ -145,6 +149,7 @@ class LDirectSummand(BaseModel):
     message: str = ""
 
     def group_key(self) -> tuple[int, int, str, str, Optional[int]]:
+        """Return the identity key (shift, dim, pi, symbol, modulus) used to merge summands."""
         return (self.shift, self.dimension, self.pi, self.symbol, self.modulus)
 
 
@@ -183,6 +188,7 @@ class LDirectSumElement(BaseModel):
     exact: bool = False
 
     def normalized(self) -> "LDirectSumElement":
+        """Merge summands by group key and reduce each value modulo its modulus."""
         if not self.computable or not self.exact:
             return self
         contrib = self._normalized_contributions()
@@ -223,6 +229,7 @@ class LDirectSumElement(BaseModel):
 
     @classmethod
     def from_obstruction(cls, obstruction: ObstructionResult) -> "LDirectSumElement":
+        """Construct a direct-sum element from an ObstructionResult's summands."""
         typed_summands: List[LDirectSummand] = []
         if obstruction.summands:
             for s in obstruction.summands:
@@ -398,6 +405,7 @@ class LDirectSumElement(BaseModel):
         return self.__mul__(scalar)
 
     def equivalent(self, other: "LDirectSumElement") -> bool:
+        """Test whether two elements have equal normalized contributions per summand."""
         if self.dimension != other.dimension or self.pi != other.pi:
             return False
         if not (self.computable and self.exact and other.computable and other.exact):
@@ -415,6 +423,16 @@ class LDirectSumElement(BaseModel):
     def to_obstruction_result(
         self, *, collapse_integral: bool = False
     ) -> ObstructionResult:
+        """Export this element as an ObstructionResult.
+
+        Args:
+            collapse_integral: If True and every summand is integral (no modulus),
+                sum the summands into a single scalar value.
+
+        Returns:
+            ObstructionResult: The result carrying the per-summand decomposition
+                and aggregated certification flags.
+        """
         ns = self.normalized() if self.computable and self.exact else self
         summands = []
         for s in ns.summands:
@@ -536,6 +554,15 @@ class WallGroupL(BaseModel):
     def compute_obstruction_element(
         self, form: Optional[IntersectionForm] = None, backend: str = "auto"
     ) -> LDirectSumElement:
+        """Compute the surgery obstruction as a decomposed direct-sum element.
+
+        Args:
+            form: The intersection/quadratic form, if required by the group.
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            LDirectSumElement: The obstruction in decomposed L-group coordinates.
+        """
         return self.compute_obstruction_result(form, backend=backend).to_direct_sum_element()
 
     def obstruction_class(

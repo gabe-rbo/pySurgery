@@ -85,6 +85,7 @@ class Generator:
 
     @property
     def parity(self) -> Literal["even", "odd"]:
+        """Return "odd" for odd-degree generators, "even" otherwise."""
         return "odd" if self.degree % 2 == 1 else "even"
 
     def __repr__(self) -> str:
@@ -211,9 +212,11 @@ class DGAElement:
         return self + (-other)
 
     def scale(self, s: Fraction) -> "DGAElement":
+        """Return this element with every coefficient multiplied by ``s``."""
         return DGAElement(self.dga, {m: s * c for m, c in self.terms.items()}, degree=self.degree)
 
     def is_zero(self) -> bool:
+        """Return True when this element has no terms."""
         return not self.terms
 
     def __eq__(self, other: object) -> bool:
@@ -400,7 +403,7 @@ class RationalDGA:
         return mat
 
     def cohomology_dim(self, n: int) -> int:
-        """dim H^n(ΛV, d), computed by exact Gaussian elimination."""
+        """Dim H^n(ΛV, d), computed by exact Gaussian elimination."""
         bn = self.graded_basis(n)
         if not bn:
             return 0
@@ -519,6 +522,7 @@ class RationalDGA:
         return len(self._by_deg.get(n, []))
 
     def all_generators(self) -> List[Generator]:
+        """Return all generators of this algebra as a list."""
         return list(self._g2n.values())
 
 
@@ -706,6 +710,7 @@ class RationalCohomologyAlgebra:
         self.max_degree = max_degree
 
     def betti_n(self, n: int) -> int:
+        """Return the n-th Betti number, or 0 if degree n is absent."""
         return self.betti.get(n, 0)
 
 
@@ -964,6 +969,7 @@ class FormalityResult(BaseModel):
     reasoning: str
 
     def decision_ready(self) -> bool:
+        """Return True when the computation succeeded and the result is exact."""
         return self.status == "success" and self.exact
 
 
@@ -1020,6 +1026,7 @@ class MasseyProductsResult(BaseModel):
     reasoning: str
 
     def decision_ready(self) -> bool:
+        """Return True when the computation succeeded and the result is exact."""
         return self.status == "success" and self.exact
 
     def as_dict(self) -> Dict[Tuple[str, ...], List["MasseyProductEntry"]]:

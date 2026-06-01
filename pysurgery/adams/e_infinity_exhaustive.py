@@ -160,8 +160,9 @@ def _exhaustive_python(
     page: AdamsE2Page,
     hard_cap: int,
 ) -> ExhaustiveEInfinityResult:
-    """Pure-Python exhaustive enumeration. Returns analytical bounds with
-    e_infinity_mean populated by enumeration.
+    """Pure-Python exhaustive enumeration.
+
+    Returns analytical bounds with e_infinity_mean populated by enumeration.
     """
     import time as _time
 

@@ -1,5 +1,4 @@
-"""
-pysurgery/knots/analysis.py
+"""pysurgery/knots/analysis.py.
 
 High-level analysis: find and classify knots between connected components of a
 simplicial complex. This is the main entry point for answering "where are the
@@ -75,6 +74,7 @@ class KnotAnalysisResult:
     undetected_warning: str = ""
 
     def summary(self) -> str:
+        """Return a human-readable multi-line summary of the knot analysis."""
         lines = [
             f"Knot Analysis: {len(self.components)} component(s)",
             f"  Link type: {self.link_classification.value}",

@@ -117,9 +117,10 @@ def build_signature_loss_function_differentiable(
     temp: float = 10.0,
     eigengap_weight: float = 0.0,
 ):
-    """
-    Constructs a JAX-jittable loss function that penalizes a neural network
-    if its output intersection form deviates from the target Wall obstruction.
+    """Constructs a JAX-jittable loss function for the target Wall obstruction.
+
+    The returned loss penalizes a neural network if its output intersection
+    form deviates from the target Wall obstruction.
     """
     if not HAS_JAX:
         raise ImportError("JAX is required.")
@@ -168,8 +169,7 @@ def build_signature_loss_function(
     eigengap_weight: float = 0.0,
     mode: str = "differentiable_approx",
 ):
-    """
-    Compatibility wrapper for signature losses.
+    """Compatibility wrapper for signature losses.
 
     mode:
       - "differentiable_approx": JAX soft-signature loss.

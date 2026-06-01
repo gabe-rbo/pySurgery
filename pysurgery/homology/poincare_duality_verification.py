@@ -67,7 +67,7 @@ def simplicial_cap_product(
     k: int, 
     sc: SimplicialComplex
 ) -> np.ndarray:
-    """Computes the exact simplicial cap product chain_n \cap cochain_k.
+    r"""Computes the exact simplicial cap product chain_n \cap cochain_k.
     
     Algorithm:
         For each simplex [v_0, ..., v_n] in chain_n:

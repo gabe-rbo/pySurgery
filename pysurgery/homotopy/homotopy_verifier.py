@@ -385,9 +385,10 @@ def _structures_match(
     table_entry: KnownHomotopyEntry,
     computed: ComputedHomotopyGroup,
 ) -> bool:
-    """An algorithmic structure matches the table iff EITHER the conservative
-    (one-Z/p-per-cell) view OR the most-collapsed (h_0-tower) view of the
-    computed torsion equals the table.
+    """Return True when either view of the computed torsion equals the table.
+
+    A match holds iff EITHER the conservative (one-Z/p-per-cell) view OR the
+    most-collapsed (h_0-tower) view of the computed torsion equals the table.
 
     The collapsed view is the algorithm's best-effort *hypothesis* about
     how the Adams filtration extends in π_*. It still comes from the
@@ -423,6 +424,10 @@ def verify_against_known(
         hg: Active homotopy group object.
         n: Stem.
         family_override: ``("S", 3)`` etc. to bypass automatic detection.
+        rings_by_prime: Pre-supplied F_p cohomology rings, keyed by prime,
+            forwarded to ``compute_pi_n``.
+        pages_by_prime: Pre-supplied Adams E_2 pages, keyed by prime,
+            forwarded to ``compute_pi_n``.
         **compute_kwargs: Forwarded to ``compute_pi_n``.
     """
     n = int(n)

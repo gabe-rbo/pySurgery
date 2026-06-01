@@ -437,6 +437,7 @@ class KTheoryGroup(BaseModel):
     contract_version: str = "2026.04-phase10"
 
     def decision_ready(self) -> bool:
+        """Return True if the group is both computable and exact."""
         return self.computable and self.exact
 
 
@@ -697,6 +698,7 @@ class SpectralSequenceObstruction(BaseModel):
     contract_version: str = "2026.04-phase10"
     
     def decision_ready(self) -> bool:
+        """Return True if the obstruction is exact."""
         return self.exact
 
 

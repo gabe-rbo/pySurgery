@@ -1,5 +1,4 @@
-"""
-pysurgery/algebra/exact_sequences.py
+"""pysurgery/algebra/exact_sequences.py.
 
 Mathematical framework for exact sequences of modules and diagrams.
 Provides tools for automated exactness verification, element-level lifting,

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysurgery"
-version = "2.0.7"
+version = "2.0.8"
 description = "A high-performance Python library for Computational Surgery Theory."
 dependencies = [
     "numpy>=2.4.4",
@@ -24,17 +24,61 @@ readme = "README.md"
 mesh = ["trimesh"]
 ml = ["jax", "jaxlib", "torch", "torch_geometric"]
 test = ["pytest", "hypothesis>=6.152.1"]
+lint = ["ruff>=0.15"]
 all = ["trimesh", "jax", "jaxlib", "torch", "torch_geometric", "pytest", "hypothesis>=6.152.1", 'plotly']
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pysurgery*"]
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Docstring linter (ruff / pydocstyle, Google convention)
+#
+#   ruff check pysurgery/            # lint docstrings
+#   ruff check pysurgery/ --fix      # apply the safe auto-fixes
+#
+# The package standard is Google-style docstrings (summary + Args/Returns/Raises,
+# enriched with Overview/Algorithm/Use When/Example/Attributes). This selects only
+# the pydocstyle "D" rules so `ruff check` is a dedicated docstring gate; add
+# "E"/"F" to `select` if you also want general linting.
+[tool.ruff]
+target-version = "py311"
+# Exclude notebooks from all ruff checks.
+# Patterns without slashes are matched against the name of the file or directory.
+exclude = [
+    ".git",
+    ".github",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "build",
+    "dist",
+    "venv",
+    "**/*.ipynb",
+]
+
+[tool.ruff.lint]
+select = ["D"]
+ignore = [
+    "D100",  # missing docstring in public module
+    "D104",  # missing docstring in public package (__init__.py)
+    "D105",  # missing docstring in magic method (__repr__, __eq__, ...)
+    "D107",  # missing docstring in __init__ (documented at the class level)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and helper scripts are not part of the documented public API.
+"tests/**" = ["D"]
+"scripts/**" = ["D"]
+
 [tool.setuptools.package-data]
 "*" = ["*.jl", "*.yaml", "*.json"]
 
 [tool.bumpversion]
-current_version = "2.0.7"
+current_version = "2.0.8"
 commit = true
 tag = true
 

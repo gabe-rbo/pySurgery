@@ -1,5 +1,4 @@
-"""
-pysurgery/core/handle_surgery.py
+"""pysurgery/core/handle_surgery.py.
 
 Core algorithms for handle surgery on simplicial complexes.
 Private module — use pysurgery.handle_surgery for the public API.
