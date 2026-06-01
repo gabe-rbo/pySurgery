@@ -95,7 +95,7 @@ def test_generate_filtration_report_alpha():
     report_obj = FiltrationReport(points, mode="alpha", track_connected_components=True)
     report = str(report_obj)
     
-    assert "(Mode: alpha)" in report
+    assert "(Method: Alpha)" in report
     assert "Alpha" in report # Column label
 
 if __name__ == "__main__":

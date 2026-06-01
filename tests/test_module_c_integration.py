@@ -139,6 +139,7 @@ def _s3_rational() -> RationalHomotopyGroup:
 class TestBothPathsAgree:
     """Path A and Path B must converge to the same E_∞ grid on overlap."""
 
+    @requires_lean
     def test_no_flags_overlap(self, tmp_path):
         """E_2 with no ambiguous differentials → both paths trivially equal."""
         e2 = _toy_e2_no_flags()
@@ -315,6 +316,7 @@ class TestConfidenceTransparency:
 
 
 class TestNoInfiniteLoops:
+    @requires_lean
     def test_empty_grid_terminates(self, tmp_path):
         e2 = _toy_e2_empty_grid()
         rational = _s3_rational()

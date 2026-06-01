@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysurgery"
-version = "2.0.8"
+version = "2.0.9"
 description = "A high-performance Python library for Computational Surgery Theory."
 dependencies = [
     "numpy>=2.4.4",
@@ -74,11 +74,16 @@ convention = "google"
 "tests/**" = ["D"]
 "scripts/**" = ["D"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["examples", "experiments", "build", "dist", ".git", ".github", ".hypothesis", ".ruff_cache", ".pytest_cache"]
+python_files = ["test_*.py"]
+
 [tool.setuptools.package-data]
 "*" = ["*.jl", "*.yaml", "*.json"]
 
 [tool.bumpversion]
-current_version = "2.0.8"
+current_version = "2.0.9"
 commit = true
 tag = true
 
