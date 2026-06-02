@@ -216,19 +216,28 @@ class _BaseFiltrationReport:
         return emax * factor
 
     def _default_grid_from_values(self, filt: Dict) -> List[float]:
+        """All distinct appearance values as the threshold grid (from a value map)."""
+        return self._grid_from_values(filt.values() if filt else [])
+
+    def _grid_from_values(self, values) -> List[float]:
         """All distinct appearance values as the threshold grid.
 
         Every unique simplex-entry value becomes a threshold so no topological
-        event is skipped. ``eps_max``, if set, caps the range.
+        event is skipped. ``eps_max``, if set, caps the range; ``n_samples``, if
+        set, evenly subsamples it.
 
         Args:
-            filt: Mapping of simplex to appearance value.
+            values: Any iterable of appearance values -- a ``{simplex: value}``
+                map's values, or the distinct grid the fused Julia builder already
+                returns.
 
         Returns:
             A sorted list of every distinct appearance value (capped at
             ``eps_max`` if set), always including ``0.0``.
         """
-        vals = np.array(sorted(set(filt.values())), dtype=np.float64) if filt else np.array([0.0])
+        vals = np.array(sorted(set(values)), dtype=np.float64)
+        if vals.size == 0:
+            vals = np.array([0.0])
         if self.eps_max is not None:
             vals = vals[vals <= float(self.eps_max)]
         if vals.size == 0:
@@ -446,6 +455,29 @@ class _BaseFiltrationReport:
     # ------------------------------------------------------------------
     # Engine
     # ------------------------------------------------------------------
+    def _assemble(self):
+        """Build the maximal complex, reduce its barcode, and gather grid/dim stats.
+
+        Returns ``(max_sc, filt, barcode, dim_first_appear, total, grid_values)``:
+        the maximal complex and its ``{simplex: value}`` map, the Z2 barcode, the
+        per-dimension first (minimum) appearance value, the total simplex count, and
+        an iterable of appearance values from which the threshold grid is derived.
+
+        This base implementation builds the explicit complex and reduces it (the
+        staged path). :class:`RipsFiltrationReport` overrides it to fuse the build
+        and reduction inside Julia, keeping the complex implicit for large clouds
+        (then ``max_sc`` / ``filt`` come back ``None``).
+        """
+        max_sc, filt = self._build_maximal_and_values()
+        barcode = self._compute_barcode(max_sc._simplices_table, filt) \
+            if max_sc._simplices_table else []
+        dim_first_appear: dict = {}
+        for d, simps in max_sc._simplices_table.items():
+            if simps:
+                dim_first_appear[d] = min(filt.get(s, 0.0) for s in simps)
+        total = sum(len(v) for v in max_sc._simplices_table.values())
+        return max_sc, filt, barcode, dim_first_appear, total, filt.values()
+
     def _compute(self):
         """Run the filtration engine and populate ``results``/``barcode``/``stability_data``.
 
@@ -458,23 +490,14 @@ class _BaseFiltrationReport:
         from pysurgery.topology.complexes import SimplicialComplex
         SC = SimplicialComplex
 
-        max_sc, filt = self._build_maximal_and_values()
+        max_sc, filt, barcode, dim_first_appear, total, grid_values = self._assemble()
         self.max_sc, self._filt = max_sc, filt
         coords = getattr(max_sc, "_coordinates", self.points)
 
         self.epsilons = self._user_epsilons if self._user_epsilons is not None \
-            else self._default_grid_from_values(filt)
+            else self._grid_from_values(grid_values)
 
-        barcode = self._compute_barcode(max_sc._simplices_table, filt) \
-            if max_sc._simplices_table else []
         self.barcode = barcode
-
-        dim_first_appear: dict = {}
-        for d, simps in max_sc._simplices_table.items():
-            if simps:
-                dim_first_appear[d] = min(filt.get(s, 0.0) for s in simps)
-
-        total = sum(len(v) for v in max_sc._simplices_table.values())
         if self.analyze_manifolds and total > self._MANIFOLD_MAX_SIMPLICES:
             warnings.warn(
                 f"Skipping per-threshold manifold analysis: maximal complex has "
@@ -771,19 +794,60 @@ class RipsFiltrationReport(_BaseFiltrationReport):
     param_label = "Eps"
     method_name = "Vietoris-Rips"
 
+    # Below this many points the staged build is already cheap, so we skip the
+    # fused probe and keep the exact staged path (which the test-suite exercises).
+    _RIPS_FUSED_MIN_POINTS = 256
+
+    def _rips_eps_max(self) -> float:
+        """The diameter cap for the maximal complex (explicit ``eps_max`` or pdist max)."""
+        from scipy.spatial.distance import pdist
+        if self.eps_max is not None:
+            return float(self.eps_max)
+        return float(pdist(self.points).max()) if len(self.points) > 1 else 1.0
+
     def _build_maximal_and_values(self):
         """Build the Vietoris-Rips complex at the full pairwise diameter with longest-edge values."""
         from pysurgery.topology.complexes import SimplicialComplex as SC
         from pysurgery.topology.filtration_values import rips_filtration_values
-        from scipy.spatial.distance import pdist
-        if self.eps_max is not None:
-            eps_max = float(self.eps_max)
-        else:
-            pts = self.points
-            eps_max = float(pdist(pts).max()) if len(pts) > 1 else 1.0
-        sc = SC.from_vietoris_rips(self.points, eps_max, self.max_dimension,
+        sc = SC.from_vietoris_rips(self.points, self._rips_eps_max(), self.max_dimension,
                                    coefficient_ring=self.coefficient_ring, backend=self.backend)
         return sc, rips_filtration_values(sc._simplices_table, self.points)
+
+    def _assemble(self):
+        """Fuse the VR build, longest-edge filtration, and reduction inside Julia.
+
+        For large clouds this runs the entire hot path in a single Julia call and
+        keeps the maximal complex *implicit* (``max_sc = None``): the per-threshold
+        loop needs only the barcode and per-dimension stats when no manifold /
+        torsion / component analysis is requested (manifold analysis is itself
+        auto-skipped above ``_MANIFOLD_MAX_SIMPLICES``). When the complex is small
+        enough to be wanted -- or any path needs it explicitly -- we defer to the
+        staged base build, so small-complex behaviour is byte-identical to before.
+        """
+        need_explicit = self.track_connected_components or self.compute_torsion
+        if (need_explicit or self.backend == "python"
+                or len(self.points) < self._RIPS_FUSED_MIN_POINTS):
+            return super()._assemble()
+        try:
+            from pysurgery.bridge.julia_bridge import julia_engine
+            if not julia_engine.available:
+                return super()._assemble()
+            payload = julia_engine.compute_rips_filtration(
+                self.points, self._rips_eps_max(), self.max_dimension)
+        except Exception as exc:  # pragma: no cover - only when Julia errors
+            warnings.warn(
+                f"Fused Julia Rips filtration failed ({exc!r}); falling back to the "
+                "staged build.", stacklevel=2)
+            return super()._assemble()
+
+        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
+            # Small enough that manifold analysis / introspection wants the explicit
+            # complex; the staged build is cheap at this size and keeps full fidelity.
+            return super()._assemble()
+
+        # Large: keep the complex implicit -- this is the whole point of the fusion.
+        return (None, None, payload["barcode"], payload["dim_first_appear"],
+                payload["total"], payload["eps_values"])
 
 
 class CknnFiltrationReport(_BaseFiltrationReport):

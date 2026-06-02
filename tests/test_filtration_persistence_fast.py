@@ -84,6 +84,74 @@ def test_circle_betti_curve_is_correct():
 
 
 # ---------------------------------------------------------------------------
+# Fused all-Julia Rips path (build + longest-edge values + reduction in Julia)
+# ---------------------------------------------------------------------------
+def _julia_available():
+    try:
+        from pysurgery.bridge.julia_bridge import julia_engine
+        return julia_engine.available
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _julia_available(), reason="Julia backend unavailable")
+@pytest.mark.parametrize(
+    "points, max_dim",
+    [
+        (_circle(16), 2),
+        (_two_circles(), 2),
+        (_blob(18, d=3), 2),
+        (_blob(14, d=2), 3),
+    ],
+)
+def test_fused_rips_kernel_matches_oracle(points, max_dim):
+    """The fused Julia kernel's barcode equals the pure-Python oracle bar-for-bar.
+
+    Cross-checks the kernel's longest-edge values *and* its reduction against an
+    independently (Python-) built complex reduced by the reference reducer.
+    """
+    from scipy.spatial.distance import pdist
+    from pysurgery.bridge.julia_bridge import julia_engine
+    from pysurgery.topology.complexes import SimplicialComplex as SC
+    from pysurgery.topology.filtration_values import rips_filtration_values
+
+    eps_max = float(pdist(points).max())
+    payload = julia_engine.compute_rips_filtration(points, eps_max, max_dim)
+
+    sc = SC.from_vietoris_rips(points, eps_max, max_dim, backend="python")
+    filt = rips_filtration_values(sc._simplices_table, points)
+    oracle = _BaseFiltrationReport._z2_persistence_barcode(sc._simplices_table, filt)
+
+    assert _bagify(payload["barcode"]) == _bagify(oracle)
+    # The reported total matches the explicit complex's simplex count.
+    assert payload["total"] == sum(len(v) for v in sc._simplices_table.values())
+
+
+class _ForceFusedRips(RipsFiltrationReport):
+    """Force the implicit fused path even on tiny clouds (for test coverage)."""
+
+    _RIPS_FUSED_MIN_POINTS = 0
+    _MANIFOLD_MAX_SIMPLICES = 0
+
+
+@pytest.mark.skipif(not _julia_available(), reason="Julia backend unavailable")
+def test_fused_routing_implicit_path_matches_python():
+    """The report's fused implicit path (max_sc=None) matches the staged python path.
+
+    ``eps_max=3.0`` exceeds the circle's diameter, so both pipelines build the same
+    complete complex (no distance can tie the cap and drop an edge). Barcodes are
+    compared through ``_bagify`` (9-dp rounding), which absorbs the sub-ULP
+    differences between Julia and NumPy distance arithmetic.
+    """
+    pts = _circle(28)
+    fused = _ForceFusedRips(pts, max_dimension=2, analyze_manifolds=False, eps_max=3.0)
+    py = RipsFiltrationReport(pts, max_dimension=2, analyze_manifolds=False,
+                              backend="python", eps_max=3.0)
+    assert fused.max_sc is None                      # complex kept implicit
+    assert _bagify(fused.barcode) == _bagify(py.barcode)
+
+
+# ---------------------------------------------------------------------------
 # compute_torsion
 # ---------------------------------------------------------------------------
 _RP2_FACETS = [(0, 1, 2), (0, 1, 3), (0, 2, 4), (0, 3, 5), (0, 4, 5),

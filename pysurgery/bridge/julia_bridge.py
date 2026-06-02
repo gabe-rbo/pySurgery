@@ -545,6 +545,18 @@ class JuliaBridge:
                 ),
             ),
             (
+                # The fused VR build+filter+reduce path: FiltrationReport's hot path
+                # for large Rips clouds. Warm it on a small square so the first real
+                # report does not pay its JIT cost.
+                "rips_filtration",
+                lambda: self.compute_rips_filtration(
+                    np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+                             dtype=np.float64),
+                    2.0,
+                    2,
+                ),
+            ),
+            (
                 "pi1_abelianization",
                 lambda: self.abelianize_and_bhs_rank(["a"], [["a", "a"]]),
             ),
@@ -2331,6 +2343,61 @@ class JuliaBridge:
             return list(zip(dims, births, deaths))
         except Exception as e:
             raise RuntimeError(f"compute_filtration_persistence failed: {e!r}")
+
+    def compute_rips_filtration(
+        self,
+        points: np.ndarray,
+        epsilon: float,
+        max_dim: int,
+    ) -> dict:
+        """Fused Vietoris-Rips build + longest-edge filtration + Z2 persistence in Julia.
+
+        Does the *entire* hot path inside Julia -- build the VR complex, assign each
+        simplex its longest-edge appearance value, and run the exact twist/clearing
+        reduction -- so the full simplex set never crosses back to Python (only the
+        barcode and small summaries do). This avoids the Python->Julia->Python clique
+        and boundary-matrix marshaling that otherwise dominates large reports. The
+        barcode is exact (identical to the staged reduction), not an approximation.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            epsilon: Maximum edge length (diameter cap) for the complex.
+            max_dim: Maximum simplex dimension to build.
+
+        Returns:
+            A dict with keys:
+                ``barcode`` -- list of ``(dim, birth, death)`` tuples (``death`` is
+                    ``inf`` for essential classes; zero-persistence pairs omitted);
+                ``eps_values`` -- sorted distinct appearance values (the grid);
+                ``dim_first_appear`` -- ``{dim: minimum appearance value}``;
+                ``total`` -- total number of simplices in the complex.
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        self.require_julia()
+        try:
+            (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+             _dim_count, total) = self.backend.compute_rips_filtration(
+                np.ascontiguousarray(points, dtype=np.float64),
+                float(epsilon),
+                int(max_dim),
+            )
+            dims = np.asarray(bar_dim, dtype=np.int64).tolist()
+            births = np.asarray(bar_birth, dtype=np.float64).tolist()
+            deaths = np.asarray(bar_death, dtype=np.float64).tolist()
+            barcode = list(zip(dims, births, deaths))
+
+            ids = np.asarray(dim_ids, dtype=np.int64).tolist()
+            firsts = np.asarray(dim_first_val, dtype=np.float64).tolist()
+            return {
+                "barcode": barcode,
+                "eps_values": np.asarray(eps_values, dtype=np.float64).tolist(),
+                "dim_first_appear": {int(d): float(f) for d, f in zip(ids, firsts)},
+                "total": int(total),
+            }
+        except Exception as e:
+            raise RuntimeError(f"compute_rips_filtration failed: {e!r}")
 
     def simplify_jl(self, simplices: list[tuple]) -> tuple[list[tuple], dict[int, list[int]], dict[tuple, list[tuple]]]:
         """Executes high-performance topology-preserving simplification in Julia.

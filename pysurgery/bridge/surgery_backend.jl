@@ -16,7 +16,7 @@ export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomolo
     snf_markowitz_column_order, modular_rank_certification_jl, padic_snf_diagonal_jl, batch_exact_snf_sparse,
     todd_coxeter_index_jl, cayley_table_jl, cayley_convolve_jl, lift_boundary_to_cover_jl,
     fox_derivative_block_real_jl, fox_derivative_block_complex_jl, twisted_alexander_whitney_jl,
-    BarcodeResult, compute_persistence_barcodes, compute_filtration_persistence,
+    BarcodeResult, compute_persistence_barcodes, compute_filtration_persistence, compute_rips_filtration,
     surgery_relative_boundary_sparse, linking_seifert_solve_z, linking_intersection_pairing,
     surgery_handle_attach, sphere_recognition_pl,
     linking_intersection_batch, compute_cohomology_basis_jl, linking_intersect_2chains,
@@ -351,13 +351,37 @@ function _compute_filtration_persistence(simplices_flat::Vector{Int},
         return (Int[], Float64[], Float64[])
     end
 
-    # Reconstruct each simplex as an ascending vertex vector and its dimension.
+    # Reconstruct each simplex as an ascending vertex vector, then hand off to the
+    # shared reduction core (which assumes ascending vertices).
     simplices = Vector{Vector{Int}}(undef, M)
+    @inbounds for j in 1:M
+        simplices[j] = sort(simplices_flat[simplex_ptr[j]+1 : simplex_ptr[j+1]])
+    end
+    return _reduce_from_simplices(simplices, vals)
+end
+
+"""
+    _reduce_from_simplices(simplices, vals)
+
+Shared exact-reduction core behind both the flat entry point and the fused Rips
+builder. Given `simplices` (each an **ascending** vertex vector) and their
+appearance `vals`, order by `(value, dimension)`, assemble the CSR boundary, and
+run the twist/clearing Z₂ reduction. Returns `(bar_dim, bar_birth, bar_death)`.
+
+Precondition: every `simplices[j]` is sorted ascending (both callers guarantee
+this — the flat path sorts on reconstruction, the Rips DFS emits ascending
+cliques). The barcode is invariant to the order of equal-`(value, dimension)`
+simplices, so no vertex tie-break is needed in the sort key.
+"""
+function _reduce_from_simplices(simplices::Vector{Vector{Int}}, vals::Vector{Float64})
+    M = length(simplices)
+    if M <= 0
+        return (Int[], Float64[], Float64[])
+    end
+
     dims = Vector{Int}(undef, M)
     @inbounds for j in 1:M
-        verts = sort(simplices_flat[simplex_ptr[j]+1 : simplex_ptr[j+1]])
-        simplices[j] = verts
-        dims[j] = length(verts) - 1
+        dims[j] = length(simplices[j]) - 1
     end
 
     # Global filtration order: by (value, dimension). A face has value ≤ its
@@ -474,6 +498,176 @@ function compute_filtration_persistence(simplices_flat_raw, simplex_ptr_raw, val
         pyconvert(Vector{Int}, simplices_flat_raw),
         pyconvert(Vector{Int}, simplex_ptr_raw),
         pyconvert(Vector{Float64}, vals_raw),
+    )
+end
+
+"""
+    _compute_rips_filtration(points, epsilon, max_dim)
+
+Fused Vietoris–Rips persistence — build the VR complex from `points` up to
+`epsilon`/`max_dim`, give each simplex its longest-edge (max pairwise distance)
+appearance value, and run the exact twist/clearing Z₂ reduction, **all in Julia**.
+The full simplex set never crosses to Python: only the barcode and small summary
+arrays return. This removes the Python→Julia→Python clique/​boundary marshaling
+that dominates large filtration reports.
+
+The 1-skeleton and clique enumeration mirror [`compute_vietoris_rips`](@ref); the
+clique diameter is carried incrementally through the DFS (each extension by a
+vertex `v` adds the edges from `v` to the current clique), so the longest-edge
+value is exact and matches the Python `rips_filtration_values`. Cliques are emitted
+ascending, satisfying [`_reduce_from_simplices`](@ref)'s precondition.
+
+Returns `(bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+dim_count, total)`: the barcode (`death == Inf` for essential classes), the sorted
+distinct appearance values (filtration grid), and per-dimension first (minimum)
+appearance value / simplex count, plus the total simplex count.
+"""
+function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max_dim::Int)
+    n_pts = size(points, 1)
+    dim_pts = size(points, 2)
+
+    # --- 1-skeleton (parallel), same structure as compute_vietoris_rips ---
+    eps2 = epsilon^2
+    n_threads = Threads.maxthreadid()
+    I_threads = [Int[] for _ in 1:n_threads]
+    J_threads = [Int[] for _ in 1:n_threads]
+    Threads.@threads for i in 1:n_pts
+        tid = Threads.threadid()
+        I_local = I_threads[tid]
+        J_local = J_threads[tid]
+        for j in (i+1):n_pts
+            d2 = 0.0
+            @inbounds for k in 1:dim_pts
+                diff = points[i, k] - points[j, k]
+                d2 += diff * diff
+            end
+            if d2 <= eps2
+                push!(I_local, i); push!(J_local, j)
+                push!(I_local, j); push!(J_local, i)
+            end
+        end
+    end
+    I = reduce(vcat, I_threads)
+    J = reduce(vcat, J_threads)
+    adj = sparse(I, J, ones(Int, length(I)), n_pts, n_pts)
+    rowptr = adj.colptr
+    colval = adj.rowval
+
+    # Per-thread clique + value buffers.
+    cliques_threads = [Vector{Vector{Int}}() for _ in 1:n_threads]
+    vals_threads = [Float64[] for _ in 1:n_threads]
+
+    # Binary search on the (ascending) neighbour list — read-only, thread-safe.
+    is_adj = (u::Int, v::Int) -> begin
+        s = rowptr[u]; e = rowptr[u+1] - 1
+        while s <= e
+            mid = (s + e) >> 1
+            c = colval[mid]
+            if c == v
+                return true
+            elseif c < v
+                s = mid + 1
+            else
+                e = mid - 1
+            end
+        end
+        return false
+    end
+
+    sqdist = (u::Int, v::Int) -> begin
+        acc = 0.0
+        @inbounds for k in 1:dim_pts
+            diff = points[u, k] - points[v, k]
+            acc += diff * diff
+        end
+        return acc
+    end
+
+    # Bounded DFS carrying the running squared diameter (longest edge²).
+    function backtrack(local_cliques::Vector{Vector{Int}}, local_vals::Vector{Float64},
+                       current_clique::Vector{Int}, current_val2::Float64,
+                       candidates::Vector{Int})
+        push!(local_cliques, copy(current_clique))
+        push!(local_vals, sqrt(current_val2))
+        if length(current_clique) == max_dim + 1
+            return
+        end
+        for (i, v) in enumerate(candidates)
+            new_candidates = Int[]
+            for j in (i+1):length(candidates)
+                w = candidates[j]
+                if is_adj(v, w)
+                    push!(new_candidates, w)
+                end
+            end
+            # Extending by v adds edges v–u for every u already in the clique.
+            new_val2 = current_val2
+            @inbounds for u in current_clique
+                dv = sqdist(v, u)
+                if dv > new_val2
+                    new_val2 = dv
+                end
+            end
+            push!(current_clique, v)
+            backtrack(local_cliques, local_vals, current_clique, new_val2, new_candidates)
+            pop!(current_clique)
+        end
+    end
+
+    Threads.@threads for u in 1:n_pts
+        tid = Threads.threadid()
+        candidates = Int[]
+        for ptr in rowptr[u]:(rowptr[u+1]-1)
+            v = colval[ptr]
+            if v > u
+                push!(candidates, v)
+            end
+        end
+        backtrack(cliques_threads[tid], vals_threads[tid], Int[u], 0.0, candidates)
+    end
+
+    cliques = reduce(vcat, cliques_threads)
+    vals = reduce(vcat, vals_threads)
+    M = length(cliques)
+
+    # Barcode via the shared reduction core (cliques are ascending by construction).
+    (bar_dim, bar_birth, bar_death) = _reduce_from_simplices(cliques, vals)
+
+    # Distinct appearance-value grid + per-dimension first value / count.
+    eps_values = sort(unique(vals))
+    dim_first = Dict{Int, Float64}()
+    dim_cnt = Dict{Int, Int}()
+    @inbounds for j in 1:M
+        d = length(cliques[j]) - 1
+        v = vals[j]
+        if haskey(dim_first, d)
+            v < dim_first[d] && (dim_first[d] = v)
+            dim_cnt[d] += 1
+        else
+            dim_first[d] = v
+            dim_cnt[d] = 1
+        end
+    end
+    dim_ids = sort(collect(keys(dim_first)))
+    dim_first_val = Float64[dim_first[d] for d in dim_ids]
+    dim_count = Int[dim_cnt[d] for d in dim_ids]
+
+    return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+            dim_count, M)
+end
+
+"""
+    compute_rips_filtration(points, epsilon, max_dim)
+
+PythonCall entry point for [`_compute_rips_filtration`](@ref); materialises the
+NumPy point buffer as a native `Matrix{Float64}` (the lazy PyArray is not
+thread-safe to read from the `@threads` loops) and runs the fused build+reduce.
+"""
+function compute_rips_filtration(points_raw, epsilon_raw, max_dim_raw)
+    return _compute_rips_filtration(
+        pyconvert(Matrix{Float64}, points_raw),
+        pyconvert(Float64, epsilon_raw),
+        pyconvert(Int, max_dim_raw),
     )
 end
 
@@ -2960,6 +3154,9 @@ end
             Int[0, 1, 2, 3, 5, 7, 9, 12],
             Float64[0, 0, 0, 1, 1, 1, 1],
         )
+
+        # --- Fused Rips filtration (build + longest-edge values + reduction) ---
+        _compute_rips_filtration(pts_3d, 5.0, 2)
 
         # --- Alexander-Whitney Cup Product ---
         # Using strictly typed Dicts to avoid PyDict overhead during warm-up
