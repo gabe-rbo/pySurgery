@@ -534,6 +534,17 @@ class JuliaBridge:
                 lambda: self.group_ring_multiply({(0,): 1}, {(0,): 1}, 2),
             ),
             (
+                # The twist/clearing persistence reducer: FiltrationReport's hot
+                # path once the complex is built. Warm it on a filled triangle so
+                # the first real barcode does not pay its JIT cost.
+                "filtration_persistence",
+                lambda: self.compute_filtration_persistence(
+                    np.array([0, 1, 2, 0, 1, 1, 2, 0, 2, 0, 1, 2], dtype=np.int64),
+                    np.array([0, 1, 2, 3, 5, 7, 9, 12], dtype=np.int64),
+                    np.array([0, 0, 0, 1, 1, 1, 1], dtype=np.float64),
+                ),
+            ),
+            (
                 "pi1_abelianization",
                 lambda: self.abelianize_and_bhs_rank(["a"], [["a", "a"]]),
             ),
@@ -2274,8 +2285,52 @@ class JuliaBridge:
                 "dim": int(b.dim),
                 "multiplicity": int(b.multiplicity)
             })
-            
+
         return barcodes
+
+    def compute_filtration_persistence(
+        self,
+        simplices_flat: np.ndarray,
+        simplex_ptr: np.ndarray,
+        vals: np.ndarray,
+    ) -> list[tuple[int, float, float]]:
+        """Exact Z2 persistence of a monotone filtration via twist/clearing in Julia.
+
+        This is the high-performance replacement for the pure-Python column
+        reduction in ``FiltrationReport``: a single filtration-ordered boundary
+        reduction with the Chen-Kerber clearing optimisation. The result is exact
+        (identical to the naive reduction), not an approximation.
+
+        Args:
+            simplices_flat: 1-D int array, the vertices of every simplex of the
+                maximal complex concatenated in any order.
+            simplex_ptr: int array of length ``n_simplices + 1``; simplex ``j``
+                spans ``simplices_flat[simplex_ptr[j]:simplex_ptr[j+1]]``.
+            vals: float array of per-simplex appearance values (aligned with
+                ``simplex_ptr``).
+
+        Returns:
+            A list of ``(dim, birth, death)`` tuples; ``death`` is ``float('inf')``
+            for essential classes and zero-persistence pairs are omitted.
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        self.require_julia()
+        try:
+            bar_dim, bar_birth, bar_death = self.backend.compute_filtration_persistence(
+                np.ascontiguousarray(simplices_flat, dtype=np.int64),
+                np.ascontiguousarray(simplex_ptr, dtype=np.int64),
+                np.ascontiguousarray(vals, dtype=np.float64),
+            )
+            # .tolist() is a single C-level conversion; far cheaper than a Python
+            # per-element loop over a potentially multi-million-entry barcode.
+            dims = np.asarray(bar_dim, dtype=np.int64).tolist()
+            births = np.asarray(bar_birth, dtype=np.float64).tolist()
+            deaths = np.asarray(bar_death, dtype=np.float64).tolist()
+            return list(zip(dims, births, deaths))
+        except Exception as e:
+            raise RuntimeError(f"compute_filtration_persistence failed: {e!r}")
 
     def simplify_jl(self, simplices: list[tuple]) -> tuple[list[tuple], dict[int, list[int]], dict[tuple, list[tuple]]]:
         """Executes high-performance topology-preserving simplification in Julia.

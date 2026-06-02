@@ -98,6 +98,7 @@ class _BaseFiltrationReport:
         n_samples: Optional[int] = None,
         eps_max: Optional[float] = None,
         analyze_manifolds: bool = True,
+        compute_torsion: bool = False,
         **kwargs,
     ):
         """Build and compute the filtration report.
@@ -108,7 +109,9 @@ class _BaseFiltrationReport:
                 the distribution of appearance values.
             max_dimension: Maximum simplex dimension to build.
             coefficient_ring: Coefficient ring (manifold/component path).
-            backend: 'auto', 'julia', or 'python'.
+            backend: 'auto', 'julia', or 'python'. Controls both the geometry
+                builders and the persistence reducer; 'python' forces the
+                pure-Python column reduction (the slow reference path).
             track_connected_components: Track per-component evolution (costly).
             n_samples: If given, select this many evenly-spaced thresholds from
                 the full set of distinct appearance values. If None, all distinct
@@ -117,6 +120,13 @@ class _BaseFiltrationReport:
                 each method picks a sensible default.
             analyze_manifolds: Run the per-threshold homology-manifold check
                 (auto-skipped above _MANIFOLD_MAX_SIMPLICES simplices).
+            compute_torsion: If True, additionally compute exact *integer*
+                homology (free rank + torsion coefficients) of the sub-complex at
+                every reported threshold and surface the torsion in the report.
+                Default False, in which case Betti numbers come from the fast Z2
+                persistence barcode (mod-2 ranks). Torsion uses Smith-normal-form
+                per threshold and is markedly heavier — prefer it with a coarse
+                grid (``n_samples``) or a modest ``eps_max``.
             **kwargs: Method-specific options (e.g. ``k``, ``n_landmarks``).
         """
         self.points = np.asarray(points, dtype=np.float64)
@@ -127,6 +137,7 @@ class _BaseFiltrationReport:
         self.n_samples = int(n_samples) if n_samples is not None else None
         self.eps_max = eps_max
         self.analyze_manifolds = analyze_manifolds
+        self.compute_torsion = bool(compute_torsion)
         self.kwargs = kwargs
 
         self._user_epsilons = list(epsilons) if epsilons is not None else None
@@ -251,15 +262,75 @@ class _BaseFiltrationReport:
         sc._coordinates = np.asarray(coords, dtype=np.float64)
         return sc
 
+    def _compute_barcode(self, simplices_table: dict, filt: dict) -> list:
+        """Z2 persistence barcode, via the Julia twist/clearing reducer when available.
+
+        Dispatches the one expensive step (the boundary-matrix reduction) to the
+        compiled Julia kernel ``compute_filtration_persistence`` -- an exact,
+        filtration-ordered reduction with Chen-Kerber clearing that returns the
+        identical barcode to :meth:`_z2_persistence_barcode` but orders of
+        magnitude faster. Falls back to the pure-Python reference reducer when
+        ``backend == 'python'`` or Julia is unavailable / errors.
+
+        Args:
+            simplices_table: dim -> list of simplices (sorted vertex tuples).
+            filt: Mapping of simplex to appearance value.
+
+        Returns:
+            A list of ``(dim, birth, death)`` intervals (``death == inf`` for
+            essential classes), identical in content to the reference reducer.
+        """
+        if self.backend != "python":
+            try:
+                from pysurgery.bridge.julia_bridge import julia_engine
+                if julia_engine.available:
+                    flat, ptr, vals = self._flatten_for_persistence(simplices_table, filt)
+                    return julia_engine.compute_filtration_persistence(flat, ptr, vals)
+            except Exception as exc:  # pragma: no cover - exercised only when Julia errors
+                warnings.warn(
+                    f"Julia persistence reducer failed ({exc!r}); falling back to the "
+                    "pure-Python reduction.",
+                    stacklevel=2,
+                )
+        return self._z2_persistence_barcode(simplices_table, filt)
+
+    @staticmethod
+    def _flatten_for_persistence(simplices_table: dict, filt: dict):
+        """Flatten ``{dim: [simplices]}`` + values into the Julia reducer's arrays.
+
+        Args:
+            simplices_table: dim -> list of simplices (sorted vertex tuples).
+            filt: Mapping of simplex to appearance value.
+
+        Returns:
+            Tuple ``(simplices_flat, simplex_ptr, vals)`` of numpy arrays: all
+            vertices concatenated, the per-simplex offsets (length ``M + 1``), and
+            each simplex's appearance value. Order is arbitrary -- the Julia kernel
+            re-derives the filtration order itself.
+        """
+        flat: List[int] = []
+        ptr: List[int] = [0]
+        vals: List[float] = []
+        for d in sorted(simplices_table.keys()):
+            for s in simplices_table[d]:
+                flat.extend(s)
+                ptr.append(len(flat))
+                vals.append(float(filt.get(s, 0.0)))
+        return (np.asarray(flat, dtype=np.int64),
+                np.asarray(ptr, dtype=np.int64),
+                np.asarray(vals, dtype=np.float64))
+
     @staticmethod
     def _z2_persistence_barcode(simplices_table: dict, filt: dict) -> list:
         """Persistent-homology barcode over Z2 by standard column reduction.
 
-        One reduction pass yields every class's birth/death, so Betti numbers at
-        all thresholds come from a single computation (the Ripser/GUDHI approach);
-        reported Betti numbers are therefore mod-2 (equal to integer ranks unless
-        the complex carries 2-torsion). Returns ``(dim, birth, death)`` intervals
-        with ``death == inf`` for essential classes.
+        Pure-Python reference implementation: kept as the correctness oracle and
+        as the fallback when Julia is unavailable. One reduction pass yields every
+        class's birth/death, so Betti numbers at all thresholds come from a single
+        computation (the Ripser/GUDHI approach); reported Betti numbers are
+        therefore mod-2 (equal to integer ranks unless the complex carries
+        2-torsion). Returns ``(dim, birth, death)`` intervals with ``death == inf``
+        for essential classes.
         """
         import math
         ordered = []
@@ -304,22 +375,44 @@ class _BaseFiltrationReport:
 
     @staticmethod
     def _betti_from_barcode(barcode: list, eps: float, tol: float = 1e-9) -> dict:
-        """Betti numbers at a threshold from a persistence barcode.
-
-        Args:
-            barcode: List of ``(dim, birth, death)`` intervals.
-            eps: The filtration threshold.
-            tol: Relative tolerance for the half-open ``birth <= eps < death`` test.
-
-        Returns:
-            Dict mapping each dimension to the number of bars alive at ``eps``.
-        """
+        """Betti numbers at a single threshold from a persistence barcode."""
         b: dict = {}
         e = eps + abs(eps) * tol + 1e-12
         for dim, birth, death in barcode:
             if birth <= e < death:
                 b[dim] = b.get(dim, 0) + 1
         return b
+
+    @staticmethod
+    def _all_betti_from_barcode(barcode: list, epsilons: list) -> list:
+        """Betti numbers at all thresholds via per-dimension prefix counts.
+
+        A bar ``(birth, death)`` is alive at ``e`` iff ``birth <= e < death``, so
+        ``betti_d(e) = #{birth_d <= e} - #{death_d <= e}``. Each side is a single
+        ``searchsorted`` over the sorted births/deaths of dimension ``d`` -- O((bars
+        + thresholds) log bars) time and *linear* memory. This replaces the former
+        dense ``(bars x thresholds)`` boolean matrix, which reached tens of GiB (and
+        swapped for hours) on large complexes. Returns one dict per epsilon.
+        """
+        import math
+        if not barcode or not epsilons:
+            return [{} for _ in epsilons]
+        eps_arr = np.asarray(epsilons, dtype=np.float64)
+        e_arr = eps_arr + np.abs(eps_arr) * 1e-9 + 1e-12
+        births = np.array([b for _, b, _ in barcode], dtype=np.float64)
+        deaths = np.array([d if d != math.inf else np.inf for _, _, d in barcode], dtype=np.float64)
+        dims_arr = np.array([d for d, _, _ in barcode], dtype=np.int64)
+
+        result: list = [dict() for _ in epsilons]
+        for d in np.unique(dims_arr):
+            mask = dims_arr == d
+            born = np.searchsorted(np.sort(births[mask]), e_arr, side="right")
+            died = np.searchsorted(np.sort(deaths[mask]), e_arr, side="right")
+            betti = born - died
+            di = int(d)
+            for j in np.nonzero(betti)[0]:
+                result[int(j)][di] = int(betti[j])
+        return result
 
     def _slice_complex(self, SC, max_sc, filt, eps, coords):
         """Sub-complex of ``max_sc`` containing simplices appearing by ``eps``.
@@ -357,8 +450,10 @@ class _BaseFiltrationReport:
         """Run the filtration engine and populate ``results``/``barcode``/``stability_data``.
 
         Builds the maximal complex once, derives the threshold grid, reduces the
-        Z2 persistence barcode, and walks the grid collecting Betti numbers (from
-        the barcode) plus optional manifold and connected-component invariants.
+        Z2 persistence barcode (via the Julia twist/clearing kernel when available),
+        and walks the grid collecting Betti numbers (read from the barcode by a
+        memory-flat searchsorted pass) plus optional manifold, integer-torsion, and
+        connected-component invariants.
         """
         from pysurgery.topology.complexes import SimplicialComplex
         SC = SimplicialComplex
@@ -370,7 +465,7 @@ class _BaseFiltrationReport:
         self.epsilons = self._user_epsilons if self._user_epsilons is not None \
             else self._default_grid_from_values(filt)
 
-        barcode = self._z2_persistence_barcode(max_sc._simplices_table, filt) \
+        barcode = self._compute_barcode(max_sc._simplices_table, filt) \
             if max_sc._simplices_table else []
         self.barcode = barcode
 
@@ -389,19 +484,38 @@ class _BaseFiltrationReport:
             )
             self.analyze_manifolds = False
 
+        if self.compute_torsion and total > self._MANIFOLD_MAX_SIMPLICES:
+            warnings.warn(
+                f"compute_torsion=True on a large complex ({total:,} simplices): exact "
+                "integer homology runs a Smith-normal-form solve at every reported "
+                "threshold and may be slow. Coarsen with n_samples / eps_max if needed.",
+                stacklevel=2,
+            )
+
         def complex_dim_at(eps):
             ds = [d for d, f0 in dim_first_appear.items() if f0 <= eps + 1e-12]
             return max(ds) if ds else -1
+
+        all_bettis = self._all_betti_from_barcode(barcode, self.epsilons)
 
         last_invariants = None
         active_rows: dict = {}
         merged_rows_history: dict = {}
         next_available_row_idx = 0
 
-        for eps in self.epsilons:
-            need_complex = self.analyze_manifolds or self.track_connected_components
+        for idx, eps in enumerate(self.epsilons):
+            need_complex = (self.analyze_manifolds or self.track_connected_components
+                            or self.compute_torsion)
             sc = self._slice_complex(SC, max_sc, filt, eps, coords) if need_complex else None
-            bettis = self._betti_from_barcode(barcode, eps)
+            bettis = all_bettis[idx]
+
+            torsion = {}
+            if self.compute_torsion:
+                hz = sc.homology(backend=self.backend) if sc is not None else {}
+                if not isinstance(hz, dict):
+                    hz = {}
+                torsion = {int(d): [int(t) for t in tors]
+                           for d, (_rank, tors) in hz.items() if tors}
 
             if self.analyze_manifolds:
                 is_manifold, dim, diag = sc.is_homology_manifold(backend=self.backend)
@@ -421,6 +535,7 @@ class _BaseFiltrationReport:
                 "is_manifold_str": manifold_str,
                 "is_closed": closed,
                 "dimension": dim_repr,
+                "torsion": torsion,
             }
 
             comp_info_dict = {}
@@ -477,6 +592,7 @@ class _BaseFiltrationReport:
                 "is_manifold": manifold_str,
                 "is_closed": closed,
                 "dimension": dim_repr,
+                "torsion": torsion,
                 "comp_info_map": comp_info_dict.copy() if self.track_connected_components else {},
             })
 
@@ -498,8 +614,9 @@ class _BaseFiltrationReport:
 
         Returns:
             A Markdown string with the Betti-number table, the most-persistent
-            homologies, the manifold-status table, and (when tracked) the
-            connected-components table.
+            homologies, the manifold-status table, the integer-torsion table (when
+            ``compute_torsion`` is set), and (when tracked) the connected-components
+            table.
         """
         if not self.results:
             return "No filtration steps recorded."
@@ -547,6 +664,26 @@ class _BaseFiltrationReport:
         mani_rows_init.append(["Dimension"] + [res["dimension"] for res in self.results])
         mani_report = "\n# Manifold Status Report\n" + format_table_with_dynamic_eps(mani_rows_init, reported_epsilons)
 
+        tors_report = ""
+        if self.compute_torsion:
+            tors_dims = sorted({d for res in self.results for d in res.get("torsion", {})})
+
+            def _fmt_torsion(coeffs):
+                if not coeffs:
+                    return "0"
+                return " + ".join(f"Z/{t}" for t in sorted(coeffs))
+
+            tors_rows_init = [[f"Torsion \\ {eps_label}"]]
+            if tors_dims:
+                for d in tors_dims:
+                    tors_rows_init.append(
+                        [f"H_{d}"] + [_fmt_torsion(res.get("torsion", {}).get(d, [])) for res in self.results]
+                    )
+            else:
+                tors_rows_init.append(["(none)"] + ["0" for _ in self.results])
+            tors_report = ("\n\n# Integer Torsion Report (exact H_*(.; Z) per threshold)\n"
+                           + format_table_with_dynamic_eps(tors_rows_init, reported_epsilons))
+
         comp_report = ""
         if self.track_connected_components:
             comp_rows_init = [[f"Component \\ {eps_label}"]]
@@ -554,7 +691,7 @@ class _BaseFiltrationReport:
                 comp_rows_init.append([f"C_{i+1}"] + [res["comp_info_map"].get(i, "-") for res in self.results])
             comp_report = "\n\n# Connected Components Report\n" + format_table_with_dynamic_eps(comp_rows_init, reported_epsilons)
 
-        return betti_report + "\n" + "\n".join(stab_lines) + "\n" + mani_report + comp_report
+        return betti_report + "\n" + "\n".join(stab_lines) + "\n" + mani_report + tors_report + comp_report
 
     def plot(self) -> Any:
         """Build an interactive Plotly figure of the Betti curves.

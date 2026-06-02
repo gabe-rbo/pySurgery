@@ -16,7 +16,7 @@ export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomolo
     snf_markowitz_column_order, modular_rank_certification_jl, padic_snf_diagonal_jl, batch_exact_snf_sparse,
     todd_coxeter_index_jl, cayley_table_jl, cayley_convolve_jl, lift_boundary_to_cover_jl,
     fox_derivative_block_real_jl, fox_derivative_block_complex_jl, twisted_alexander_whitney_jl,
-    BarcodeResult, compute_persistence_barcodes,
+    BarcodeResult, compute_persistence_barcodes, compute_filtration_persistence,
     surgery_relative_boundary_sparse, linking_seifert_solve_z, linking_intersection_pairing,
     surgery_handle_attach, sphere_recognition_pl,
     linking_intersection_batch, compute_cohomology_basis_jl, linking_intersect_2chains,
@@ -218,6 +218,263 @@ function compute_persistence_barcodes(boundary_matrices::Dict{Int, <:SparseMatri
     end
 
     return barcodes
+end
+
+# Symmetric difference of two ascending Int vectors written into `dst` == the Z₂
+# sum of two sparse columns (shared rows cancel mod 2). Reusing `dst` across the
+# reduction keeps the inner loop allocation-free. Result stays ascending so its
+# pivot is its last entry.
+function _symdiff_into!(dst::Vector{Int}, a::Vector{Int}, b::Vector{Int})
+    na = length(a); nb = length(b)
+    resize!(dst, na + nb)
+    i = 1; j = 1; r = 0
+    @inbounds while i <= na && j <= nb
+        ai = a[i]; bj = b[j]
+        if ai < bj
+            r += 1; dst[r] = ai; i += 1
+        elseif ai > bj
+            r += 1; dst[r] = bj; j += 1
+        else
+            i += 1; j += 1            # equal row index → cancels
+        end
+    end
+    @inbounds while i <= na
+        r += 1; dst[r] = a[i]; i += 1
+    end
+    @inbounds while j <= nb
+        r += 1; dst[r] = b[j]; j += 1
+    end
+    resize!(dst, r)
+    return dst
+end
+
+# Twist/clearing Z₂ reduction over a CSR boundary matrix. Column `r`'s facet ranks
+# are `bnd_idx[bnd_ptr[r] : bnd_ptr[r+1]-1]` (ascending; empty for vertices).
+# Dimensions are reduced top-down so a discovered pivot's column (a positive
+# simplex) is cleared rather than re-reduced. Two scratch buffers are ping-ponged
+# so each column XOR reuses storage; only a pivot column's final reduced form is
+# copied into `Rcols` for later use. Returns `(bar_dim, bar_birth, bar_death)`.
+function _reduce_persistence(ord_dim::Vector{Int}, ord_val::Vector{Float64},
+                             maxdim::Int, bnd_ptr::Vector{Int}, bnd_idx::Vector{Int})
+    M = length(ord_dim)
+    cols_by_dim = [Int[] for _ in 0:max(maxdim, 0)]
+    @inbounds for r in 1:M
+        push!(cols_by_dim[ord_dim[r] + 1], r)
+    end
+
+    # Pivot rows and column ranks are dense in 1..M, so plain arrays beat Dicts.
+    pivot_of_row = zeros(Int, M)           # pivot row rank → owning column rank (0 = none)
+    Rcols = Vector{Vector{Int}}(undef, M)  # reduced column stored at each pivot column
+    low_of = zeros(Int, M)                 # pivot row of each column (0 if zeroed)
+    cleared = falses(M)                    # positive simplices removed by clearing
+
+    col = Int[]
+    scratch = Int[]
+    for d in maxdim:-1:1
+        @inbounds for r in cols_by_dim[d + 1]
+            if cleared[r]
+                continue                 # known positive (birth) — skip entirely
+            end
+            lo = bnd_ptr[r]; hi = bnd_ptr[r + 1] - 1
+            resize!(col, hi - lo + 1)
+            for t in lo:hi
+                col[t - lo + 1] = bnd_idx[t]
+            end
+            while !isempty(col)
+                low = col[end]
+                owner = pivot_of_row[low]   # 0 when this pivot row is unclaimed
+                if owner == 0
+                    break
+                end
+                _symdiff_into!(scratch, col, Rcols[owner])
+                col, scratch = scratch, col
+            end
+            if !isempty(col)
+                low = col[end]
+                pivot_of_row[low] = r
+                low_of[r] = low
+                Rcols[r] = copy(col)
+                cleared[low] = true      # pivot simplex is positive → clear it
+            end
+        end
+    end
+
+    bar_dim = Int[]
+    bar_birth = Float64[]
+    bar_death = Float64[]
+    @inbounds for r in 1:M
+        lr = low_of[r]
+        if lr > 0
+            if ord_val[r] > ord_val[lr]
+                push!(bar_dim, ord_dim[lr])
+                push!(bar_birth, ord_val[lr])
+                push!(bar_death, ord_val[r])
+            end
+        elseif !cleared[r]
+            push!(bar_dim, ord_dim[r])
+            push!(bar_birth, ord_val[r])
+            push!(bar_death, Inf)
+        end
+    end
+    return (bar_dim, bar_birth, bar_death)
+end
+
+"""
+    _compute_filtration_persistence(simplices_flat, simplex_ptr, vals)
+
+Exact Z₂ persistent homology of a monotone simplicial filtration.
+
+This is the standard boundary-matrix reduction (so the result is identical to a
+naïve textbook reduction — *not* an approximation) accelerated with the
+Chen–Kerber *twist*/clearing optimisation. Clearing removes provably-redundant
+work only; the pivots — hence every bar — are unchanged.
+
+Inputs are a flat description of the maximal complex in *any* order:
+- `simplices_flat` : concatenated vertex indices of every simplex.
+- `simplex_ptr`    : 0-based offsets, length `M+1`; simplex `j` (1-based) spans
+                     `simplices_flat[simplex_ptr[j]+1 : simplex_ptr[j+1]]`.
+- `vals`           : appearance value of each simplex (aligned with `simplex_ptr`).
+
+The simplices are (re)ordered here by `(value, dimension)` — a valid filtration
+order (faces precede cofaces) — and the boundary is assembled as a CSR matrix of
+facet ranks before the reduction.
+
+Returns `(bar_dim, bar_birth, bar_death)`; `bar_death == Inf` marks essential
+(never-dying) classes. Zero-persistence pairs (`death == birth`) are omitted,
+matching the Python reference.
+"""
+function _compute_filtration_persistence(simplices_flat::Vector{Int},
+                                         simplex_ptr::Vector{Int},
+                                         vals::Vector{Float64})
+    M = length(simplex_ptr) - 1
+    if M <= 0
+        return (Int[], Float64[], Float64[])
+    end
+
+    # Reconstruct each simplex as an ascending vertex vector and its dimension.
+    simplices = Vector{Vector{Int}}(undef, M)
+    dims = Vector{Int}(undef, M)
+    @inbounds for j in 1:M
+        verts = sort(simplices_flat[simplex_ptr[j]+1 : simplex_ptr[j+1]])
+        simplices[j] = verts
+        dims[j] = length(verts) - 1
+    end
+
+    # Global filtration order: by (value, dimension). A face has value ≤ its
+    # cofaces, and at equal value strictly smaller dimension, so faces always
+    # precede cofaces — a valid reduction order. Among equal-(value,dimension)
+    # simplices any order is valid and the barcode is invariant, so we omit a
+    # vertex tie-break (a Vector in the sort key would heap-allocate on every
+    # comparison). isbits (Float64, Int) keys keep the sort allocation-free.
+    order = collect(1:M)
+    sort!(order, by = j -> (vals[j], dims[j]), alg = QuickSort)
+
+    ord_dim = Vector{Int}(undef, M)
+    ord_val = Vector{Float64}(undef, M)
+    ord_simplex = Vector{Vector{Int}}(undef, M)
+    maxdim = 0
+    maxvert = 0
+    @inbounds for r in 1:M
+        j = order[r]
+        s = simplices[j]
+        ord_dim[r] = dims[j]
+        ord_val[r] = vals[j]
+        ord_simplex[r] = s
+        if dims[j] > maxdim
+            maxdim = dims[j]
+        end
+        if !isempty(s) && s[end] > maxvert
+            maxvert = s[end]
+        end
+    end
+
+    # CSR boundary: column r (rank order) holds the ascending ranks of its facets;
+    # vertices (dim 0) have none. Facet ranks come from an index mapping each
+    # simplex to its rank.
+    bnd_ptr = Vector{Int}(undef, M + 1)
+    bnd_ptr[1] = 1
+    @inbounds for r in 1:M
+        k = ord_dim[r] + 1
+        bnd_ptr[r + 1] = bnd_ptr[r] + (k >= 2 ? k : 0)
+    end
+    bnd_idx = Vector{Int}(undef, bnd_ptr[M + 1] - 1)
+
+    # Facet lookup maps a (d-1)-simplex to its global rank. We pack a simplex's
+    # ascending vertices into a single Int when they fit in 62 bits (the common
+    # case) -- Int keys hash far faster than Vector keys. Vertices are shifted by
+    # +1 so no slot is zero: a leading 0 would otherwise make e.g. {0,2,3} collide
+    # with the edge {2,3}. With the +1 shift, codes of different lengths occupy
+    # disjoint magnitude ranges, so packing is globally injective. Otherwise we
+    # fall back to Vector keys, correct at any size.
+    b = 8 * sizeof(Int) - leading_zeros(maxvert + 1)
+    if (maxdim + 1) * b <= 62
+        index = Dict{Int, Int}()
+        sizehint!(index, M)
+        @inbounds for r in 1:M
+            s = ord_simplex[r]
+            code = 0
+            for v in s
+                code = (code << b) | (v + 1)
+            end
+            index[code] = r
+        end
+        @inbounds for r in 1:M
+            s = ord_simplex[r]
+            k = length(s)
+            k < 2 && continue
+            base = bnd_ptr[r]
+            for p in 1:k
+                code = 0
+                for q in 1:k
+                    if q != p
+                        code = (code << b) | (s[q] + 1)
+                    end
+                end
+                bnd_idx[base + p - 1] = index[code]
+            end
+            sort!(view(bnd_idx, bnd_ptr[r]:bnd_ptr[r + 1] - 1))
+        end
+    else
+        vindex = Dict{Vector{Int}, Int}()
+        sizehint!(vindex, M)
+        @inbounds for r in 1:M
+            vindex[ord_simplex[r]] = r
+        end
+        buf = Int[]
+        @inbounds for r in 1:M
+            s = ord_simplex[r]
+            k = length(s)
+            k < 2 && continue
+            base = bnd_ptr[r]
+            resize!(buf, k - 1)
+            for p in 1:k
+                idx = 1
+                for q in 1:k
+                    if q != p
+                        buf[idx] = s[q]; idx += 1
+                    end
+                end
+                bnd_idx[base + p - 1] = vindex[buf]
+            end
+            sort!(view(bnd_idx, bnd_ptr[r]:bnd_ptr[r + 1] - 1))
+        end
+    end
+
+    return _reduce_persistence(ord_dim, ord_val, maxdim, bnd_ptr, bnd_idx)
+end
+
+"""
+    compute_filtration_persistence(simplices_flat, simplex_ptr, vals)
+
+PythonCall entry point for [`_compute_filtration_persistence`](@ref); materialises
+the NumPy buffers as native Julia vectors and runs the exact Z₂ reduction.
+"""
+function compute_filtration_persistence(simplices_flat_raw, simplex_ptr_raw, vals_raw)
+    return _compute_filtration_persistence(
+        pyconvert(Vector{Int}, simplices_flat_raw),
+        pyconvert(Vector{Int}, simplex_ptr_raw),
+        pyconvert(Vector{Float64}, vals_raw),
+    )
 end
 
 const HAS_INTEGER_SNF = try
@@ -2347,9 +2604,10 @@ function compute_vietoris_rips(points_raw, epsilon_raw, max_dim_raw)
     rowptr = adj.colptr
     colval = adj.rowval
 
-    cliques = Vector{Vector{Int64}}()
+    # Per-thread clique buffers — same pattern as 1-skeleton above.
+    cliques_threads = [Vector{Vector{Int64}}() for _ in 1:Threads.maxthreadid()]
 
-    # Optimized adjacency check for sorted neighbor lists
+    # Optimized adjacency check for sorted neighbor lists (read-only, thread-safe).
     function is_adj(u::Int, v::Int)
         start_idx = rowptr[u]
         end_idx = rowptr[u+1] - 1
@@ -2366,9 +2624,10 @@ function compute_vietoris_rips(points_raw, epsilon_raw, max_dim_raw)
         return false
     end
 
-    # Bounded DFS for cliques
-    function backtrack(current_clique::Vector{Int64}, candidates::Vector{Int64})
-        push!(cliques, copy(current_clique))
+    # Bounded DFS — writes only to local_cliques, so callers from different
+    # threads never touch the same buffer.
+    function backtrack(local_cliques::Vector{Vector{Int64}}, current_clique::Vector{Int64}, candidates::Vector{Int64})
+        push!(local_cliques, copy(current_clique))
 
         if length(current_clique) == max_dim + 1
             return
@@ -2383,12 +2642,15 @@ function compute_vietoris_rips(points_raw, epsilon_raw, max_dim_raw)
                 end
             end
             push!(current_clique, v)
-            backtrack(current_clique, new_candidates)
+            backtrack(local_cliques, current_clique, new_candidates)
             pop!(current_clique)
         end
     end
 
-    for u in 1:n_pts
+    # 3. Clique enumeration - Parallelized
+    Threads.@threads for u in 1:n_pts
+        tid = Threads.threadid()
+        local_cliques = cliques_threads[tid]
         candidates = Int64[]
         for ptr in rowptr[u]:(rowptr[u+1]-1)
             v = colval[ptr]
@@ -2396,8 +2658,10 @@ function compute_vietoris_rips(points_raw, epsilon_raw, max_dim_raw)
                 push!(candidates, v)
             end
         end
-        backtrack([u], candidates)
+        backtrack(local_cliques, [u], candidates)
     end
+
+    cliques = reduce(vcat, cliques_threads)
 
     # Return 0-indexed for Python consistency
     return [c .- 1 for c in cliques]
@@ -2688,6 +2952,14 @@ end
         _compute_boundary_data_internal_flat(fv, fo, 2)
         compute_boundary_payload_from_flat_simplices(fv, fo, 2)
         compute_boundary_mod2_matrix([[0, 1, 2]], [[0, 1], [1, 2], [2, 0]])
+
+        # --- Filtration persistence (twist/clearing Z₂ reduction) ---
+        # Filled triangle {0,1,2}: 3 vertices @0, 3 edges @1, 1 triangle @1.
+        _compute_filtration_persistence(
+            Int[0, 1, 2, 0, 1, 1, 2, 0, 2, 0, 1, 2],
+            Int[0, 1, 2, 3, 5, 7, 9, 12],
+            Float64[0, 0, 0, 1, 1, 1, 1],
+        )
 
         # --- Alexander-Whitney Cup Product ---
         # Using strictly typed Dicts to avoid PyDict overhead during warm-up
