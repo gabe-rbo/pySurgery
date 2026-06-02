@@ -95,7 +95,7 @@ class _BaseFiltrationReport:
         backend: str = "auto",
         track_connected_components: bool = False,
         *,
-        n_steps: int = 48,
+        n_samples: Optional[int] = None,
         eps_max: Optional[float] = None,
         analyze_manifolds: bool = True,
         **kwargs,
@@ -110,7 +110,9 @@ class _BaseFiltrationReport:
             coefficient_ring: Coefficient ring (manifold/component path).
             backend: 'auto', 'julia', or 'python'.
             track_connected_components: Track per-component evolution (costly).
-            n_steps: Number of thresholds in the default grid.
+            n_samples: If given, select this many evenly-spaced thresholds from
+                the full set of distinct appearance values. If None, all distinct
+                appearance values are used.
             eps_max: Cap for the parameter range. Method-dependent meaning; if None
                 each method picks a sensible default.
             analyze_manifolds: Run the per-threshold homology-manifold check
@@ -122,7 +124,7 @@ class _BaseFiltrationReport:
         self.coefficient_ring = coefficient_ring
         self.backend = backend
         self.track_connected_components = track_connected_components
-        self.n_steps = max(2, int(n_steps))
+        self.n_samples = int(n_samples) if n_samples is not None else None
         self.eps_max = eps_max
         self.analyze_manifolds = analyze_manifolds
         self.kwargs = kwargs
@@ -220,6 +222,9 @@ class _BaseFiltrationReport:
             vals = vals[vals <= float(self.eps_max)]
         if vals.size == 0:
             return [0.0]
+        if self.n_samples is not None and vals.size > self.n_samples:
+            indices = np.unique(np.round(np.linspace(0, vals.size - 1, self.n_samples)).astype(int))
+            vals = vals[indices]
         return sorted({0.0, *(float(x) for x in vals)})
 
     @staticmethod
@@ -607,7 +612,7 @@ class _BaseFiltrationReport:
         """
         pts = cls._warmup_points() if points is None else np.asarray(points, dtype=np.float64)
         try:
-            cls(pts, n_steps=5, analyze_manifolds=False, **cls._warmup_kwargs)
+            cls(pts, n_samples=5, analyze_manifolds=False, **cls._warmup_kwargs)
             return True
         except Exception as exc:  # pragma: no cover - warmup is best-effort
             warnings.warn(f"{cls.__name__}.warmup failed: {exc!r}", stacklevel=2)
@@ -816,7 +821,7 @@ def FiltrationReport(
         mode: One of ``vietoris_rips``/``rips``, ``cknn``, ``alpha``/``delaunay``,
             ``delaunay_rips``, ``delaunay_cech``, ``witness``.
         **kwargs: Method-specific options forwarded to the report class (e.g.
-            ``k``, ``n_landmarks``, ``n_steps``, ``eps_max``, ``analyze_manifolds``).
+            ``k``, ``n_landmarks``, ``n_samples``, ``eps_max``, ``analyze_manifolds``).
 
     Returns:
         A computed report instance of the class selected by ``mode``.
