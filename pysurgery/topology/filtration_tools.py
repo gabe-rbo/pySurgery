@@ -203,26 +203,24 @@ class _BaseFiltrationReport:
         return emax * factor
 
     def _default_grid_from_values(self, filt: Dict) -> List[float]:
-        """Bounded, deduplicated threshold grid from the appearance-value spread.
+        """All distinct appearance values as the threshold grid.
+
+        Every unique simplex-entry value becomes a threshold so no topological
+        event is skipped. ``eps_max``, if set, caps the range.
 
         Args:
             filt: Mapping of simplex to appearance value.
 
         Returns:
-            A sorted list of at most ``n_steps`` thresholds (quantiles of the
-            distinct appearance values, capped at ``eps_max`` if set), always
-            including ``0.0``.
+            A sorted list of every distinct appearance value (capped at
+            ``eps_max`` if set), always including ``0.0``.
         """
         vals = np.array(sorted(set(filt.values())), dtype=np.float64) if filt else np.array([0.0])
         if self.eps_max is not None:
             vals = vals[vals <= float(self.eps_max)]
         if vals.size == 0:
             return [0.0]
-        if vals.size <= self.n_steps:
-            grid = vals
-        else:
-            grid = np.quantile(vals, np.linspace(0.0, 1.0, self.n_steps))
-        return sorted({0.0, *(float(x) for x in grid)})
+        return sorted({0.0, *(float(x) for x in vals)})
 
     @staticmethod
     def _complex_from_values(SC, values: Dict, coords, ring: str):
@@ -632,10 +630,15 @@ class RipsFiltrationReport(_BaseFiltrationReport):
     method_name = "Vietoris-Rips"
 
     def _build_maximal_and_values(self):
-        """Build the Vietoris-Rips complex at the k-NN scale with longest-edge values."""
+        """Build the Vietoris-Rips complex at the full pairwise diameter with longest-edge values."""
         from pysurgery.topology.complexes import SimplicialComplex as SC
         from pysurgery.topology.filtration_values import rips_filtration_values
-        eps_max = self.eps_max if self.eps_max is not None else self._estimate_eps_max(self.points)
+        from scipy.spatial.distance import pdist
+        if self.eps_max is not None:
+            eps_max = float(self.eps_max)
+        else:
+            pts = self.points
+            eps_max = float(pdist(pts).max()) if len(pts) > 1 else 1.0
         sc = SC.from_vietoris_rips(self.points, eps_max, self.max_dimension,
                                    coefficient_ring=self.coefficient_ring, backend=self.backend)
         return sc, rips_filtration_values(sc._simplices_table, self.points)
