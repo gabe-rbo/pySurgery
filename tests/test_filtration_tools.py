@@ -44,7 +44,7 @@ def test_generate_filtration_report_manual():
     points = np.stack([np.cos(theta), np.sin(theta)], axis=1)
     
     epsilons = [0.1, 0.7, 1.5, 3.0]
-    report_obj = FiltrationReport(points, epsilons, max_dimension=1)
+    report_obj = FiltrationReport(points, epsilons, max_dimension=1, analyze_manifolds=True)
     report = str(report_obj)
     
     # Basic checks
@@ -59,7 +59,7 @@ def test_generate_filtration_report_dynamic():
     points = np.array([[0,0], [1,0], [1,1], [0,1]])
     
     # Dynamic filtration
-    report_obj = FiltrationReport(points, epsilons=None, max_dimension=1)
+    report_obj = FiltrationReport(points, epsilons=None, max_dimension=1, manifold_analysis=True)
     report = str(report_obj)
     
     assert "# Betti Numbers Report" in report
@@ -69,6 +69,25 @@ def test_generate_filtration_report_dynamic():
     
     # Check that K4 is correctly identified as non-manifold
     assert "No" in report 
+
+def test_filtration_report_manifold_analysis_default():
+    points = np.array([[0,0], [1,0], [1,1], [0,1]])
+    
+    # By default, analyze_manifolds should be False
+    rep_default = FiltrationReport(points, max_dimension=1)
+    assert rep_default.analyze_manifolds is False
+    
+    # Explicit analyze_manifolds=True
+    rep_explicit = FiltrationReport(points, max_dimension=1, analyze_manifolds=True)
+    assert rep_explicit.analyze_manifolds is True
+    
+    # Explicit manifold_analysis=True
+    rep_alias = FiltrationReport(points, max_dimension=1, manifold_analysis=True)
+    assert rep_alias.analyze_manifolds is True
+    
+    # Explicit manifold_analysis=False overriding analyze_manifolds=True
+    rep_override = FiltrationReport(points, max_dimension=1, analyze_manifolds=True, manifold_analysis=False)
+    assert rep_override.analyze_manifolds is False
 
 def test_generate_filtration_report_with_components():
     # Two disjoint circles

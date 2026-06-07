@@ -653,7 +653,7 @@ function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max
     dim_count = Int[dim_cnt[d] for d in dim_ids]
 
     if analyze_manifolds
-        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples)
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n_pts)
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
                 dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
     else
@@ -1047,7 +1047,7 @@ function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max
     eps_values = sort(collect(gridset))
     if analyze_manifolds
         cliques, vals = _generate_all_cliques_and_values(points, epsilon, max_dim)
-        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples)
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n)
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
                 dim_count, total, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
     else
@@ -6204,7 +6204,7 @@ function linking_gauss_riemann_jl(
 end
 
 function _grid_from_values_jl(vals::Vector{Float64}, eps_max::Union{Nothing, Float64}, n_samples::Union{Nothing, Int})
-    uvals = sort(unique(vals))
+    uvals = unique(vals)
     if isempty(uvals)
         uvals = [0.0]
     end
@@ -6218,8 +6218,11 @@ function _grid_from_values_jl(vals::Vector{Float64}, eps_max::Union{Nothing, Flo
         indices = round.(Int, range(1, length(uvals), length=n_samples))
         uvals = uvals[unique(indices)]
     end
-    grid = sort(collect(Set([0.0; uvals])))
-    return grid
+    if !any(x -> x == 0.0, uvals)
+        push!(uvals, 0.0)
+        sort!(uvals)
+    end
+    return uvals
 end
 
 function _get_reduced_homology_jl(lk_simplices, lk_max_dim)
@@ -6283,8 +6286,8 @@ function check_closed_manifold_jl(active_cliques, dim::Int)
     face_counts = Dict{Tuple{Vararg{Int}}, Int}()
     for c in active_cliques
         if length(c) == dim + 1
-            for face in combinations(c, dim)
-                t = Tuple(face)
+            for i in 1:(dim + 1)
+                t = ntuple(j -> j < i ? c[j] : c[j+1], dim)
                 face_counts[t] = get(face_counts, t, 0) + 1
             end
         end
@@ -6292,32 +6295,53 @@ function check_closed_manifold_jl(active_cliques, dim::Int)
     return all(count == 2 for count in values(face_counts))
 end
 
-function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64, n_samples::Union{Nothing, Int})
+function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64, n_samples::Union{Nothing, Int}, n_pts::Int = 0)
     p = sortperm(vals)
     sorted_cliques = cliques[p]
     sorted_vals = vals[p]
     
     grid_epsilons = _grid_from_values_jl(sorted_vals, epsilon, n_samples)
     
-    n_pts = 0
-    for c in sorted_cliques
-        for v in c
-            if v > n_pts
-                n_pts = v
+    if n_pts <= 0
+        for c in sorted_cliques
+            for v in c
+                if v > n_pts
+                    n_pts = v
+                end
             end
         end
     end
     
-    link_simplices = [Vector{Tuple{Vector{Int}, Float64}}() for _ in 1:n_pts]
+    link_simplices_faces = [Vector{Vector{Int}}() for _ in 1:n_pts]
+    link_simplices_vals = [Vector{Float64}() for _ in 1:n_pts]
     for (c, val) in zip(sorted_cliques, sorted_vals)
         len = length(c)
         if len > 1
             for i in 1:len
                 v = c[i]
-                face = [c[j] for j in 1:len if j != i]
-                push!(link_simplices[v], (face, val))
+                face = Vector{Int}(undef, len - 1)
+                idx_f = 1
+                for j in 1:len
+                    if j != i
+                        @inbounds face[idx_f] = c[j]
+                        idx_f += 1
+                    end
+                end
+                push!(link_simplices_faces[v], face)
+                push!(link_simplices_vals[v], val)
             end
         end
+    end
+    
+    # Precompute running maximum dimension
+    running_max_dim = Vector{Int}(undef, length(sorted_cliques))
+    curr_max = -1
+    for i in 1:length(sorted_cliques)
+        d_c = length(sorted_cliques[i]) - 1
+        if d_c > curr_max
+            curr_max = d_c
+        end
+        @inbounds running_max_dim[i] = curr_max
     end
     
     m_epsilons = Float64[]
@@ -6325,6 +6349,9 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
     m_dimensions = Int[]
     m_is_closed = Bool[]
     m_failures = Int[]
+    
+    # Pre-allocate v_map_arr to avoid vertex Dict allocations inside the loop
+    v_map_arr = zeros(Int, n_pts)
     
     for eps in grid_epsilons
         idx = searchsortedlast(sorted_vals, eps)
@@ -6338,14 +6365,7 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
         end
         
         active_cliques = view(sorted_cliques, 1:idx)
-        
-        d_active = -1
-        for c in active_cliques
-            d_c = length(c) - 1
-            if d_c > d_active
-                d_active = d_c
-            end
-        end
+        d_active = running_max_dim[idx]
         
         if d_active <= 0
             push!(m_epsilons, eps)
@@ -6360,20 +6380,26 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
         local_dims = Int[]
         
         for v in 1:n_pts
-            lk = [face for (face, val) in link_simplices[v] if val <= eps]
-            
-            if isempty(lk)
+            idx_lk = searchsortedlast(link_simplices_vals[v], eps)
+            if idx_lk == 0
                 push!(local_dims, 0)
                 continue
             end
+            lk = view(link_simplices_faces[v], 1:idx_lk)
             
-            c_dims = Dict{Int, Int}()
+            c_dims = zeros(Int, max_dim + 1)
             for face in lk
                 fd = length(face) - 1
-                c_dims[fd] = get(c_dims, fd, 0) + 1
+                if 0 <= fd <= max_dim
+                    @inbounds c_dims[fd + 1] += 1
+                end
             end
             
-            chi = sum((-1)^fd * count for (fd, count) in c_dims)
+            chi = 0
+            for fd in 0:max_dim
+                @inbounds chi += (-1)^fd * c_dims[fd + 1]
+            end
+            
             exp_sph = 1 + (-1)^(d_active - 1)
             exp_dsk = 1
             
@@ -6383,17 +6409,17 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
             end
             
             if d_active == 1
-                n_v = get(c_dims, 0, 0)
+                n_v = c_dims[1]
                 if n_v != 1 && n_v != 2
                     n_fail += 1
                 else
                     push!(local_dims, n_v == 2 ? 1 : 0)
                 end
             elseif d_active == 2
-                n_v = get(c_dims, 0, 0)
-                n_e = get(c_dims, 1, 0)
+                n_v = c_dims[1]
+                n_e = c_dims[2]
                 
-                v_set = Set{Int}()
+                v_set = BitSet()
                 for face in lk
                     if length(face) == 1
                         push!(v_set, face[1])
@@ -6402,12 +6428,15 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
                 v_list = collect(v_set)
                 curr_nv = length(v_list)
                 
-                v_map = Dict(v_list[i] => i for i in 1:curr_nv)
+                for i in 1:curr_nv
+                    @inbounds v_map_arr[v_list[i]] = i
+                end
+                
                 adj = [Vector{Int}() for _ in 1:curr_nv]
                 for face in lk
                     if length(face) == 2
-                        u = get(v_map, face[1], 0)
-                        w = get(v_map, face[2], 0)
+                        u = @inbounds v_map_arr[face[1]]
+                        w = @inbounds v_map_arr[face[2]]
                         if u > 0 && w > 0
                             push!(adj[u], w)
                             push!(adj[w], u)
@@ -6415,23 +6444,30 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
                     end
                 end
                 
-                visited = zeros(Bool, curr_nv)
+                for i in 1:curr_nv
+                    @inbounds v_map_arr[v_list[i]] = 0
+                end
+                
                 is_connected = true
                 if curr_nv > 0
-                    q = [1]
+                    q = Vector{Int}(undef, curr_nv)
+                    q[1] = 1
+                    visited = zeros(Bool, curr_nv)
                     visited[1] = true
                     head = 1
-                    while head <= length(q)
+                    tail = 1
+                    while head <= tail
                         curr = q[head]
                         head += 1
                         for neighbor in adj[curr]
                             if !visited[neighbor]
                                 visited[neighbor] = true
-                                push!(q, neighbor)
+                                tail += 1
+                                q[tail] = neighbor
                             end
                         end
                     end
-                    is_connected = (sum(visited) == curr_nv)
+                    is_connected = (tail == curr_nv)
                 end
                 
                 if !is_connected

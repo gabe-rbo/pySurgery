@@ -98,8 +98,9 @@ class _BaseFiltrationReport:
         *,
         n_samples: Optional[int] = None,
         eps_max: Optional[float] = None,
-        analyze_manifolds: bool = True,
+        analyze_manifolds: bool = False,
         compute_torsion: bool = False,
+        manifold_analysis: Optional[bool] = None,
         **kwargs,
     ):
         """Build and compute the filtration report.
@@ -128,6 +129,8 @@ class _BaseFiltrationReport:
                 persistence barcode (mod-2 ranks). Torsion uses Smith-normal-form
                 per threshold and is markedly heavier — prefer it with a coarse
                 grid (``n_samples``) or a modest ``eps_max``.
+            manifold_analysis: Alias/override for analyze_manifolds. If provided,
+                overrides analyze_manifolds.
             **kwargs: Method-specific options (e.g. ``k``, ``n_landmarks``).
         """
         self.points = np.asarray(points, dtype=np.float64)
@@ -137,7 +140,9 @@ class _BaseFiltrationReport:
         self.track_connected_components = track_connected_components
         self.n_samples = int(n_samples) if n_samples is not None else None
         self.eps_max = eps_max
-        self.analyze_manifolds = analyze_manifolds
+        if manifold_analysis is not None:
+            analyze_manifolds = manifold_analysis
+        self.analyze_manifolds = bool(analyze_manifolds)
         self.compute_torsion = bool(compute_torsion)
         self.kwargs = kwargs
 
@@ -237,7 +242,12 @@ class _BaseFiltrationReport:
             A sorted list of every distinct appearance value (capped at
             ``eps_max`` if set), always including ``0.0``.
         """
-        vals = np.array(sorted(set(values)), dtype=np.float64)
+        if isinstance(values, (list, np.ndarray)):
+            vals = np.asarray(values, dtype=np.float64)
+        else:
+            vals = np.fromiter(values, dtype=np.float64)
+        vals = np.unique(vals)
+
         if vals.size == 0:
             vals = np.array([0.0])
         if self.eps_max is not None:
@@ -247,7 +257,10 @@ class _BaseFiltrationReport:
         if self.n_samples is not None and vals.size > self.n_samples:
             indices = np.unique(np.round(np.linspace(0, vals.size - 1, self.n_samples)).astype(int))
             vals = vals[indices]
-        return sorted({0.0, *(float(x) for x in vals)})
+        if not np.any(vals == 0.0):
+            vals = np.concatenate(([0.0], vals))
+            vals = np.unique(vals)
+        return vals.tolist()
 
     @staticmethod
     def _complex_from_values(SC, values: Dict, coords, ring: str):
@@ -1157,7 +1170,22 @@ class _BaseFiltrationReport:
 # Concrete report types
 # ──────────────────────────────────────────────────────────────────────────────
 class RipsFiltrationReport(_BaseFiltrationReport):
-    """Vietoris-Rips filtration: simplices enter at their longest edge."""
+    """Vietoris-Rips filtration: simplices enter at their longest edge.
+
+    Args:
+        points: (N, D) array of point coordinates.
+        epsilons: Explicit thresholds. If None, a bounded grid is derived.
+        max_dimension: Maximum simplex dimension to build.
+        coefficient_ring: Coefficient ring (manifold/component path).
+        backend: 'auto', 'julia', or 'python'.
+        track_connected_components: Track per-component evolution.
+        n_samples: Number of evenly-spaced thresholds.
+        eps_max: Cap for the parameter range (defaults to maximum pairwise distance).
+        analyze_manifolds: Run per-threshold homology-manifold check.
+        compute_torsion: Additionally compute exact integer homology.
+        manifold_analysis: Alias/override for analyze_manifolds.
+        rips_engine: Which fused Julia engine to use: 'clique', 'cohomology', or 'auto'.
+    """
 
     param_label = "Eps"
     method_name = "Vietoris-Rips"
@@ -1255,7 +1283,22 @@ class RipsFiltrationReport(_BaseFiltrationReport):
 
 
 class CknnFiltrationReport(_BaseFiltrationReport):
-    """Continuous k-NN filtration: edge (i, j) enters at d(i,j)/sqrt(rho_i*rho_j)."""
+    """Continuous k-NN filtration: edge (i, j) enters at d(i,j)/sqrt(rho_i*rho_j).
+
+    Args:
+        points: (N, D) array of point coordinates.
+        epsilons: Explicit thresholds. If None, a bounded grid is derived.
+        max_dimension: Maximum simplex dimension to build.
+        coefficient_ring: Coefficient ring (manifold/component path).
+        backend: 'auto', 'julia', or 'python'.
+        track_connected_components: Track per-component evolution.
+        n_samples: Number of evenly-spaced thresholds.
+        eps_max: Cap for the parameter range (defaults to 2.0).
+        analyze_manifolds: Run per-threshold homology-manifold check.
+        compute_torsion: Additionally compute exact integer homology.
+        manifold_analysis: Alias/override for analyze_manifolds.
+        k: Number of nearest neighbors to use for CkNN density scaling (default 8).
+    """
 
     param_label = "Delta"
     method_name = "CkNN"
@@ -1281,6 +1324,19 @@ class AlphaFiltrationReport(_BaseFiltrationReport):
     """Alpha complex filtration on the Delaunay triangulation.
 
     Appearance values are circumradius / Gabriel based.
+
+    Args:
+        points: (N, D) array of point coordinates.
+        epsilons: Explicit thresholds. If None, a bounded grid is derived.
+        max_dimension: Maximum simplex dimension to build.
+        coefficient_ring: Coefficient ring (manifold/component path).
+        backend: 'auto', 'julia', or 'python'.
+        track_connected_components: Track per-component evolution.
+        n_samples: Number of evenly-spaced thresholds.
+        eps_max: Cap for the parameter range.
+        analyze_manifolds: Run per-threshold homology-manifold check.
+        compute_torsion: Additionally compute exact integer homology.
+        manifold_analysis: Alias/override for analyze_manifolds.
     """
 
     param_label = "Alpha"
@@ -1302,7 +1358,21 @@ class AlphaFiltrationReport(_BaseFiltrationReport):
 
 
 class DelaunayRipsFiltrationReport(_BaseFiltrationReport):
-    """Rips filtration restricted to Delaunay edges (longest-edge values)."""
+    """Rips filtration restricted to Delaunay edges (longest-edge values).
+
+    Args:
+        points: (N, D) array of point coordinates.
+        epsilons: Explicit thresholds. If None, a bounded grid is derived.
+        max_dimension: Maximum simplex dimension to build.
+        coefficient_ring: Coefficient ring (manifold/component path).
+        backend: 'auto', 'julia', or 'python'.
+        track_connected_components: Track per-component evolution.
+        n_samples: Number of evenly-spaced thresholds.
+        eps_max: Cap for the parameter range.
+        analyze_manifolds: Run per-threshold homology-manifold check.
+        compute_torsion: Additionally compute exact integer homology.
+        manifold_analysis: Alias/override for analyze_manifolds.
+    """
 
     param_label = "Eps"
     method_name = "Delaunay-Rips"
@@ -1316,7 +1386,21 @@ class DelaunayRipsFiltrationReport(_BaseFiltrationReport):
 
 
 class DelaunayCechFiltrationReport(_BaseFiltrationReport):
-    """Cech filtration on the Delaunay complex (smallest-enclosing-ball values)."""
+    """Cech filtration on the Delaunay complex (smallest-enclosing-ball values).
+
+    Args:
+        points: (N, D) array of point coordinates.
+        epsilons: Explicit thresholds. If None, a bounded grid is derived.
+        max_dimension: Maximum simplex dimension to build.
+        coefficient_ring: Coefficient ring (manifold/component path).
+        backend: 'auto', 'julia', or 'python'.
+        track_connected_components: Track per-component evolution.
+        n_samples: Number of evenly-spaced thresholds.
+        eps_max: Cap for the parameter range.
+        analyze_manifolds: Run per-threshold homology-manifold check.
+        compute_torsion: Additionally compute exact integer homology.
+        manifold_analysis: Alias/override for analyze_manifolds.
+    """
 
     param_label = "Radius"
     method_name = "Delaunay-Cech"
@@ -1334,6 +1418,20 @@ class WitnessFiltrationReport(_BaseFiltrationReport):
 
     Edge ``(i, j)`` enters at ``min over witnesses p of max(d(p, l_i), d(p, l_j))``
     and higher simplices at the max over their edges (flag complex).
+
+    Args:
+        points: (N, D) array of point coordinates.
+        epsilons: Explicit thresholds. If None, a bounded grid is derived.
+        max_dimension: Maximum simplex dimension to build.
+        coefficient_ring: Coefficient ring (manifold/component path).
+        backend: 'auto', 'julia', or 'python'.
+        track_connected_components: Track per-component evolution.
+        n_samples: Number of evenly-spaced thresholds.
+        eps_max: Cap for the parameter range (defaults to median edge distance).
+        analyze_manifolds: Run per-threshold homology-manifold check.
+        compute_torsion: Additionally compute exact integer homology.
+        manifold_analysis: Alias/override for analyze_manifolds.
+        n_landmarks: Number of landmarks to subsample from the points (default min(N, 50)).
     """
 
     param_label = "Alpha"
@@ -1425,8 +1523,15 @@ def FiltrationReport(
         track_connected_components: Track per-component evolution.
         mode: One of ``vietoris_rips``/``rips``, ``cknn``, ``alpha``/``delaunay``,
             ``delaunay_rips``, ``delaunay_cech``, ``witness``.
-        **kwargs: Method-specific options forwarded to the report class (e.g.
-            ``k``, ``n_landmarks``, ``n_samples``, ``eps_max``, ``analyze_manifolds``).
+        **kwargs: Method-specific options forwarded to the report class:
+            - ``n_samples``: Number of evenly-spaced thresholds.
+            - ``eps_max``: Cap for the parameter range.
+            - ``analyze_manifolds``: Run per-threshold homology-manifold check.
+            - ``compute_torsion``: Additionally compute exact integer homology.
+            - ``manifold_analysis``: Alias/override for analyze_manifolds.
+            - ``rips_engine``: Which fused Julia engine to use (for Rips).
+            - ``k``: Number of nearest neighbors (for CkNN).
+            - ``n_landmarks``: Number of landmarks to subsample (for Witness).
 
     Returns:
         A computed report instance of the class selected by ``mode``.
