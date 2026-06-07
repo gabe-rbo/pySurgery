@@ -522,7 +522,7 @@ dim_count, total)`: the barcode (`death == Inf` for essential classes), the sort
 distinct appearance values (filtration grid), and per-dimension first (minimum)
 appearance value / simplex count, plus the total simplex count.
 """
-function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max_dim::Int)
+function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing)
     n_pts = size(points, 1)
     dim_pts = size(points, 2)
 
@@ -652,22 +652,30 @@ function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max
     dim_first_val = Float64[dim_first[d] for d in dim_ids]
     dim_count = Int[dim_cnt[d] for d in dim_ids]
 
-    return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
-            dim_count, M)
+    if analyze_manifolds
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples)
+        return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+                dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
+    else
+        return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+                dim_count, M, false, Float64[], Bool[], Int[], Bool[], Int[])
+    end
 end
 
 """
-    compute_rips_filtration(points, epsilon, max_dim)
+    compute_rips_filtration(points, epsilon, max_dim, analyze_manifolds, n_samples)
 
 PythonCall entry point for [`_compute_rips_filtration`](@ref); materialises the
 NumPy point buffer as a native `Matrix{Float64}` (the lazy PyArray is not
 thread-safe to read from the `@threads` loops) and runs the fused build+reduce.
 """
-function compute_rips_filtration(points_raw, epsilon_raw, max_dim_raw)
+function compute_rips_filtration(points_raw, epsilon_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing)
     return _compute_rips_filtration(
         pyconvert(Matrix{Float64}, points_raw),
         pyconvert(Float64, epsilon_raw),
         pyconvert(Int, max_dim_raw),
+        pyconvert(Bool, analyze_manifolds_raw),
+        pyconvert(Union{Nothing, Int}, n_samples_raw),
     )
 end
 
@@ -937,7 +945,7 @@ Implicit persistent cohomology of the Vietoris–Rips filtration of `points` up 
 [`_compute_rips_filtration`](@ref): `(bar_dim, bar_birth, bar_death, eps_values,
 dim_ids, dim_first_val, dim_count, total)`.
 """
-function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max_dim::Int)
+function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing)
     n = size(points, 1)
     nbr, nbd = _rips_neighbor_lists(points, epsilon)
     B = _rips_binomial(n, max_dim + 2)
@@ -1037,20 +1045,29 @@ function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max
     end
 
     eps_values = sort(collect(gridset))
-    return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
-            dim_count, total)
+    if analyze_manifolds
+        cliques, vals = _generate_all_cliques_and_values(points, epsilon, max_dim)
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples)
+        return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+                dim_count, total, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
+    else
+        return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+                dim_count, total, false, Float64[], Bool[], Int[], Bool[], Int[])
+    end
 end
 
 """
-    compute_rips_cohomology(points, epsilon, max_dim)
+    compute_rips_cohomology(points, epsilon, max_dim, analyze_manifolds, n_samples)
 
 PythonCall entry point for [`_compute_rips_cohomology`](@ref).
 """
-function compute_rips_cohomology(points_raw, epsilon_raw, max_dim_raw)
+function compute_rips_cohomology(points_raw, epsilon_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing)
     return _compute_rips_cohomology(
         pyconvert(Matrix{Float64}, points_raw),
         pyconvert(Float64, epsilon_raw),
         pyconvert(Int, max_dim_raw),
+        pyconvert(Bool, analyze_manifolds_raw),
+        pyconvert(Union{Nothing, Int}, n_samples_raw),
     )
 end
 
@@ -6184,6 +6201,395 @@ function linking_gauss_riemann_jl(
     end
 
     return total * inv_n2 / (4.0 * pi)
+end
+
+function _grid_from_values_jl(vals::Vector{Float64}, eps_max::Union{Nothing, Float64}, n_samples::Union{Nothing, Int})
+    uvals = sort(unique(vals))
+    if isempty(uvals)
+        uvals = [0.0]
+    end
+    if eps_max !== nothing
+        uvals = uvals[uvals .<= eps_max]
+    end
+    if isempty(uvals)
+        return [0.0]
+    end
+    if n_samples !== nothing && length(uvals) > n_samples
+        indices = round.(Int, range(1, length(uvals), length=n_samples))
+        uvals = uvals[unique(indices)]
+    end
+    grid = sort(collect(Set([0.0; uvals])))
+    return grid
+end
+
+function _get_reduced_homology_jl(lk_simplices, lk_max_dim)
+    lk_b, lk_c = compute_boundary_payload_from_simplices(lk_simplices, lk_max_dim, false)
+    rh = Dict{Int, Tuple{Int, Vector{Int}}}()
+
+    d_max = -1
+    for d in 0:lk_max_dim
+        if get(lk_c, d, 0) > 0
+            d_max = d
+        end
+    end
+
+    for d in 0:d_max
+        n_rows_d = get(lk_c, d-1, 0)
+        n_cols_d = get(lk_c, d, 0)
+
+        rank_ker_d = if n_cols_d == 0
+            0
+        elseif n_rows_d == 0
+            n_cols_d
+        else
+            b_d = lk_b[d]
+            n_cols_d - rank_q_sparse(b_d["rows"], b_d["cols"], b_d["data"], b_d["n_rows"], b_d["n_cols"])
+        end
+
+        factors_dp1 = if haskey(lk_b, d+1)
+            b_dp1 = lk_b[d+1]
+            exact_snf_sparse(b_dp1["rows"], b_dp1["cols"], b_dp1["data"], b_dp1["n_rows"], b_dp1["n_cols"])
+        else
+            Int[]
+        end
+
+        rank_im_dp1 = 0
+        torsion = Int[]
+        for f in factors_dp1
+            if f != 0
+                rank_im_dp1 += 1
+                if f > 1
+                    push!(torsion, f)
+                end
+            end
+        end
+
+        betti = max(0, rank_ker_d - rank_im_dp1)
+        if d == 0
+            betti = max(0, betti - 1)
+        end
+
+        if betti > 0 || !isempty(torsion)
+            rh[d] = (Int(betti), Int.(torsion))
+        end
+    end
+    return rh, d_max
+end
+
+function check_closed_manifold_jl(active_cliques, dim::Int)
+    if dim < 1
+        return true
+    end
+    face_counts = Dict{Tuple{Vararg{Int}}, Int}()
+    for c in active_cliques
+        if length(c) == dim + 1
+            for face in combinations(c, dim)
+                t = Tuple(face)
+                face_counts[t] = get(face_counts, t, 0) + 1
+            end
+        end
+    end
+    return all(count == 2 for count in values(face_counts))
+end
+
+function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64, n_samples::Union{Nothing, Int})
+    p = sortperm(vals)
+    sorted_cliques = cliques[p]
+    sorted_vals = vals[p]
+    
+    grid_epsilons = _grid_from_values_jl(sorted_vals, epsilon, n_samples)
+    
+    n_pts = 0
+    for c in sorted_cliques
+        for v in c
+            if v > n_pts
+                n_pts = v
+            end
+        end
+    end
+    
+    link_simplices = [Vector{Tuple{Vector{Int}, Float64}}() for _ in 1:n_pts]
+    for (c, val) in zip(sorted_cliques, sorted_vals)
+        len = length(c)
+        if len > 1
+            for i in 1:len
+                v = c[i]
+                face = [c[j] for j in 1:len if j != i]
+                push!(link_simplices[v], (face, val))
+            end
+        end
+    end
+    
+    m_epsilons = Float64[]
+    m_is_manifold = Bool[]
+    m_dimensions = Int[]
+    m_is_closed = Bool[]
+    m_failures = Int[]
+    
+    for eps in grid_epsilons
+        idx = searchsortedlast(sorted_vals, eps)
+        if idx == 0
+            push!(m_epsilons, eps)
+            push!(m_is_manifold, true)
+            push!(m_dimensions, -1)
+            push!(m_is_closed, true)
+            push!(m_failures, 0)
+            continue
+        end
+        
+        active_cliques = view(sorted_cliques, 1:idx)
+        
+        d_active = -1
+        for c in active_cliques
+            d_c = length(c) - 1
+            if d_c > d_active
+                d_active = d_c
+            end
+        end
+        
+        if d_active <= 0
+            push!(m_epsilons, eps)
+            push!(m_is_manifold, true)
+            push!(m_dimensions, d_active)
+            push!(m_is_closed, true)
+            push!(m_failures, 0)
+            continue
+        end
+        
+        n_fail = 0
+        local_dims = Int[]
+        
+        for v in 1:n_pts
+            lk = [face for (face, val) in link_simplices[v] if val <= eps]
+            
+            if isempty(lk)
+                push!(local_dims, 0)
+                continue
+            end
+            
+            c_dims = Dict{Int, Int}()
+            for face in lk
+                fd = length(face) - 1
+                c_dims[fd] = get(c_dims, fd, 0) + 1
+            end
+            
+            chi = sum((-1)^fd * count for (fd, count) in c_dims)
+            exp_sph = 1 + (-1)^(d_active - 1)
+            exp_dsk = 1
+            
+            if chi != exp_sph && chi != exp_dsk
+                n_fail += 1
+                continue
+            end
+            
+            if d_active == 1
+                n_v = get(c_dims, 0, 0)
+                if n_v != 1 && n_v != 2
+                    n_fail += 1
+                else
+                    push!(local_dims, n_v == 2 ? 1 : 0)
+                end
+            elseif d_active == 2
+                n_v = get(c_dims, 0, 0)
+                n_e = get(c_dims, 1, 0)
+                
+                v_set = Set{Int}()
+                for face in lk
+                    if length(face) == 1
+                        push!(v_set, face[1])
+                    end
+                end
+                v_list = collect(v_set)
+                curr_nv = length(v_list)
+                
+                v_map = Dict(v_list[i] => i for i in 1:curr_nv)
+                adj = [Vector{Int}() for _ in 1:curr_nv]
+                for face in lk
+                    if length(face) == 2
+                        u = get(v_map, face[1], 0)
+                        w = get(v_map, face[2], 0)
+                        if u > 0 && w > 0
+                            push!(adj[u], w)
+                            push!(adj[w], u)
+                        end
+                    end
+                end
+                
+                visited = zeros(Bool, curr_nv)
+                is_connected = true
+                if curr_nv > 0
+                    q = [1]
+                    visited[1] = true
+                    head = 1
+                    while head <= length(q)
+                        curr = q[head]
+                        head += 1
+                        for neighbor in adj[curr]
+                            if !visited[neighbor]
+                                visited[neighbor] = true
+                                push!(q, neighbor)
+                            end
+                        end
+                    end
+                    is_connected = (sum(visited) == curr_nv)
+                end
+                
+                if !is_connected
+                    n_fail += 1
+                else
+                    if n_v - n_e == 0
+                        push!(local_dims, 2)
+                    elseif n_v - n_e == 1
+                        push!(local_dims, 1)
+                    else
+                        n_fail += 1
+                    end
+                end
+            else
+                rh, lk_d_max = _get_reduced_homology_jl(lk, d_active - 1)
+                if isempty(rh)
+                    push!(local_dims, d_active - 1)
+                elseif length(rh) == 1
+                    deg = first(keys(rh))
+                    betti, torsion = rh[deg]
+                    if betti == 1 && isempty(torsion) && deg == d_active - 1
+                        push!(local_dims, d_active)
+                    else
+                        n_fail += 1
+                    end
+                else
+                    n_fail += 1
+                end
+            end
+        end
+        
+        is_mani = (n_fail == 0) && (length(unique(local_dims)) <= 1)
+        if !is_mani && n_fail == 0
+            n_fail = n_pts
+        end
+        
+        detected_dim = if is_mani
+            isempty(local_dims) ? d_active : first(local_dims)
+        else
+            d_active
+        end
+        
+        is_closed = false
+        if is_mani
+            is_closed = check_closed_manifold_jl(active_cliques, detected_dim)
+        end
+        
+        push!(m_epsilons, eps)
+        push!(m_is_manifold, is_mani)
+        push!(m_dimensions, detected_dim)
+        push!(m_is_closed, is_closed)
+        push!(m_failures, n_fail)
+    end
+    
+    return m_epsilons, m_is_manifold, m_dimensions, m_is_closed, m_failures
+end
+
+function _generate_all_cliques_and_values(points::Matrix{Float64}, epsilon::Float64, max_dim::Int)
+    n_pts = size(points, 1)
+    dim_pts = size(points, 2)
+    eps2 = epsilon^2
+    n_threads = Threads.maxthreadid()
+    I_threads = [Int[] for _ in 1:n_threads]
+    J_threads = [Int[] for _ in 1:n_threads]
+    Threads.@threads for i in 1:n_pts
+        tid = Threads.threadid()
+        I_local = I_threads[tid]
+        J_local = J_threads[tid]
+        for j in (i+1):n_pts
+            d2 = 0.0
+            @inbounds for k in 1:dim_pts
+                diff = points[i, k] - points[j, k]
+                d2 += diff * diff
+            end
+            if d2 <= eps2
+                push!(I_local, i); push!(J_local, j)
+                push!(I_local, j); push!(J_local, i)
+            end
+        end
+    end
+    I = reduce(vcat, I_threads)
+    J = reduce(vcat, J_threads)
+    adj = sparse(I, J, ones(Int, length(I)), n_pts, n_pts)
+    rowptr = adj.colptr
+    colval = adj.rowval
+
+    cliques_threads = [Vector{Vector{Int}}() for _ in 1:n_threads]
+    vals_threads = [Float64[] for _ in 1:n_threads]
+
+    is_adj = (u::Int, v::Int) -> begin
+        s = rowptr[u]; e = rowptr[u+1] - 1
+        while s <= e
+            mid = (s + e) >> 1
+            c = colval[mid]
+            if c == v
+                return true
+            elseif c < v
+                s = mid + 1
+            else
+                e = mid - 1
+            end
+        end
+        return false
+    end
+
+    sqdist = (u::Int, v::Int) -> begin
+        acc = 0.0
+        @inbounds for k in 1:dim_pts
+            diff = points[u, k] - points[v, k]
+            acc += diff * diff
+        end
+        return acc
+    end
+
+    function backtrack(local_cliques::Vector{Vector{Int}}, local_vals::Vector{Float64},
+                       current_clique::Vector{Int}, current_val2::Float64,
+                       candidates::Vector{Int})
+        push!(local_cliques, copy(current_clique))
+        push!(local_vals, sqrt(current_val2))
+        if length(current_clique) == max_dim + 1
+            return
+        end
+        for (i, v) in enumerate(candidates)
+            new_candidates = Int[]
+            for j in (i+1):length(candidates)
+                w = candidates[j]
+                if is_adj(v, w)
+                    push!(new_candidates, w)
+                end
+            end
+            new_val2 = current_val2
+            @inbounds for u in current_clique
+                dv = sqdist(v, u)
+                if dv > new_val2
+                    new_val2 = dv
+                end
+            end
+            push!(current_clique, v)
+            backtrack(local_cliques, local_vals, current_clique, new_val2, new_candidates)
+            pop!(current_clique)
+        end
+    end
+
+    Threads.@threads for u in 1:n_pts
+        tid = Threads.threadid()
+        candidates = Int[]
+        for ptr in rowptr[u]:(rowptr[u+1]-1)
+            v = colval[ptr]
+            if v > u
+                push!(candidates, v)
+            end
+        end
+        backtrack(cliques_threads[tid], vals_threads[tid], Int[u], 0.0, candidates)
+    end
+
+    cliques = reduce(vcat, cliques_threads)
+    vals = reduce(vcat, vals_threads)
+    return cliques, vals
 end
 
 end # module

@@ -148,6 +148,7 @@ class _BaseFiltrationReport:
         self.all_betti_dims = set()
         self.max_comp_rows = 0
         self.barcode: List = []
+        self._precomputed_manifolds = None
         self._compute()
 
     # ------------------------------------------------------------------
@@ -695,18 +696,30 @@ class _BaseFiltrationReport:
         self.max_sc, self._filt = max_sc, filt
         coords = getattr(max_sc, "_coordinates", self.points)
 
-        self.epsilons = self._user_epsilons if self._user_epsilons is not None \
-            else self._grid_from_values(grid_values)
+        if self._precomputed_manifolds is not None:
+            self.epsilons = self._precomputed_manifolds["epsilons"]
+        else:
+            self.epsilons = self._user_epsilons if self._user_epsilons is not None \
+                else self._grid_from_values(grid_values)
 
         self.barcode = barcode
+
+        is_julia_available = False
+        try:
+            from pysurgery.bridge.julia_bridge import julia_engine
+            is_julia_available = julia_engine.available
+        except Exception:
+            pass
+
         if self.analyze_manifolds and total > self._MANIFOLD_MAX_SIMPLICES:
-            warnings.warn(
-                f"Skipping per-threshold manifold analysis: maximal complex has "
-                f"{total:,} simplices (> {self._MANIFOLD_MAX_SIMPLICES:,}). Betti "
-                "curves are still computed; pass a smaller eps_max to force it.",
-                stacklevel=2,
-            )
-            self.analyze_manifolds = False
+            if not is_julia_available or self.backend == "python":
+                warnings.warn(
+                    f"Skipping per-threshold manifold analysis: maximal complex has "
+                    f"{total:,} simplices (> {self._MANIFOLD_MAX_SIMPLICES:,}). Betti "
+                    "curves are still computed; pass a smaller eps_max to force it.",
+                    stacklevel=2,
+                )
+                self.analyze_manifolds = False
 
         if self.compute_torsion and total > self._MANIFOLD_MAX_SIMPLICES:
             warnings.warn(
@@ -743,7 +756,7 @@ class _BaseFiltrationReport:
         # otherwise Betti numbers come straight off the barcode. ``need_*`` is
         # loop-invariant (``analyze_manifolds`` is finalized by the auto-skip above).
         need_components = self.track_connected_components or self.compute_torsion
-        need_whole = self.analyze_manifolds
+        need_whole = self.analyze_manifolds and (self._precomputed_manifolds is None)
         need_complex = need_components or need_whole
         slices = (self._incremental_slices(max_sc, filt, need_components, need_whole)
                   if need_complex else None)
@@ -777,13 +790,23 @@ class _BaseFiltrationReport:
                 torsion = self._aggregate_component_torsion(comp_homs)
 
             if self.analyze_manifolds:
-                sc = self._whole_complex_from_table(SC, full_table, coords)
-                is_manifold, dim, diag = sc.is_homology_manifold(backend=self.backend)
-                manifold_str = "Yes" if is_manifold else f"No ({len(diag)} dft)"
-                closed = "N/A"
-                if is_manifold:
-                    closed = "Yes" if sc.is_closed_manifold else "No"
-                dim_repr = str(dim) if dim is not None else "N/A"
+                if self._precomputed_manifolds is not None:
+                    is_manifold = self._precomputed_manifolds["is_manifold"][idx]
+                    dim = self._precomputed_manifolds["dimensions"][idx]
+                    failures = self._precomputed_manifolds["failures"][idx]
+                    is_closed = self._precomputed_manifolds["is_closed"][idx]
+                    
+                    manifold_str = "Yes" if is_manifold else f"No ({failures} dft)"
+                    closed = "Yes" if is_closed else "No"
+                    dim_repr = str(dim) if dim is not None and dim >= 0 else "N/A"
+                else:
+                    sc = self._whole_complex_from_table(SC, full_table, coords)
+                    is_manifold, dim, diag = sc.is_homology_manifold(backend=self.backend)
+                    manifold_str = "Yes" if is_manifold else f"No ({len(diag)} dft)"
+                    closed = "N/A"
+                    if is_manifold:
+                        closed = "Yes" if sc.is_closed_manifold else "No"
+                    dim_repr = str(dim) if dim is not None else "N/A"
             else:
                 manifold_str = "N/A"
                 closed = "N/A"
@@ -958,11 +981,14 @@ class _BaseFiltrationReport:
 
         return betti_report + "\n" + "\n".join(stab_lines) + "\n" + mani_report + tors_report + comp_report
 
-    def plot(self) -> Any:
-        """Build an interactive Plotly figure of the Betti curves.
+    def plot(self, barcode: bool = False) -> Any:
+        """Build an interactive Plotly figure of the Betti curves or persistence barcode.
+
+        Args:
+            barcode: If True, plot the persistence barcode. Otherwise, plot Betti curves.
 
         Returns:
-            A ``plotly.graph_objects.Figure`` with one step plot per dimension.
+            A ``plotly.graph_objects.Figure``.
 
         Raises:
             ImportError: If Plotly is not installed.
@@ -972,19 +998,119 @@ class _BaseFiltrationReport:
         except ImportError:
             raise ImportError("Plotly is required for .plot(). Install with 'pip install plotly'.")
 
-        steps_eps = [res["epsilon"] for res in self.results]
-        betti_history = defaultdict(list)
-        all_dims = sorted(list(self.all_betti_dims))
-        for res in self.results:
-            for d in all_dims:
-                betti_history[d].append(res["bettis"].get(d, 0))
+        if not barcode:
+            steps_eps = [res["epsilon"] for res in self.results]
+            betti_history = defaultdict(list)
+            all_dims = sorted(list(self.all_betti_dims))
+            for res in self.results:
+                for d in all_dims:
+                    betti_history[d].append(res["bettis"].get(d, 0))
 
+            fig = go.Figure()
+            for d in all_dims:
+                fig.add_trace(go.Scatter(x=steps_eps, y=betti_history[d], mode="lines+markers",
+                                         name=f"b_{d}", line=dict(shape="hv")))
+            fig.update_layout(title=f"Betti Curves ({self.method_name})", xaxis_title=self.param_label,
+                              yaxis_title="Betti Number", template="plotly_white", hovermode="x unified")
+            return fig
+
+        import math
+        if not self.barcode:
+            fig = go.Figure()
+            fig.update_layout(title=f"Persistence Barcode ({self.method_name}) - Empty",
+                              xaxis_title=self.param_label, template="plotly_white")
+            return fig
+
+        finite_vals = []
+        for dim, birth, death in self.barcode:
+            if birth is not None and not math.isinf(birth) and not math.isnan(birth):
+                finite_vals.append(birth)
+            if death is not None and not math.isinf(death) and not math.isnan(death):
+                finite_vals.append(death)
+        
+        max_finite = max(finite_vals) if finite_vals else 1.0
+        cap_val = max_finite * 1.15 if max_finite > 0 else 1.15
+
+        bars_by_dim = defaultdict(list)
+        for dim, birth, death in self.barcode:
+            bars_by_dim[dim].append((birth, death))
+
+        sorted_dims = sorted(bars_by_dim.keys())
         fig = go.Figure()
-        for d in all_dims:
-            fig.add_trace(go.Scatter(x=steps_eps, y=betti_history[d], mode="lines+markers",
-                                     name=f"b_{d}", line=dict(shape="hv")))
-        fig.update_layout(title=f"Betti Curves ({self.method_name})", xaxis_title=self.param_label,
-                          yaxis_title="Betti Number", template="plotly_white", hovermode="x unified")
+
+        y_val = 0
+        y_ticks_vals = []
+        y_ticks_text = []
+        colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
+
+        for color_idx, dim in enumerate(sorted_dims):
+            dim_bars = bars_by_dim[dim]
+            dim_bars.sort(key=lambda x: (x[0], -x[1] if not math.isinf(x[1]) else -math.inf))
+            dim_color = colors[color_idx % len(colors)]
+            
+            dim_y_start = y_val
+            for birth, death in dim_bars:
+                is_inf = math.isinf(death) or death is None
+                end_x = cap_val if is_inf else death
+                hover = f"Dimension: {dim}<br>Birth: {birth:.4f}<br>Death: {'inf' if is_inf else f'{death:.4f}'}<br>Persistence: {'inf' if is_inf else f'{death - birth:.4f}'}"
+                
+                fig.add_trace(go.Scatter(
+                    x=[birth, end_x],
+                    y=[y_val, y_val],
+                    mode="lines",
+                    line=dict(color=dim_color, width=3),
+                    hoverinfo="text",
+                    hovertext=hover,
+                    showlegend=False
+                ))
+                
+                if is_inf:
+                    fig.add_trace(go.Scatter(
+                        x=[end_x],
+                        y=[y_val],
+                        mode="markers",
+                        marker=dict(symbol="triangle-right", size=8, color=dim_color),
+                        hoverinfo="text",
+                        hovertext=hover,
+                        showlegend=False
+                    ))
+                y_val += 1
+            
+            dim_y_end = y_val - 1
+            if dim_y_end >= dim_y_start:
+                y_ticks_vals.append((dim_y_start + dim_y_end) / 2.0)
+                y_ticks_text.append(f"H_{dim}")
+                
+            fig.add_trace(go.Scatter(
+                x=[None],
+                y=[None],
+                mode="lines",
+                line=dict(color=dim_color, width=3),
+                name=f"H_{dim}"
+            ))
+
+            if dim != sorted_dims[-1]:
+                fig.add_shape(
+                    type="line",
+                    x0=0,
+                    y0=y_val - 0.5,
+                    x1=cap_val,
+                    y1=y_val - 0.5,
+                    line=dict(color="rgba(0,0,0,0.1)", width=1, dash="dash")
+                )
+
+        fig.update_layout(
+            title=f"Persistence Barcode ({self.method_name})",
+            xaxis_title=self.param_label,
+            yaxis=dict(
+                tickvals=y_ticks_vals,
+                ticktext=y_ticks_text,
+                showgrid=False,
+                zeroline=False
+            ),
+            template="plotly_white",
+            showlegend=True
+        )
         return fig
 
     # ------------------------------------------------------------------
@@ -1099,10 +1225,16 @@ class RipsFiltrationReport(_BaseFiltrationReport):
             eps_max = self._rips_eps_max()
             if self._select_rips_engine() == "cohomology":
                 payload = julia_engine.compute_rips_cohomology(
-                    self.points, eps_max, self.max_dimension)
+                    self.points, eps_max, self.max_dimension,
+                    analyze_manifolds=self.analyze_manifolds,
+                    n_samples=self.n_samples,
+                )
             else:
                 payload = julia_engine.compute_rips_filtration(
-                    self.points, eps_max, self.max_dimension)
+                    self.points, eps_max, self.max_dimension,
+                    analyze_manifolds=self.analyze_manifolds,
+                    n_samples=self.n_samples,
+                )
         except Exception as exc:  # pragma: no cover - only when Julia errors
             warnings.warn(
                 f"Fused Julia Rips filtration failed ({exc!r}); falling back to the "
@@ -1115,6 +1247,9 @@ class RipsFiltrationReport(_BaseFiltrationReport):
             return super()._assemble()
 
         # Large: keep the complex implicit -- this is the whole point of the fusion.
+        if "manifold_data" in payload and payload["manifold_data"] is not None:
+            self._precomputed_manifolds = payload["manifold_data"]
+
         return (None, None, payload["barcode"], payload["dim_first_appear"],
                 payload["total"], payload["eps_values"])
 

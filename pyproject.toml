@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysurgery"
-version = "2.0.14"
+version = "2.0.15"
 description = "A high-performance Python library for Computational Surgery Theory."
 dependencies = [
     "numpy>=2.4.4",
@@ -83,7 +83,7 @@ python_files = ["test_*.py"]
 "*" = ["*.jl", "*.yaml", "*.json"]
 
 [tool.bumpversion]
-current_version = "2.0.14"
+current_version = "2.0.15"
 commit = true
 tag = true
 

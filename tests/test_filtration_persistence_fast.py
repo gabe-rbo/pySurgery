@@ -254,3 +254,35 @@ def test_compute_torsion_default_off_and_torsion_free():
     assert "Integer Torsion Report" in on.to_markdown()
     # Betti table is unchanged by enabling torsion.
     assert _bagify(on.barcode) == _bagify(off.barcode)
+
+
+def test_julia_side_manifold_analysis_on_implicit_path():
+    """Verify that the implicit path with analyze_manifolds=True runs and gets correct results."""
+    if not _julia_available():
+        pytest.skip("Julia backend unavailable")
+    pts = _circle(12)
+    # Using _ForceFusedRips forces implicit path but allows manifold analysis offloaded to Julia
+    rep = _ForceFusedRips(pts, max_dimension=2, analyze_manifolds=True, n_samples=5)
+    assert rep.analyze_manifolds is True
+    assert rep._precomputed_manifolds is not None
+    manifold_statuses = [r["is_manifold"] for r in rep.results]
+    assert "Yes" in manifold_statuses
+
+
+def test_filtration_report_plot():
+    """Test that the plot method returns a plotly figure for both Betti curves and barcode."""
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        pytest.skip("Plotly is required for this test")
+        
+    pts = _circle(10)
+    rep = RipsFiltrationReport(pts, max_dimension=2, analyze_manifolds=False)
+    
+    fig_betti = rep.plot(barcode=False)
+    assert isinstance(fig_betti, go.Figure)
+    assert len(fig_betti.data) > 0
+    
+    fig_barcode = rep.plot(barcode=True)
+    assert isinstance(fig_barcode, go.Figure)
+    assert len(fig_barcode.data) > 0

@@ -3,6 +3,7 @@ import threading
 import importlib.util
 import warnings
 from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import scipy.sparse as sp
 
@@ -2361,6 +2362,8 @@ class JuliaBridge:
         points: np.ndarray,
         epsilon: float,
         max_dim: int,
+        analyze_manifolds: bool = False,
+        n_samples: Optional[int] = None,
     ) -> dict:
         """Fused Vietoris-Rips build + longest-edge filtration + Z2 persistence in Julia.
 
@@ -2375,26 +2378,30 @@ class JuliaBridge:
             points: (N, D) array of point coordinates.
             epsilon: Maximum edge length (diameter cap) for the complex.
             max_dim: Maximum simplex dimension to build.
+            analyze_manifolds: If True, run the per-threshold manifold analysis in Julia.
+            n_samples: If given, select this many thresholds from distinct values.
 
         Returns:
             A dict with keys:
-                ``barcode`` -- list of ``(dim, birth, death)`` tuples (``death`` is
-                    ``inf`` for essential classes; zero-persistence pairs omitted);
-                ``eps_values`` -- sorted distinct appearance values (the grid);
+                ``barcode`` -- list of ``(dim, birth, death)`` tuples;
+                ``eps_values`` -- sorted distinct appearance values;
                 ``dim_first_appear`` -- ``{dim: minimum appearance value}``;
-                ``total`` -- total number of simplices in the complex.
+                ``total`` -- total number of simplices in the complex;
+                ``manifold_data`` -- dict of manifold results per threshold if analyze_manifolds is True.
 
         Raises:
             RuntimeError: If the Julia call fails.
         """
         self.require_julia()
         try:
-            (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
-             _dim_count, total) = self.backend.compute_rips_filtration(
+            res = self.backend.compute_rips_filtration(
                 np.ascontiguousarray(points, dtype=np.float64),
                 float(epsilon),
                 int(max_dim),
+                bool(analyze_manifolds),
+                n_samples,
             )
+            bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val, _dim_count, total = res[0:8]
             dims = np.asarray(bar_dim, dtype=np.int64).tolist()
             births = np.asarray(bar_birth, dtype=np.float64).tolist()
             deaths = np.asarray(bar_death, dtype=np.float64).tolist()
@@ -2402,12 +2409,25 @@ class JuliaBridge:
 
             ids = np.asarray(dim_ids, dtype=np.int64).tolist()
             firsts = np.asarray(dim_first_val, dtype=np.float64).tolist()
-            return {
+            payload = {
                 "barcode": barcode,
                 "eps_values": np.asarray(eps_values, dtype=np.float64).tolist(),
                 "dim_first_appear": {int(d): float(f) for d, f in zip(ids, firsts)},
                 "total": int(total),
             }
+
+            if len(res) > 8 and res[8]:
+                payload["manifold_data"] = {
+                    "epsilons": np.asarray(res[9], dtype=np.float64).tolist(),
+                    "is_manifold": np.asarray(res[10], dtype=bool).tolist(),
+                    "dimensions": np.asarray(res[11], dtype=np.int64).tolist(),
+                    "is_closed": np.asarray(res[12], dtype=bool).tolist(),
+                    "failures": np.asarray(res[13], dtype=np.int64).tolist(),
+                }
+            else:
+                payload["manifold_data"] = None
+
+            return payload
         except Exception as e:
             raise RuntimeError(f"compute_rips_filtration failed: {e!r}")
 
@@ -2416,6 +2436,8 @@ class JuliaBridge:
         points: np.ndarray,
         epsilon: float,
         max_dim: int,
+        analyze_manifolds: bool = False,
+        n_samples: Optional[int] = None,
     ) -> dict:
         """Implicit persistent COHOMOLOGY of a Vietoris-Rips filtration in Julia.
 
@@ -2428,15 +2450,13 @@ class JuliaBridge:
         :meth:`compute_rips_filtration`.
 
         Returns the same payload dict as :meth:`compute_rips_filtration`
-        (``barcode``, ``eps_values``, ``dim_first_appear``, ``total``), so callers
-        can pick either engine transparently. This engine wins in high dimension
-        (where homology reduction blows up) and uses less memory; the clique engine
-        is faster in the common low-dimensional case.
 
         Args:
             points: (N, D) array of point coordinates.
             epsilon: Maximum edge length (diameter cap) for the complex.
             max_dim: Maximum simplex dimension; H_d computed for d in 0..max_dim.
+            analyze_manifolds: If True, run the per-threshold manifold analysis in Julia.
+            n_samples: If given, select this many thresholds from distinct values.
 
         Returns:
             The payload dict described above.
@@ -2446,12 +2466,14 @@ class JuliaBridge:
         """
         self.require_julia()
         try:
-            (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
-             _dim_count, total) = self.backend.compute_rips_cohomology(
+            res = self.backend.compute_rips_cohomology(
                 np.ascontiguousarray(points, dtype=np.float64),
                 float(epsilon),
                 int(max_dim),
+                bool(analyze_manifolds),
+                n_samples,
             )
+            bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val, _dim_count, total = res[0:8]
             dims = np.asarray(bar_dim, dtype=np.int64).tolist()
             births = np.asarray(bar_birth, dtype=np.float64).tolist()
             deaths = np.asarray(bar_death, dtype=np.float64).tolist()
@@ -2459,12 +2481,25 @@ class JuliaBridge:
 
             ids = np.asarray(dim_ids, dtype=np.int64).tolist()
             firsts = np.asarray(dim_first_val, dtype=np.float64).tolist()
-            return {
+            payload = {
                 "barcode": barcode,
                 "eps_values": np.asarray(eps_values, dtype=np.float64).tolist(),
                 "dim_first_appear": {int(d): float(f) for d, f in zip(ids, firsts)},
                 "total": int(total),
             }
+
+            if len(res) > 8 and res[8]:
+                payload["manifold_data"] = {
+                    "epsilons": np.asarray(res[9], dtype=np.float64).tolist(),
+                    "is_manifold": np.asarray(res[10], dtype=bool).tolist(),
+                    "dimensions": np.asarray(res[11], dtype=np.int64).tolist(),
+                    "is_closed": np.asarray(res[12], dtype=bool).tolist(),
+                    "failures": np.asarray(res[13], dtype=np.int64).tolist(),
+                }
+            else:
+                payload["manifold_data"] = None
+
+            return payload
         except Exception as e:
             raise RuntimeError(f"compute_rips_cohomology failed: {e!r}")
 
