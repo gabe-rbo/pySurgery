@@ -557,6 +557,18 @@ class JuliaBridge:
                 ),
             ),
             (
+                # The implicit-cohomology Rips engine (Phase B), used for high
+                # max_dimension. Warm it on a small tetrahedral cloud at max_dim=3
+                # so its first real call does not pay the JIT cost.
+                "rips_cohomology",
+                lambda: self.compute_rips_cohomology(
+                    np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+                              [0.0, 0.0, 1.0], [1.0, 1.0, 1.0]], dtype=np.float64),
+                    3.0,
+                    3,
+                ),
+            ),
+            (
                 "pi1_abelianization",
                 lambda: self.abelianize_and_bhs_rank(["a"], [["a", "a"]]),
             ),
@@ -2398,6 +2410,63 @@ class JuliaBridge:
             }
         except Exception as e:
             raise RuntimeError(f"compute_rips_filtration failed: {e!r}")
+
+    def compute_rips_cohomology(
+        self,
+        points: np.ndarray,
+        epsilon: float,
+        max_dim: int,
+    ) -> dict:
+        """Implicit persistent COHOMOLOGY of a Vietoris-Rips filtration in Julia.
+
+        Ripser-style engine: simplices are indexed by the combinatorial number
+        system and their cofacets enumerated on the fly, so the boundary matrix is
+        never assembled. Reduction is the coboundary column reduction with clearing
+        and (emergent-pair) owner-recompute. Persistent cohomology yields the
+        IDENTICAL barcode to homology (de Silva-Morozov-Vejdemo-Johansson duality),
+        so the result is exact -- validated bar-for-bar against
+        :meth:`compute_rips_filtration`.
+
+        Returns the same payload dict as :meth:`compute_rips_filtration`
+        (``barcode``, ``eps_values``, ``dim_first_appear``, ``total``), so callers
+        can pick either engine transparently. This engine wins in high dimension
+        (where homology reduction blows up) and uses less memory; the clique engine
+        is faster in the common low-dimensional case.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            epsilon: Maximum edge length (diameter cap) for the complex.
+            max_dim: Maximum simplex dimension; H_d computed for d in 0..max_dim.
+
+        Returns:
+            The payload dict described above.
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        self.require_julia()
+        try:
+            (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+             _dim_count, total) = self.backend.compute_rips_cohomology(
+                np.ascontiguousarray(points, dtype=np.float64),
+                float(epsilon),
+                int(max_dim),
+            )
+            dims = np.asarray(bar_dim, dtype=np.int64).tolist()
+            births = np.asarray(bar_birth, dtype=np.float64).tolist()
+            deaths = np.asarray(bar_death, dtype=np.float64).tolist()
+            barcode = list(zip(dims, births, deaths))
+
+            ids = np.asarray(dim_ids, dtype=np.int64).tolist()
+            firsts = np.asarray(dim_first_val, dtype=np.float64).tolist()
+            return {
+                "barcode": barcode,
+                "eps_values": np.asarray(eps_values, dtype=np.float64).tolist(),
+                "dim_first_appear": {int(d): float(f) for d, f in zip(ids, firsts)},
+                "total": int(total),
+            }
+        except Exception as e:
+            raise RuntimeError(f"compute_rips_cohomology failed: {e!r}")
 
     def simplify_jl(self, simplices: list[tuple]) -> tuple[list[tuple], dict[int, list[int]], dict[tuple, list[tuple]]]:
         """Executes high-performance topology-preserving simplification in Julia.

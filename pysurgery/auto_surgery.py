@@ -900,7 +900,7 @@ def _find_cut_site(
                 continue
                 
             C_a_test, _ = _apply_disk_removal_to_complex(C_a, [f"D^{top_dim}"], [σ])
-            if len(C_a_test.explode()) != len(C_a.explode()):
+            if C_a_test.num_connected_components() != C_a.num_connected_components():
                 continue
                 
             return CutSite(

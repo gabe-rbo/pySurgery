@@ -2326,6 +2326,14 @@ class SimplicialComplex(ChainComplex):
     _boundaries_cache: Dict[int, csr_matrix] = PrivateAttr(default_factory=dict)
     _cells_cache: Dict[int, int] = PrivateAttr(default_factory=dict)
 
+    # Connected-component decomposition caches. The vertex-set partition is the
+    # cheap "once the tree is built" info (frozensets of vertex ids); the
+    # component subcomplexes are the heavier objects reused across per-component
+    # invariant computations (homology, cohomology, ...). Both are invalidated
+    # together with the rest of the cache in `_ensure_cache_valid`.
+    _component_vsets_cache: Optional[List[frozenset]] = PrivateAttr(default=None)
+    _components_cache: Optional[List["SimplicialComplex"]] = PrivateAttr(default=None)
+
     def __init__(self, **data):
         """Initialize the simplicial complex.
 
@@ -2360,6 +2368,8 @@ class SimplicialComplex(ChainComplex):
             self._cache.clear()
             self._boundaries_cache.clear()
             self._cells_cache.clear()
+            self._component_vsets_cache = None
+            self._components_cache = None
             self._cache_signature = current
 
     def add_simplex(self, simplex: Iterable[int]) -> None:
@@ -2432,6 +2442,8 @@ class SimplicialComplex(ChainComplex):
         """
         if namespace is None:
             self._cache.clear()
+            self._component_vsets_cache = None
+            self._components_cache = None
             return
         prefix = (str(namespace),)
         keys = [k for k in self._cache if k[:1] == prefix]
@@ -3231,12 +3243,20 @@ class SimplicialComplex(ChainComplex):
         new_filtration = {}
         new_point_cloud_to_simplices = {}
         new_simplices_to_point_cloud = {}
+        # Re-indexed connected components of the inputs, paired with their
+        # (shifted) vertex sets. A disjoint union's components are exactly the
+        # union of the inputs' components, and a uniform vertex shift is
+        # cache-safe (see ``_reindexed_copy``), so we carry each input
+        # component's homology/cohomology result caches straight into the result
+        # — no Smith Normal Form is re-run.
+        reindexed_components: List[Tuple[frozenset, "SimplicialComplex"]] = []
 
         coefficient_ring = sc_list[0].coefficient_ring
         shift = 0
         has_coords = True
 
         for sc in sc_list:
+            start = shift
             # 1. Determine number of vertices in this complex
             if hasattr(sc, "_coordinates") and sc._coordinates is not None:
                 n_v = len(sc._coordinates)
@@ -3273,6 +3293,22 @@ class SimplicialComplex(ChainComplex):
                 if s in sc.simplices_to_point_cloud:
                     new_simplices_to_point_cloud[s_shifted] = sc.simplices_to_point_cloud[s]
 
+            # 6. Re-index this input's connected components into the result.
+            # For a connected input the (whole-complex) result caches live on
+            # ``sc`` itself, which equals its single component; for a
+            # disconnected one each component object carries its own. Either way
+            # the shifted copy keeps any cached homology/cohomology.
+            vsets = sc._component_vertex_sets()
+            comps = sc.connected_components()
+            if len(comps) <= 1:
+                if comps:
+                    vset = frozenset(v + start for v in vsets[0])
+                    reindexed_components.append((vset, sc._reindexed_copy(start)))
+            else:
+                for vset0, comp in zip(vsets, comps):
+                    vset = frozenset(v + start for v in vset0)
+                    reindexed_components.append((vset, comp._reindexed_copy(start)))
+
             shift += n_v
 
         # Construct the new complex
@@ -3288,80 +3324,458 @@ class SimplicialComplex(ChainComplex):
         # Set the concatenated mapping dictionaries
         new_sc._point_cloud_to_simplices = new_point_cloud_to_simplices
         new_sc._simplices_to_point_cloud = new_simplices_to_point_cloud
+
+        # Seed the connected-component decomposition with the re-indexed inputs.
+        # Order them exactly as a fresh `_component_vertex_sets()` would (stable
+        # sort by descending size; ties by ascending min vertex), pin the cache
+        # signature first so the seeded caches are not wiped on first access, and
+        # share the global coordinate array with every component.
+        if reindexed_components:
+            reindexed_components.sort(key=lambda pair: (-len(pair[0]), min(pair[0])))
+            new_sc._cache_signature = new_sc._structure_signature()
+            shared_coords = getattr(new_sc, "_coordinates", None)
+            if shared_coords is not None:
+                for _, comp in reindexed_components:
+                    comp._coordinates = shared_coords
+            new_sc._component_vsets_cache = [vset for vset, _ in reindexed_components]
+            new_sc._components_cache = [comp for _, comp in reindexed_components]
+            # A single total component never takes the summed path, so lift that
+            # component's result caches onto the result itself. Its labels equal
+            # the result's, and its π₁ cycles were already shifted to match, so
+            # every entry copies verbatim.
+            if len(reindexed_components) == 1:
+                only = reindexed_components[0][1]
+                for k, v in only._cache.items():
+                    if len(k) >= 2 and k[0] == "sc" and k[1] in (
+                        "homology", "cohomology", "pi1_group", "pi1_cycles"
+                    ):
+                        new_sc._cache[k] = _clone_cache_value(v)
         return new_sc
 
-    def explode(self) -> List["SimplicialComplex"]:
-        """Decompose this simplicial complex into its connected components.
+    @staticmethod
+    def _vertex_extent(sc: "SimplicialComplex") -> int:
+        """Number of vertex slots in ``sc`` (the amount to shift a union by).
 
-        What is Being Computed?:
-            The set of disjoint connected components of the simplicial complex.
-            Each component is returned as an independent SimplicialComplex 
-            instance.
+        Mirrors :meth:`concatenate`'s sizing: the coordinate count if present,
+        else the point-cloud size, else one past the largest vertex id used.
+        """
+        if getattr(sc, "_coordinates", None) is not None:
+            return len(sc._coordinates)
+        if sc.point_cloud_to_simplices:
+            return len(sc.point_cloud_to_simplices)
+        flat = [v for s in sc.simplices for v in s]
+        return max(flat) + 1 if flat else 0
 
-        Algorithm:
-            1. Build an adjacency list from the 1-skeleton (edges).
-            2. Use Depth First Search (DFS) to partition the vertices into 
-               connected components.
-            3. For each component vertex set, extract all simplices from the 
-               original complex whose vertices are fully contained in that set.
-            4. Preserve filtration values and coordinates for the sub-simplices.
-            5. Return a list of new SimplicialComplex objects.
+    def glue(
+        self,
+        other: "SimplicialComplex",
+        *,
+        identify: Optional[Iterable[Tuple[Any, Any]]] = None,
+        share_points: bool = False,
+    ) -> "SimplicialComplex":
+        """Glue ``other`` onto this complex along an identification (a quotient).
+
+        Unlike :meth:`concatenate` (a disjoint union), ``glue`` builds the
+        *adjunction* of two complexes: it forms the disjoint union and then
+        collapses the vertices that the identification declares equal. Because
+        the gluing changes the topology, the result is computed from scratch —
+        no homology/π₁ caches are carried over.
+
+        Identification rules (any combination):
+
+        * ``identify`` — an iterable of ``(left, right)`` pairs, ``left``
+          referring to *this* complex and ``right`` to ``other``. Each pair is
+          dispatched on its shape:
+
+          - **vertex pair** ``(i, j)`` (two ints): merge vertex ``i`` of this
+            complex with vertex ``j`` of ``other``.
+          - **simplex pair** ``(s, t)`` (two equal-length tuples/lists): glue the
+            two simplices, identifying ``s[k]`` with ``t[k]`` vertex-by-vertex in
+            the given order (so the caller controls the gluing orientation).
+
+        * ``share_points=True`` — additionally merge every pair of vertices whose
+          coordinates match *exactly*. Requires both complexes to carry
+          coordinates of the same dimension.
+
+        Simplices whose vertices partly collapse are reduced to the simplex on
+        their surviving (distinct) vertices; the face closure is rebuilt, so
+        e.g. gluing two triangles along an edge yields the expected bowtie.
+
+        Args:
+            other: The complex to glue on.
+            identify: Vertex- and/or simplex-pair identifications (see above).
+            share_points: Merge exactly-coincident points (needs coordinates).
 
         Returns:
-            List[SimplicialComplex]: A list of connected components.
+            SimplicialComplex: the quotient complex (fresh, uncached).
         """
-        vertices = [v[0] for v in self.n_simplices(0)]
-        edges = self.n_simplices(1)
+        n_self = self._vertex_extent(self)
+        n_other = self._vertex_extent(other)
+        total = n_self + n_other
 
+        # Union-find over the disjoint-union vertex set: self ids stay, other ids
+        # are shifted by n_self.
+        parent = list(range(total))
+
+        def find(x: int) -> int:
+            root = x
+            while parent[root] != root:
+                root = parent[root]
+            while parent[x] != root:
+                parent[x], x = root, parent[x]
+            return root
+
+        def union(a: int, b: int) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[max(ra, rb)] = min(ra, rb)
+
+        for pair in (identify or []):
+            left, right = pair
+            if isinstance(left, int) and isinstance(right, int):
+                union(left, right + n_self)
+            elif isinstance(left, (tuple, list)) and isinstance(right, (tuple, list)):
+                if len(left) != len(right):
+                    raise ValueError(
+                        "glue: simplices to identify must have equal length "
+                        f"(got {tuple(left)} and {tuple(right)})"
+                    )
+                for va, vb in zip(left, right):
+                    union(int(va), int(vb) + n_self)
+            else:
+                raise TypeError(
+                    "glue: each identify pair must be (int, int) for vertices or "
+                    "(simplex, simplex) for simplices; "
+                    f"got ({type(left).__name__}, {type(right).__name__})"
+                )
+
+        has_self_coords = getattr(self, "_coordinates", None) is not None
+        has_other_coords = getattr(other, "_coordinates", None) is not None
+        if share_points:
+            if not (has_self_coords and has_other_coords):
+                raise ValueError(
+                    "glue(share_points=True) requires both complexes to have coordinates"
+                )
+            coord_to_self: Dict[tuple, int] = {}
+            for i, p in enumerate(self._coordinates):
+                coord_to_self.setdefault(tuple(p.tolist()), i)
+            for j, p in enumerate(other._coordinates):
+                rep = coord_to_self.get(tuple(p.tolist()))
+                if rep is not None:
+                    union(rep, j + n_self)
+
+        # Canonical relabeling of the surviving classes. Only vertices that
+        # actually carry simplices (or coordinates) become vertices of the
+        # quotient; assign new ids by ascending old id for determinism.
+        used: set = set()
+        for s in self.simplices:
+            used.update(s)
+        for s in other.simplices:
+            used.update(v + n_self for v in s)
+        if has_self_coords:
+            used.update(range(min(n_self, len(self._coordinates))))
+        if has_other_coords:
+            used.update(n_self + j for j in range(min(n_other, len(other._coordinates))))
+
+        root_to_new: Dict[int, int] = {}
+        old_to_new: Dict[int, int] = {}
+        for old in sorted(used):
+            r = find(old)
+            if r not in root_to_new:
+                root_to_new[r] = len(root_to_new)
+            old_to_new[old] = root_to_new[r]
+
+        new_simplices: List[Tuple[int, ...]] = []
+        for s in self.simplices:
+            new_simplices.append(tuple(sorted({old_to_new[v] for v in s})))
+        for s in other.simplices:
+            new_simplices.append(tuple(sorted({old_to_new[v + n_self] for v in s})))
+
+        glued = SimplicialComplex.from_simplices(
+            new_simplices,
+            coefficient_ring=self.coefficient_ring,
+            close_under_faces=True,
+        )
+
+        # Carry coordinates when both sides have them at a common dimension.
+        # A merged class takes this complex's coordinate when available, else
+        # other's (with share_points they coincide anyway).
+        if (
+            has_self_coords
+            and has_other_coords
+            and self._coordinates.shape[1] == other._coordinates.shape[1]
+        ):
+            dim = self._coordinates.shape[1]
+            new_n = len(root_to_new)
+            new_coords = np.zeros((new_n, dim), dtype=np.float64)
+            filled = [False] * new_n
+            for j in range(min(n_other, len(other._coordinates))):
+                nid = old_to_new.get(j + n_self)
+                if nid is not None and not filled[nid]:
+                    new_coords[nid] = other._coordinates[j]
+                    filled[nid] = True
+            for i in range(min(n_self, len(self._coordinates))):
+                nid = old_to_new.get(i)
+                if nid is not None:
+                    new_coords[nid] = self._coordinates[i]
+                    filled[nid] = True
+            glued._coordinates = new_coords
+            glued._generate_point_cloud_mappings(new_coords)
+
+        return glued
+
+    def _component_vertex_sets(self) -> List[frozenset]:
+        """Partition the vertices into connected components of the 1-skeleton.
+
+        This is the cheap, structural half of the decomposition: a single DFS
+        over the edge graph. The result — a list of frozensets of vertex ids,
+        ordered by descending size — is cached on the parent complex and reused
+        by every per-component computation, so the traversal is paid for at most
+        once per structural state.
+
+        Returns:
+            List[frozenset]: Vertex-id sets, one per connected component, sorted
+            by descending cardinality.
+        """
+        self._ensure_cache_valid()
+        if self._cache_enabled and self._component_vsets_cache is not None:
+            return self._component_vsets_cache
+
+        vertices = [v[0] for v in self.n_simplices(0)]
         adj = defaultdict(list)
-        for u, v in edges:
+        for u, v in self.n_simplices(1):
             adj[u].append(v)
             adj[v].append(u)
 
         visited = set()
-        components_sc = []
+        comps: List[frozenset] = []
+        # Sort vertices to keep component discovery deterministic.
+        for start in sorted(vertices):
+            if start in visited:
+                continue
+            comp_vset = set()
+            stack = [start]
+            visited.add(start)
+            while stack:
+                curr = stack.pop()
+                comp_vset.add(curr)
+                for neighbor in adj[curr]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        stack.append(neighbor)
+            comps.append(frozenset(comp_vset))
 
-        # Sort vertices to keep component discovery deterministic
-        for v in sorted(vertices):
-            if v not in visited:
-                comp_vset = set()
-                stack = [v]
-                visited.add(v)
-                while stack:
-                    curr = stack.pop()
-                    comp_vset.add(curr)
-                    for neighbor in adj[curr]:
-                        if neighbor not in visited:
-                            visited.add(neighbor)
-                            stack.append(neighbor)
+        comps.sort(key=len, reverse=True)
+        if self._cache_enabled:
+            self._component_vsets_cache = comps
+        return comps
 
-                # Extract subcomplex for this component
-                sub_simplices = []
-                sub_filtration = {}
-                for d in self.dimensions:
-                    for s in self.n_simplices(d):
-                        if all(vx in comp_vset for vx in s):
-                            sub_simplices.append(s)
-                            if s in self.filtration:
-                                sub_filtration[s] = self.filtration[s]
+    def num_connected_components(self) -> int:
+        """Return the number of connected components (β₀ = rank of H₀).
 
-                if sub_simplices:
-                    comp_sc = SimplicialComplex.from_simplices(
-                        sub_simplices, 
-                        coefficient_ring=self.coefficient_ring, 
-                        close_under_faces=True
-                    )
-                    comp_sc.filtration = sub_filtration
+        Computed from the 1-skeleton DFS (cached); requires no Smith Normal Form
+        work. Equal to the free rank of H₀ over any coefficient ring.
+        """
+        return len(self._component_vertex_sets())
 
-                    # Copy coordinates if available (preserving global indices)
-                    if hasattr(self, "_coordinates") and self._coordinates is not None:
-                         comp_sc._coordinates = self._coordinates
+    def is_connected(self) -> bool:
+        """Return True iff the complex has exactly one connected component.
 
-                    components_sc.append(comp_sc)
+        An empty complex has zero components and is reported as not connected.
+        """
+        return self.num_connected_components() == 1
 
-        # Sort components descending by size (number of vertices)
-        components_sc.sort(key=lambda x: len(x.n_simplices(0)), reverse=True)
+    def _build_components(self) -> List["SimplicialComplex"]:
+        """Build one independent SimplicialComplex per connected component.
+
+        Uses the cached vertex partition and routes each simplex to its
+        component by the component of its first vertex — valid for complexes
+        closed under faces, where every vertex of a simplex shares a component.
+        This is a single linear pass over the simplices (vs. the previous
+        per-component rescan, which was quadratic in the component count).
+        """
+        vsets = self._component_vertex_sets()
+
+        vid_to_comp: Dict[int, int] = {}
+        for ci, cset in enumerate(vsets):
+            for v in cset:
+                vid_to_comp[v] = ci
+
+        bucket_simplices: List[List[Tuple[int, ...]]] = [[] for _ in vsets]
+        bucket_filtration: List[Dict[Tuple[int, ...], float]] = [dict() for _ in vsets]
+        for d in self.dimensions:
+            for s in self.n_simplices(d):
+                ci = vid_to_comp[s[0]]
+                bucket_simplices[ci].append(s)
+                if s in self.filtration:
+                    bucket_filtration[ci][s] = self.filtration[s]
+
+        has_coords = getattr(self, "_coordinates", None) is not None
+        components_sc: List["SimplicialComplex"] = []
+        for ci in range(len(vsets)):
+            sub_simplices = bucket_simplices[ci]
+            if not sub_simplices:
+                continue
+            comp_sc = SimplicialComplex.from_simplices(
+                sub_simplices,
+                coefficient_ring=self.coefficient_ring,
+                close_under_faces=True,
+            )
+            comp_sc.filtration = bucket_filtration[ci]
+            # Share global coordinates (components keep global vertex indices).
+            if has_coords:
+                comp_sc._coordinates = self._coordinates
+            components_sc.append(comp_sc)
         return components_sc
+
+    def connected_components(self) -> List["SimplicialComplex"]:
+        """Return the connected components as cached, independent subcomplexes.
+
+        The component objects are built once per structural state and cached on
+        this complex, so repeated per-component computations (homology in
+        several degrees, cohomology, ...) reuse the same objects and their own
+        internal caches. Treat the returned components as read-only; mutating
+        one corrupts the shared cache (call `clear_cache()` to rebuild).
+
+        Returns:
+            List[SimplicialComplex]: One subcomplex per connected component,
+            ordered by descending number of vertices.
+        """
+        self._ensure_cache_valid()
+        if self._cache_enabled and self._components_cache is not None:
+            return self._components_cache
+        components_sc = self._build_components()
+        if self._cache_enabled:
+            self._components_cache = components_sc
+        return components_sc
+
+    def explode(self) -> List["SimplicialComplex"]:
+        """Decompose this simplicial complex into its connected components.
+
+        Thin wrapper over `connected_components()` (the cached accessor): builds
+        an independent SimplicialComplex per connected component of the
+        1-skeleton, ordered by descending size. See `connected_components` for
+        caching/ownership semantics, and `num_connected_components` /
+        `is_connected` for the cheap counts that skip building subcomplexes.
+
+        Returns:
+            List[SimplicialComplex]: A list of connected components.
+        """
+        return self.connected_components()
+
+    def component_simplex_tables(
+        self,
+    ) -> List[Tuple[frozenset, Dict[int, List[Tuple[int, ...]]]]]:
+        """Lightweight per-component view: ``(vertex_set, {dim: simplices})`` pairs.
+
+        The cheap counterpart of :meth:`connected_components`: it returns the
+        same partition of the simplices — in the same descending-size order —
+        but as plain ``{dim: [simplices]}`` tables instead of full
+        ``SimplicialComplex`` objects. It skips face-closure re-derivation,
+        cache setup and point-cloud mappings, so a caller that only needs a
+        component's raw simplices (e.g. to hash its content and decide whether a
+        heavy invariant must be recomputed) pays a single linear pass and can
+        build a subcomplex lazily for the few components that actually need one.
+
+        Each simplex is routed to its component by the component of its first
+        vertex — valid for complexes closed under faces, where every vertex of a
+        simplex shares a component. The returned tables are therefore closed
+        under faces.
+
+        Returns:
+            List[Tuple[frozenset, Dict[int, List[Tuple[int, ...]]]]]: One
+            ``(vertex_ids, simplex_table)`` pair per connected component, ordered
+            by descending vertex count.
+        """
+        vsets = self._component_vertex_sets()
+
+        vid_to_comp: Dict[int, int] = {}
+        for ci, cset in enumerate(vsets):
+            for v in cset:
+                vid_to_comp[v] = ci
+
+        tables: List[Dict[int, List[Tuple[int, ...]]]] = [dict() for _ in vsets]
+        for d in self.dimensions:
+            for s in self.n_simplices(d):
+                tables[vid_to_comp[s[0]]].setdefault(d, []).append(s)
+
+        return [(vsets[ci], tables[ci]) for ci in range(len(vsets)) if tables[ci]]
+
+    def _reindexed_copy(self, shift: int) -> "SimplicialComplex":
+        """Return a copy with every vertex id increased by ``shift``.
+
+        A uniform vertex shift is cache-safe: it preserves the f-vector
+        ``_structure_signature`` (per-dimension simplex counts) and the sorted
+        simplex order (the shift is monotone), so any *label-invariant* result
+        already computed for ``self`` is equally valid for the copy. We therefore
+        carry over the cached ``("sc", "homology"/"cohomology", ...)`` entries —
+        each a clone-safe ``(rank, torsion)`` value independent of the actual
+        vertex labels — so ``concatenate`` can re-index a component without ever
+        re-running Smith Normal Form. Coordinates are set by the caller (they are
+        shared global arrays). The boundary/cells caches are intentionally *not*
+        rebuilt: when the homology cache is hit they are never needed.
+
+        Args:
+            shift: Non-negative integer added to every vertex id.
+
+        Returns:
+            SimplicialComplex: structurally identical copy, vertices shifted.
+        """
+        if shift == 0:
+            new_table = {d: list(simps) for d, simps in self._simplices_table.items()}
+        else:
+            new_table = {
+                d: sorted(tuple(v + shift for v in s) for s in simps)
+                for d, simps in self._simplices_table.items()
+            }
+        out = SimplicialComplex(
+            simplices=new_table, coefficient_ring=self.coefficient_ring
+        )
+        if self.filtration:
+            out.filtration = {
+                tuple(v + shift for v in s): val for s, val in self.filtration.items()
+            }
+        # Seed the structural signature so the transferred result caches are
+        # considered valid (otherwise the first `_cache_get` would wipe them).
+        out._cache_signature = out._structure_signature()
+        for k, v in self._cache.items():
+            if not (len(k) >= 2 and k[0] == "sc"):
+                continue
+            kind = k[1]
+            if kind in ("homology", "cohomology", "pi1_group"):
+                # Invariant under a uniform shift: homology/cohomology are
+                # (rank, torsion); the π₁ presentation and its *positional* CW
+                # traces are unchanged because the shift preserves the sorted
+                # simplex order, hence the boundary matrices and the CW complex.
+                out._cache[k] = _clone_cache_value(v)
+            elif kind == "pi1_cycles":
+                # Generator cycles carry vertex labels, so they must be shifted.
+                out._cache[k] = self._shift_pi1_cycles(v, shift)
+        return out
+
+    @staticmethod
+    def _shift_pi1_cycles(cycles: list, shift: int) -> list:
+        """Return ``GeneratorCycle`` results with every vertex id shifted by ``shift``.
+
+        Re-indexes the cached π₁ generator cycles of a component when it is moved
+        into a disjoint union (see ``concatenate``): the edge list, vertex path
+        and component root are translated; the generator name and orientation
+        character are intrinsic and kept. ``model_copy`` avoids importing the
+        ``GeneratorCycle`` class here (it lives in ``auto_surgery``, which imports
+        this module).
+        """
+        if shift == 0:
+            return _clone_cache_value(cycles)
+        return [
+            gc.model_copy(
+                update={
+                    "cycle": [(a + shift, b + shift) for (a, b) in gc.cycle],
+                    "vertex_path": [v + shift for v in gc.vertex_path],
+                    "component_root": gc.component_root + shift,
+                }
+            )
+            for gc in cycles
+        ]
 
     @property
     def dimensions(self) -> List[int]:
@@ -3735,10 +4149,42 @@ class SimplicialComplex(ChainComplex):
         self._cache_set(key, mat)
         return mat
 
+    def _homology_direct(
+        self, n: int | None = None, backend: str = "auto"
+    ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
+        """Homology of the whole complex with no component decomposition."""
+        return self.cellular_chain_complex().homology(n, backend=backend)
+
+    def _homology_summed(self, n: int, backend: str = "auto") -> Tuple[int, List[int]]:
+        """Direct-sum H_n over the connected components: H_n(⊔Xᵢ)=⊕ H_n(Xᵢ).
+
+        Each component is connected, so SNF runs on its (smaller) boundary
+        blocks rather than the full block-diagonal matrix of the whole complex.
+        Only called for n ≥ 1 with ≥ 2 components. Routes through each
+        component's public ``homology`` (not ``_homology_direct``) so a component
+        whose result is already cached — e.g. seeded by ``concatenate`` from the
+        inputs it was re-indexed from — contributes without re-running SNF.
+        """
+        total_rank = 0
+        torsion: List[int] = []
+        for comp in self.connected_components():
+            r, t = comp.homology(n, backend=backend)
+            total_rank += int(r)
+            torsion.extend(int(x) for x in t)
+        return (int(total_rank), sorted(torsion))
+
     def homology(
         self, n: int | None = None, backend: str = "auto"
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
         """Compute the homology of the simplicial complex.
+
+        For disconnected complexes the computation is decomposed over connected
+        components — H_n(⊔Xᵢ) = ⊕ H_n(Xᵢ) — so the (super-linear) Smith Normal
+        Form work happens on each component's small block instead of the full
+        block-diagonal boundary matrix. H₀ is read straight off the component
+        count (β₀ = #components, torsion-free), skipping SNF on ∂₁ entirely.
+        For connected complexes the behavior is identical to the direct
+        computation; the result is mathematically unchanged in all cases.
 
         Args:
             n: Optional homological degree to compute. If None, computes for all degrees.
@@ -3748,13 +4194,74 @@ class SimplicialComplex(ChainComplex):
             If n is provided: A tuple (rank, torsion).
             If n is None: A dictionary mapping degree to (rank, torsion).
         """
-        return self.cellular_chain_complex().homology(n, backend=backend)
+        # Cache the (rank, torsion) results directly on the complex. These are
+        # clone-safe (tuples/lists) and invariant under vertex relabeling, so the
+        # cache both avoids recomputing SNF on repeated calls and lets a
+        # re-indexed copy (see ``concatenate``) carry them forward verbatim.
+        key = ("sc", "homology", n if n is None else int(n),
+               str(self.coefficient_ring), backend)
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+
+        n_comp = self.num_connected_components()
+        if n is not None:
+            n = int(n)
+            if n == 0:
+                out: Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]] = (n_comp, [])
+            elif n_comp <= 1:
+                out = self._homology_direct(n, backend=backend)
+            else:
+                out = self._homology_summed(n, backend=backend)
+        elif n_comp <= 1:
+            out = self._homology_direct(None, backend=backend)
+        else:
+            out = {}
+            for d in self._homological_dimensions():
+                out[d] = (n_comp, []) if d == 0 else self._homology_summed(d, backend=backend)
+
+        self._cache_set(key, out)
+        # When all degrees were computed, also seed the per-degree integer keys
+        # so a later homology(d) — and the component-summed path that calls
+        # comp.homology(d) — hits the cache instead of re-running SNF. This is
+        # what lets `concatenate` carry a re-indexed component's per-degree
+        # results forward (the all-degrees dict alone would miss).
+        if n is None and isinstance(out, dict):
+            for d, val in out.items():
+                dkey = ("sc", "homology", int(d), str(self.coefficient_ring), backend)
+                if dkey not in self._cache:
+                    self._cache_set(dkey, val)
+        return out
+
+    def _cohomology_direct(
+        self, n: int | None = None, backend: str = "auto"
+    ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
+        """Cohomology of the whole complex with no component decomposition."""
+        return self.cellular_chain_complex().cohomology(n, backend=backend)
+
+    def _cohomology_summed(self, n: int, backend: str = "auto") -> Tuple[int, List[int]]:
+        """Direct-sum H^n over the connected components. Called for n ≥ 1 with ≥ 2 components.
+
+        Routes through each component's public ``cohomology`` so seeded
+        (e.g. ``concatenate``-propagated) component caches are reused.
+        """
+        total_rank = 0
+        torsion: List[int] = []
+        for comp in self.connected_components():
+            r, t = comp.cohomology(n, backend=backend)
+            total_rank += int(r)
+            torsion.extend(int(x) for x in t)
+        return (int(total_rank), sorted(torsion))
 
     def cohomology(
         self, n: int | None = None, backend: str = "auto"
     ) -> Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]]:
         """Compute the cohomology of the simplicial complex.
 
+        Like `homology`, this is decomposed over connected components for
+        disconnected complexes (H^n(⊔Xᵢ) = ⊕ H^n(Xᵢ); H⁰ = #components,
+        torsion-free) and identical to the direct computation otherwise.
+
         Args:
             n: Optional homological degree to compute. If None, computes for all degrees.
             backend: 'auto', 'julia', or 'python'.
@@ -3763,7 +4270,36 @@ class SimplicialComplex(ChainComplex):
             If n is provided: A tuple (rank, torsion).
             If n is None: A dictionary mapping degree to (rank, torsion).
         """
-        return self.cellular_chain_complex().cohomology(n, backend=backend)
+        key = ("sc", "cohomology", n if n is None else int(n),
+               str(self.coefficient_ring), backend)
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+
+        n_comp = self.num_connected_components()
+        if n is not None:
+            n = int(n)
+            if n == 0:
+                out: Union[Tuple[int, List[int]], Dict[int, Tuple[int, List[int]]]] = (n_comp, [])
+            elif n_comp <= 1:
+                out = self._cohomology_direct(n, backend=backend)
+            else:
+                out = self._cohomology_summed(n, backend=backend)
+        elif n_comp <= 1:
+            out = self._cohomology_direct(None, backend=backend)
+        else:
+            out = {}
+            for d in self._homological_dimensions():
+                out[d] = (n_comp, []) if d == 0 else self._cohomology_summed(d, backend=backend)
+
+        self._cache_set(key, out)
+        # Seed per-degree integer keys (see `homology` for the rationale).
+        if n is None and isinstance(out, dict):
+            for d, val in out.items():
+                dkey = ("sc", "cohomology", int(d), str(self.coefficient_ring), backend)
+                if dkey not in self._cache:
+                    self._cache_set(dkey, val)
+        return out
 
     def cohomology_basis(self, n: int, backend: str = "auto") -> list[np.ndarray]:
         """Compute a basis for the n-th cohomology group.
@@ -4694,21 +5230,106 @@ class SimplicialComplex(ChainComplex):
         return {d: len(list(self.n_simplices(d))) for d in self.dimensions}
 
     def betti_number(self, n: int | None = None, backend: str = "auto") -> int | dict[int, int]:
-        """Return the n-th Betti number of the simplicial complex."""
-        return self.cellular_chain_complex().betti_number(n, backend=backend)
+        """Return the n-th Betti number of the simplicial complex.
+
+        Routed through the component-aware `homology`, so β₀ comes from the
+        cached component count and higher Betti numbers are summed over
+        connected components for disconnected complexes.
+        """
+        if n is None:
+            return {d: r for d, (r, _) in self.homology(None, backend=backend).items()}
+        r, _ = self.homology(int(n), backend=backend)
+        return int(r)
 
     def betti_numbers(self, backend: str = "auto") -> dict[int, int]:
         """Return all Betti numbers of the simplicial complex."""
-        return self.cellular_chain_complex().betti_numbers(backend=backend)
+        return self.betti_number(None, backend=backend)
 
     def fundamental_group(self, simplify: bool = True, backend: str = "auto"):
-        """Compute the fundamental group of the simplicial complex."""
+        """Compute the fundamental group of the simplicial complex.
+
+        The π₁ presentation is memoized per ``(simplify, backend)``; the group is
+        a homotopy invariant independent of vertex labels, so the cached
+        presentation is reused on every repeated call.
+        """
+        key = ("sc", "pi1_group", bool(simplify), backend)
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
         from pysurgery.topology.fundamental_group import extract_pi_1
-        return extract_pi_1(self.to_cw_complex(), simplify=simplify, backend=backend)
+        out = extract_pi_1(self.to_cw_complex(), simplify=simplify, backend=backend)
+        self._cache_set(key, out)
+        return out
 
     def pi1(self, *, simplify: bool = True, backend: str = "auto"):
         """Alias for fundamental_group. Implements Gap G11."""
         return self.fundamental_group(simplify=simplify, backend=backend)
+
+    def _pi1_cycles_localized(self, *, simplify: bool, backend: str) -> list:
+        """π₁ generator cycles with the local↔global vertex remapping handled.
+
+        ``compute_pi1_generators_as_cycles`` validates each embedded loop against
+        the complex's edges, but ``to_cw_complex`` indexes cells *positionally*
+        (0-based, dense). When the vertex ids are already ``0..k-1`` the two
+        agree and we call straight through — byte-identical to the direct path.
+        Otherwise (e.g. a connected component carrying shifted/gapped global ids)
+        we relabel to a dense local complex, compute there, and map the resulting
+        edges / vertex paths / component root back to the global ids.
+        """
+        from pysurgery.auto_surgery import compute_pi1_generators_as_cycles, GeneratorCycle
+
+        verts = sorted({v for s in self.n_simplices(0) for v in s})
+        if verts == list(range(len(verts))):
+            return compute_pi1_generators_as_cycles(
+                self, simplify=simplify, backend=backend
+            )
+
+        g2l = {g: i for i, g in enumerate(verts)}
+        l2g = {i: g for g, i in g2l.items()}
+        local_table = {
+            d: sorted(tuple(g2l[v] for v in s) for s in simps)
+            for d, simps in self._simplices_table.items()
+        }
+        local = SimplicialComplex(
+            simplices=local_table, coefficient_ring=self.coefficient_ring
+        )
+        local_cycles = compute_pi1_generators_as_cycles(
+            local, simplify=simplify, backend=backend
+        )
+        return [
+            GeneratorCycle(
+                name=gc.name,
+                cycle=[(l2g[a], l2g[b]) for (a, b) in gc.cycle],
+                vertex_path=[l2g[v] for v in gc.vertex_path],
+                component_root=l2g.get(gc.component_root, gc.component_root),
+                orientation_character=gc.orientation_character,
+            )
+            for gc in local_cycles
+        ]
+
+    def _pi1_cycles_summed(self, *, simplify: bool, backend: str) -> list:
+        """Union the per-component π₁ generator cycles (global ids).
+
+        π₁ of a disjoint union is per-component; the generators of the whole are
+        the union of each component's. Each component is computed (and cached) on
+        its own — much cheaper than extracting π₁ of the full complex — and the
+        results, already carrying global vertex ids, are concatenated. Generator
+        names are de-duplicated across components (the per-component namespaces
+        are independent and would otherwise collide).
+        """
+        out: list = []
+        used: set = set()
+        for comp in self.connected_components():
+            for gc in comp.pi1_generator_cycles(simplify=simplify, backend=backend):
+                name = gc.name
+                if name in used:
+                    k = 1
+                    while f"{gc.name}__c{k}" in used:
+                        k += 1
+                    name = f"{gc.name}__c{k}"
+                used.add(name)
+                out.append(gc if name == gc.name else gc.model_copy(update={"name": name}))
+        return out
 
     def pi1_generator_cycles(
         self,
@@ -4716,9 +5337,24 @@ class SimplicialComplex(ChainComplex):
         simplify: bool = True,
         backend: str = "auto",
     ) -> list:
-        """Per-generator 1-cycle in K. Implements Gap G01 (convenience)."""
-        from pysurgery.auto_surgery import compute_pi1_generators_as_cycles
-        return compute_pi1_generators_as_cycles(self, simplify=simplify, backend=backend)
+        """Per-generator 1-cycle in K. Implements Gap G01 (convenience).
+
+        Memoized per ``(simplify, backend)``. For a connected complex the result
+        is byte-identical to the direct computation (the localize fast-path is
+        the identity when vertices are already dense); a disconnected complex is
+        decomposed over its connected components — each computed and cached
+        independently — and the per-component cycles (global ids) are unioned.
+        """
+        key = ("sc", "pi1_cycles", bool(simplify), backend)
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+        if self.num_connected_components() <= 1:
+            out = self._pi1_cycles_localized(simplify=simplify, backend=backend)
+        else:
+            out = self._pi1_cycles_summed(simplify=simplify, backend=backend)
+        self._cache_set(key, out)
+        return out
 
     def collapse(self) -> "SimplicialComplex":
         """Reduce the complex by removing all free faces (simplicial collapses).

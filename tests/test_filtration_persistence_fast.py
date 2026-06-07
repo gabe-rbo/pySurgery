@@ -152,6 +152,61 @@ def test_fused_routing_implicit_path_matches_python():
 
 
 # ---------------------------------------------------------------------------
+# Phase B: implicit persistent cohomology (Ripser-style) — exact == clique/oracle
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not _julia_available(), reason="Julia backend unavailable")
+@pytest.mark.parametrize(
+    "points, max_dim",
+    [
+        (_circle(16), 2),
+        (_blob(15, d=3), 2),
+        (_blob(13, d=3), 3),     # high-dim: where cohomology pulls ahead
+        (_two_circles(), 2),
+    ],
+)
+def test_cohomology_kernel_matches_oracle(points, max_dim):
+    """The implicit-cohomology kernel's barcode equals the pure-Python oracle.
+
+    Persistent cohomology yields the identical barcode to homology (duality), so
+    this is an exactness check, not an approximation."""
+    from scipy.spatial.distance import pdist
+    from pysurgery.bridge.julia_bridge import julia_engine
+    from pysurgery.topology.complexes import SimplicialComplex as SC
+    from pysurgery.topology.filtration_values import rips_filtration_values
+
+    eps = float(pdist(points).max()) * 1.01
+    payload = julia_engine.compute_rips_cohomology(points, eps, max_dim)
+
+    sc = SC.from_vietoris_rips(points, eps, max_dim, backend="python")
+    filt = rips_filtration_values(sc._simplices_table, points)
+    oracle = _BaseFiltrationReport._z2_persistence_barcode(sc._simplices_table, filt)
+    assert _bagify(payload["barcode"]) == _bagify(oracle)
+
+
+@pytest.mark.skipif(not _julia_available(), reason="Julia backend unavailable")
+def test_cohomology_report_engine_matches_clique():
+    """The report's two fused engines (cohomology vs clique) give identical barcodes."""
+    pts = _circle(28)
+    coh = _ForceFusedRips(pts, max_dimension=2, analyze_manifolds=False, eps_max=3.0,
+                          rips_engine="cohomology")
+    cliq = _ForceFusedRips(pts, max_dimension=2, analyze_manifolds=False, eps_max=3.0,
+                           rips_engine="clique")
+    assert coh.max_sc is None and cliq.max_sc is None
+    assert _bagify(coh.barcode) == _bagify(cliq.barcode)
+
+
+def test_rips_engine_auto_selection():
+    """Auto picks cohomology only for max_dimension >= 3; explicit choices honoured."""
+    r2 = RipsFiltrationReport(_circle(10), max_dimension=2, analyze_manifolds=False)
+    r3 = RipsFiltrationReport(_circle(10), max_dimension=3, analyze_manifolds=False)
+    assert r2._select_rips_engine() == "clique"
+    assert r3._select_rips_engine() == "cohomology"
+    r3c = RipsFiltrationReport(_circle(10), max_dimension=3, analyze_manifolds=False,
+                               rips_engine="clique")
+    assert r3c._select_rips_engine() == "clique"
+
+
+# ---------------------------------------------------------------------------
 # compute_torsion
 # ---------------------------------------------------------------------------
 _RP2_FACETS = [(0, 1, 2), (0, 1, 3), (0, 2, 4), (0, 3, 5), (0, 4, 5),

@@ -20,6 +20,7 @@ Use the concrete classes directly::
 or the backward-compatible factory ``FiltrationReport(points, mode=...)``.
 """
 
+import hashlib
 import warnings
 import numpy as np
 from collections import defaultdict
@@ -423,12 +424,25 @@ class _BaseFiltrationReport:
                 result[int(j)][di] = int(betti[j])
         return result
 
+    @staticmethod
+    def _slice_cutoff(eps: float) -> float:
+        """Inclusive appearance-value cutoff for the slice at ``eps``.
+
+        Simplices with ``filt[s] <= _slice_cutoff(eps)`` belong to the slice; the
+        small tolerance absorbs float round-off in the appearance values. Shared
+        by :meth:`_slice_complex` and :meth:`_incremental_slices` so the two
+        cannot drift apart.
+        """
+        return eps + abs(eps) * 1e-9 + 1e-12
+
     def _slice_complex(self, SC, max_sc, filt, eps, coords):
         """Sub-complex of ``max_sc`` containing simplices appearing by ``eps``.
 
         A cheap dictionary filter on appearance value; the result is closed under
         faces because appearance values are monotone, so it equals the complex the
-        method would build directly at ``eps``.
+        method would build directly at ``eps``. This is the per-threshold
+        reference for a slice; :meth:`_incremental_slices` reproduces the same
+        slices across the grid without rescanning.
 
         Args:
             SC: The SimplicialComplex class.
@@ -440,10 +454,10 @@ class _BaseFiltrationReport:
         Returns:
             The sub-complex at ``eps`` as a SimplicialComplex.
         """
-        tol = abs(eps) * 1e-9 + 1e-12
+        cutoff = self._slice_cutoff(eps)
         table = {}
         for d in sorted(max_sc._simplices_table.keys()):
-            kept = [s for s in max_sc.n_simplices(d) if filt.get(s, 0.0) <= eps + tol]
+            kept = [s for s in max_sc.n_simplices(d) if filt.get(s, 0.0) <= cutoff]
             if kept:
                 table[d] = kept
         sub = SC(simplices=table, coefficient_ring=self.coefficient_ring)
@@ -451,6 +465,193 @@ class _BaseFiltrationReport:
         if self.track_connected_components:
             sub._generate_point_cloud_mappings(coords)
         return sub
+
+    @staticmethod
+    def _component_content_key(table) -> str:
+        """Content-complete key for a component's intrinsic topology.
+
+        A filtration is a merge tree, so most components are byte-identical to
+        their predecessor at the previous threshold. Their topological
+        invariants (manifold status, dimension, closedness, integer homology)
+        depend only on the global simplex set, so we key a cross-threshold cache
+        by a hash of that set. Components keep global vertex indices, so an
+        unchanged component hashes identically across thresholds and distinct
+        components never collide. We hash the *content* (not the f-vector
+        signature, which would collide for different complexes with the same
+        simplex counts), and use a fixed-size digest so the cache stays bounded.
+
+        Args:
+            table: A ``{dim: [simplices]}`` mapping (e.g. one entry of
+                :meth:`SimplicialComplex.component_simplex_tables`).
+        """
+        h = hashlib.blake2b(digest_size=16)
+        for d in sorted(table.keys()):
+            h.update(b"#%d" % d)
+            for s in sorted(table[d]):
+                h.update(b"|")
+                h.update(",".join(map(str, s)).encode("ascii"))
+        return h.hexdigest()
+
+    def _build_component_complex(self, SC, table, coords):
+        """Materialize a single component subcomplex from its simplex table.
+
+        Used on a cache miss to build only the components whose heavy invariant
+        (manifold status, integer homology) is not already memoized. The table
+        is a connected-component slice of a face-closed complex, so it is closed
+        under faces and is constructed directly — without re-deriving faces —
+        mirroring :meth:`_slice_complex`. Global coordinates are attached so the
+        manifold check matches the eager ``explode()``-built component.
+        """
+        sub = SC(simplices={d: list(ss) for d, ss in table.items()},
+                 coefficient_ring=self.coefficient_ring)
+        sub._coordinates = coords
+        return sub
+
+    @staticmethod
+    def _aggregate_component_torsion(comp_homs) -> dict:
+        """Aggregate per-component homology into the whole-complex torsion dict.
+
+        Reproduces :meth:`SimplicialComplex.homology`'s torsion contract exactly:
+        for a single component the native (Smith-normal-form) torsion order is
+        preserved, matching the ``_homology_direct`` path; for several components
+        the direct sum H_n(⊔Xᵢ)=⊕H_n(Xᵢ) is taken and the pooled torsion is
+        sorted, matching ``_homology_summed``. Only degrees with torsion appear.
+
+        Args:
+            comp_homs: One ``{dim: (rank, torsion)}`` dict per component.
+        """
+        if not comp_homs:
+            return {}
+        if len(comp_homs) == 1:
+            return {int(d): [int(t) for t in tors]
+                    for d, (_r, tors) in comp_homs[0].items() if tors}
+        agg: Dict[int, list] = {}
+        for chz in comp_homs:
+            for d, (_r, tors) in chz.items():
+                if tors:
+                    agg.setdefault(int(d), []).extend(int(t) for t in tors)
+        return {d: sorted(tl) for d, tl in agg.items()}
+
+    def _whole_complex_from_table(self, SC, full_table, coords):
+        """Build the whole sub-complex at a threshold from an incremental table.
+
+        The incremental engine (:meth:`_incremental_slices`) accumulates the
+        slice's simplices in appearance order; this wraps a *copy* of that table
+        in a SimplicialComplex for the whole-complex manifold check, mirroring
+        :meth:`_slice_complex`'s object setup (coordinates always; point-cloud
+        mappings only when components are tracked). The table is copied because
+        the engine keeps mutating its lists as eps grows.
+        """
+        sub = SC(simplices={d: list(ss) for d, ss in full_table.items()},
+                 coefficient_ring=self.coefficient_ring)
+        sub._coordinates = coords
+        if self.track_connected_components:
+            sub._generate_point_cloud_mappings(coords)
+        return sub
+
+    def _incremental_slices(self, max_sc, filt, need_components, need_whole):
+        """Yield per-threshold slice state, built incrementally across the grid.
+
+        A filtration is monotone — simplices only ever *enter* as eps grows and
+        connected components only ever *merge* — so rather than rescanning the
+        maximal complex and re-running a DFS partition at every threshold, this
+        walks the epsilon grid once:
+
+        * simplices are sorted a single time by ``(appearance value, dimension)``
+          (so every face precedes its cofaces) and consumed by a moving pointer;
+        * connected components are maintained with a weighted union-find keyed on
+          the 1-skeleton, with each root carrying its vertex set and per-dimension
+          simplex bucket — a component that does not merge is never re-extracted.
+
+        Yields, per threshold (in grid order), ``(comp_tables, full_table, cdim)``:
+
+        * ``comp_tables`` — when ``need_components`` — the descending-size-ordered
+          list of ``(vertex_frozenset, {dim: simplices})`` components, identical
+          in content and order to
+          :meth:`SimplicialComplex.component_simplex_tables` on the slice (the
+          ``(-size, min-vertex)`` order reproduces the DFS partition's ordering);
+          else ``None``;
+        * ``full_table`` — when ``need_whole`` — the slice's ``{dim: simplices}``
+          table (for the whole-complex manifold check); else ``None``;
+        * ``cdim`` — the slice's top dimension (matches ``sc.dimension``).
+
+        Orderings within a dimension may differ from a fresh rebuild, but every
+        reported invariant (homology, manifold status, content hash) is
+        order-independent, so the output is unchanged.
+        """
+        items = [(filt.get(s, 0.0), d, s)
+                 for d, simps in max_sc._simplices_table.items() for s in simps]
+        # (value, dim) sort guarantees faces precede cofaces: a face's value is
+        # <= its coface's, and on ties the lower dimension comes first.
+        items.sort(key=lambda it: (it[0], it[1]))
+        n = len(items)
+
+        parent: Dict[int, int] = {}
+        csize: Dict[int, int] = {}                  # union weight (simplex count)
+        cverts: Dict[int, set] = {}                 # root -> vertex set
+        cbucket: Dict[int, Dict[int, list]] = {}    # root -> {dim: [simplices]}
+        roots: set = set()
+        full_table: Dict[int, list] = {}
+        cdim = -1
+
+        def find(x: int) -> int:
+            root = x
+            while parent[root] != root:
+                root = parent[root]
+            while parent[x] != root:          # path compression
+                parent[x], x = root, parent[x]
+            return root
+
+        def union(a: int, b: int) -> int:
+            ra, rb = find(a), find(b)
+            if ra == rb:
+                return ra
+            if csize[ra] < csize[rb]:         # merge smaller bucket into larger
+                ra, rb = rb, ra
+            parent[rb] = ra
+            csize[ra] += csize[rb]
+            cverts[ra] |= cverts[rb]
+            dst = cbucket[ra]
+            for dim, lst in cbucket[rb].items():
+                if dim in dst:
+                    dst[dim].extend(lst)
+                else:
+                    dst[dim] = lst
+            del cverts[rb], cbucket[rb], csize[rb]
+            roots.discard(rb)
+            return ra
+
+        ptr = 0
+        for eps in self.epsilons:
+            cutoff = self._slice_cutoff(eps)
+            while ptr < n and items[ptr][0] <= cutoff:
+                _val, d, s = items[ptr]
+                ptr += 1
+                if d > cdim:
+                    cdim = d
+                if need_whole:
+                    full_table.setdefault(d, []).append(s)
+                if not need_components:
+                    continue
+                if d == 0:
+                    v = s[0]
+                    parent[v] = v
+                    csize[v] = 1
+                    cverts[v] = {v}
+                    cbucket[v] = {0: [s]}
+                    roots.add(v)
+                else:
+                    # Connectivity is the 1-skeleton's, so only edges union;
+                    # higher simplices attach to their (already-unified) root.
+                    r = union(s[0], s[1]) if d == 1 else find(s[0])
+                    csize[r] += 1
+                    cbucket[r].setdefault(d, []).append(s)
+
+            comp_tables = None
+            if need_components:
+                comp_tables = [(frozenset(cverts[r]), cbucket[r]) for r in roots]
+                comp_tables.sort(key=lambda vt: (-len(vt[0]), min(vt[0])))
+            yield comp_tables, (full_table if need_whole else None), cdim
 
     # ------------------------------------------------------------------
     # Engine
@@ -525,22 +726,58 @@ class _BaseFiltrationReport:
         active_rows: dict = {}
         merged_rows_history: dict = {}
         next_available_row_idx = 0
+        # Cross-threshold caches keyed by the component's content hash. Stable
+        # components (the common case in a merge filtration) reuse the result
+        # computed when the component first appeared, skipping the expensive
+        # per-component manifold check / Smith-normal-form solve on every
+        # threshold after the first. Both are bounded by the number of distinct
+        # components (~merge-tree size); the info value is a short string and
+        # the torsion value is a small homology dict.
+        component_info_cache: Dict[str, str] = {}
+        component_homology_cache: Dict[str, dict] = {}
+
+        # Incremental slice engine: a single sorted pass over the simplices plus a
+        # union-find for components, instead of re-slicing and re-partitioning the
+        # maximal complex at every threshold. Only engaged when a path actually
+        # needs the explicit complex (manifold / torsion / component tracking);
+        # otherwise Betti numbers come straight off the barcode. ``need_*`` is
+        # loop-invariant (``analyze_manifolds`` is finalized by the auto-skip above).
+        need_components = self.track_connected_components or self.compute_torsion
+        need_whole = self.analyze_manifolds
+        need_complex = need_components or need_whole
+        slices = (self._incremental_slices(max_sc, filt, need_components, need_whole)
+                  if need_complex else None)
 
         for idx, eps in enumerate(self.epsilons):
-            need_complex = (self.analyze_manifolds or self.track_connected_components
-                            or self.compute_torsion)
-            sc = self._slice_complex(SC, max_sc, filt, eps, coords) if need_complex else None
             bettis = all_bettis[idx]
+            # Pull this threshold's slice state from the incremental engine (in
+            # lockstep with the grid); the yielded tables are consumed before the
+            # generator resumes and mutates them again.
+            if slices is not None:
+                comp_tables, full_table, cdim_inc = next(slices)
+            else:
+                comp_tables, full_table, cdim_inc = None, None, -1
 
             torsion = {}
             if self.compute_torsion:
-                hz = sc.homology(backend=self.backend) if sc is not None else {}
-                if not isinstance(hz, dict):
-                    hz = {}
-                torsion = {int(d): [int(t) for t in tors]
-                           for d, (_rank, tors) in hz.items() if tors}
+                # Direct-sum torsion over components, memoizing each component's
+                # integer homology across thresholds by content hash. Equivalent
+                # to sc.homology() (H_n(⊔Xᵢ)=⊕H_n(Xᵢ)) — see
+                # _aggregate_component_torsion for the exact ordering contract.
+                comp_homs = []
+                for _vset, table in comp_tables:
+                    key = self._component_content_key(table)
+                    chz = component_homology_cache.get(key)
+                    if chz is None:
+                        comp = self._build_component_complex(SC, table, coords)
+                        hz = comp.homology(backend=self.backend)
+                        chz = hz if isinstance(hz, dict) else {}
+                        component_homology_cache[key] = chz
+                    comp_homs.append(chz)
+                torsion = self._aggregate_component_torsion(comp_homs)
 
             if self.analyze_manifolds:
+                sc = self._whole_complex_from_table(SC, full_table, coords)
                 is_manifold, dim, diag = sc.is_homology_manifold(backend=self.backend)
                 manifold_str = "Yes" if is_manifold else f"No ({len(diag)} dft)"
                 closed = "N/A"
@@ -550,7 +787,7 @@ class _BaseFiltrationReport:
             else:
                 manifold_str = "N/A"
                 closed = "N/A"
-                cdim = sc.dimension if sc is not None else complex_dim_at(eps)
+                cdim = cdim_inc if slices is not None else complex_dim_at(eps)
                 dim_repr = str(cdim) if cdim >= 0 else "N/A"
 
             current_invariants = {
@@ -563,12 +800,10 @@ class _BaseFiltrationReport:
 
             comp_info_dict = {}
             if self.track_connected_components:
-                components_sc = sc.explode()
                 next_active_rows = {}
                 new_merges_this_step = {}
-                for sub_sc in components_sc:
-                    vlist = [v[0] for v in sub_sc.n_simplices(0)]
-                    vset = set(vlist)
+                for vset_fz, table in comp_tables:
+                    vset = set(vset_fz)
                     absorbed = [r for r, prev_vset in active_rows.items() if prev_vset.issubset(vset)]
                     if absorbed:
                         survivor = min(absorbed)
@@ -581,12 +816,19 @@ class _BaseFiltrationReport:
                         next_available_row_idx += 1
                         next_active_rows[r_new] = vset
 
-                    c_is_mani, c_dim, c_diag = sub_sc.is_homology_manifold(backend=self.backend)
-                    if c_is_mani:
-                        c_closed = "Closed" if sub_sc.is_closed_manifold else "Bound"
-                        info = f"M(D:{c_dim}, {c_closed})"
-                    else:
-                        info = f"Non-M ({len(c_diag)} dft)"
+                    key = self._component_content_key(table)
+                    info = component_info_cache.get(key)
+                    if info is None:
+                        # Build the component only on a miss — stable components
+                        # reuse the cached info without re-materializing.
+                        sub_sc = self._build_component_complex(SC, table, coords)
+                        c_is_mani, c_dim, c_diag = sub_sc.is_homology_manifold(backend=self.backend)
+                        if c_is_mani:
+                            c_closed = "Closed" if sub_sc.is_closed_manifold else "Bound"
+                            info = f"M(D:{c_dim}, {c_closed})"
+                        else:
+                            info = f"Non-M ({len(c_diag)} dft)"
+                        component_info_cache[key] = info
 
                     for r_idx, vs in next_active_rows.items():
                         if vs == vset:
@@ -813,6 +1055,24 @@ class RipsFiltrationReport(_BaseFiltrationReport):
                                    coefficient_ring=self.coefficient_ring, backend=self.backend)
         return sc, rips_filtration_values(sc._simplices_table, self.points)
 
+    def _select_rips_engine(self) -> str:
+        """Which fused Julia engine to use: 'clique' (homology) or 'cohomology'.
+
+        ``rips_engine`` kwarg, default ``'auto'``:
+          - ``'auto'`` -> implicit cohomology for ``max_dimension >= 3`` (where the
+            homology reduction blows up and cohomology wins), else the clique engine
+            (faster in the common low-dimensional case);
+          - ``'clique'`` / ``'cohomology'`` force the respective engine.
+        Both are exact and return the identical barcode.
+        """
+        engine = str(self.kwargs.get("rips_engine", "auto")).lower()
+        if engine == "auto":
+            return "cohomology" if self.max_dimension >= 3 else "clique"
+        if engine not in ("clique", "cohomology"):
+            warnings.warn(f"Unknown rips_engine={engine!r}; using 'auto'.", stacklevel=2)
+            return "cohomology" if self.max_dimension >= 3 else "clique"
+        return engine
+
     def _assemble(self):
         """Fuse the VR build, longest-edge filtration, and reduction inside Julia.
 
@@ -823,6 +1083,10 @@ class RipsFiltrationReport(_BaseFiltrationReport):
         auto-skipped above ``_MANIFOLD_MAX_SIMPLICES``). When the complex is small
         enough to be wanted -- or any path needs it explicitly -- we defer to the
         staged base build, so small-complex behaviour is byte-identical to before.
+
+        The reduction runs in one of two exact engines (see :meth:`_select_rips_engine`):
+        the clique homology engine or the implicit-cohomology engine; both return
+        the identical barcode.
         """
         need_explicit = self.track_connected_components or self.compute_torsion
         if (need_explicit or self.backend == "python"
@@ -832,8 +1096,13 @@ class RipsFiltrationReport(_BaseFiltrationReport):
             from pysurgery.bridge.julia_bridge import julia_engine
             if not julia_engine.available:
                 return super()._assemble()
-            payload = julia_engine.compute_rips_filtration(
-                self.points, self._rips_eps_max(), self.max_dimension)
+            eps_max = self._rips_eps_max()
+            if self._select_rips_engine() == "cohomology":
+                payload = julia_engine.compute_rips_cohomology(
+                    self.points, eps_max, self.max_dimension)
+            else:
+                payload = julia_engine.compute_rips_filtration(
+                    self.points, eps_max, self.max_dimension)
         except Exception as exc:  # pragma: no cover - only when Julia errors
             warnings.warn(
                 f"Fused Julia Rips filtration failed ({exc!r}); falling back to the "

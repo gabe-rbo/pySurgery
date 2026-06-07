@@ -16,7 +16,7 @@ export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomolo
     snf_markowitz_column_order, modular_rank_certification_jl, padic_snf_diagonal_jl, batch_exact_snf_sparse,
     todd_coxeter_index_jl, cayley_table_jl, cayley_convolve_jl, lift_boundary_to_cover_jl,
     fox_derivative_block_real_jl, fox_derivative_block_complex_jl, twisted_alexander_whitney_jl,
-    BarcodeResult, compute_persistence_barcodes, compute_filtration_persistence, compute_rips_filtration,
+    BarcodeResult, compute_persistence_barcodes, compute_filtration_persistence, compute_rips_filtration, compute_rips_cohomology,
     surgery_relative_boundary_sparse, linking_seifert_solve_z, linking_intersection_pairing,
     surgery_handle_attach, sphere_recognition_pl,
     linking_intersection_batch, compute_cohomology_basis_jl, linking_intersect_2chains,
@@ -665,6 +665,389 @@ thread-safe to read from the `@threads` loops) and runs the fused build+reduce.
 """
 function compute_rips_filtration(points_raw, epsilon_raw, max_dim_raw)
     return _compute_rips_filtration(
+        pyconvert(Matrix{Float64}, points_raw),
+        pyconvert(Float64, epsilon_raw),
+        pyconvert(Int, max_dim_raw),
+    )
+end
+
+# ====================================================================
+# Phase B — implicit persistent COHOMOLOGY of a Vietoris–Rips filtration
+# (Ripser-style). The full simplex set is never assembled into a boundary
+# matrix: simplices are indexed by the combinatorial number system (CNS)
+# and their cofacets are enumerated on the fly. Reduction is the standard
+# coboundary column reduction with Chen–Kerber clearing across dimensions.
+# Persistent cohomology yields the IDENTICAL barcode to homology
+# (de Silva–Morozov–Vejdemo-Johansson duality), so the result is exact —
+# it is validated bar-for-bar against the clique engine (itself proven
+# equal to the pure-Python oracle).
+#
+# Convention (matches RipsFiltrationReport / the oracle): the complex is
+# built up to dimension `max_dim`; H_d is computed for d in 0..max_dim;
+# top-dimension (d == max_dim) classes have no cofacets in the complex and
+# are therefore essential. A simplex's appearance value is its longest edge
+# (max pairwise distance = "diameter").
+# ====================================================================
+
+# Binomial table: B[v+1, j+1] = C(v, j) for v in 0:n, j in 0:kmax (0 for v < j).
+function _rips_binomial(n::Int, kmax::Int)
+    B = zeros(Int, n + 1, kmax + 1)
+    @inbounds for v in 0:n
+        B[v + 1, 1] = 1                          # C(v, 0) = 1
+        for j in 1:min(v, kmax)
+            B[v + 1, j + 1] = B[v, j] + B[v, j + 1]   # Pascal: C(v,j)=C(v-1,j-1)+C(v-1,j)
+        end
+    end
+    return B
+end
+
+# CNS index of a simplex given its vertices in DESCENDING order:
+# index = sum_i C(verts[i], k-i+1), with k = #vertices.
+function _rips_simplex_index(verts::Vector{Int}, B::Matrix{Int})
+    k = length(verts)
+    idx = 0
+    @inbounds for i in 1:k
+        idx += B[verts[i] + 1, (k - i + 1) + 1]
+    end
+    return idx
+end
+
+# Largest vertex v (0 <= v < n) with C(v, k) <= idx (binary search on the table).
+function _rips_get_max_vertex(idx::Int, k::Int, n::Int, B::Matrix{Int})
+    lo = k - 1                                   # C(k-1, k) = 0 <= idx
+    hi = n - 1
+    @inbounds while lo < hi
+        mid = (lo + hi + 1) >> 1
+        if B[mid + 1, k + 1] <= idx
+            lo = mid
+        else
+            hi = mid - 1
+        end
+    end
+    return lo
+end
+
+# Recover the dim+1 vertices (DESCENDING) of a simplex from its CNS index.
+function _rips_get_vertices(idx::Int, dim::Int, n::Int, B::Matrix{Int})
+    k = dim + 1
+    verts = Vector{Int}(undef, k)
+    @inbounds for p in k:-1:1
+        v = _rips_get_max_vertex(idx, p, n, B)
+        verts[k - p + 1] = v
+        idx -= B[v + 1, p + 1]
+    end
+    return verts                                 # descending
+end
+
+# Sparse neighbour lists within `epsilon`: nbr[v+1] = sorted-ascending neighbour
+# ids of vertex v, nbd[v+1] = aligned distances. O(n^2) once (parallel).
+function _rips_neighbor_lists(points::Matrix{Float64}, epsilon::Float64)
+    n = size(points, 1)
+    dpts = size(points, 2)
+    eps2 = epsilon^2
+    nthreads = Threads.maxthreadid()
+    I_t = [Int[] for _ in 1:nthreads]
+    J_t = [Int[] for _ in 1:nthreads]
+    D_t = [Float64[] for _ in 1:nthreads]
+    Threads.@threads for i in 0:(n - 1)
+        tid = Threads.threadid()
+        Il = I_t[tid]; Jl = J_t[tid]; Dl = D_t[tid]
+        for j in (i + 1):(n - 1)
+            d2 = 0.0
+            @inbounds for k in 1:dpts
+                diff = points[i + 1, k] - points[j + 1, k]
+                d2 += diff * diff
+            end
+            if d2 <= eps2
+                dist = sqrt(d2)
+                push!(Il, i); push!(Jl, j); push!(Dl, dist)
+            end
+        end
+    end
+    nbr = [Int[] for _ in 1:n]
+    nbd = [Float64[] for _ in 1:n]
+    for tid in 1:nthreads
+        Il = I_t[tid]; Jl = J_t[tid]; Dl = D_t[tid]
+        @inbounds for e in 1:length(Il)
+            i = Il[e]; j = Jl[e]; dist = Dl[e]
+            push!(nbr[i + 1], j); push!(nbd[i + 1], dist)
+            push!(nbr[j + 1], i); push!(nbd[j + 1], dist)
+        end
+    end
+    for v in 1:n
+        p = sortperm(nbr[v])
+        nbr[v] = nbr[v][p]
+        nbd[v] = nbd[v][p]
+    end
+    return nbr, nbd
+end
+
+# Distance d(u, w) via binary search in u's sorted neighbour list (-1 if not adjacent).
+function _rips_edist(u::Int, w::Int, nbr::Vector{Vector{Int}}, nbd::Vector{Vector{Float64}})
+    lst = nbr[u + 1]
+    lo = 1; hi = length(lst)
+    @inbounds while lo <= hi
+        mid = (lo + hi) >> 1
+        c = lst[mid]
+        if c == w
+            return nbd[u + 1][mid]
+        elseif c < w
+            lo = mid + 1
+        else
+            hi = mid - 1
+        end
+    end
+    return -1.0
+end
+
+# CNS index of the cofacet verts ∪ {w} (w merged into the descending vertex list).
+function _rips_cofacet_index(verts::Vector{Int}, w::Int, B::Matrix{Int})
+    k = length(verts)
+    idx = 0
+    i = 1
+    placed = false
+    @inbounds for p in (k + 1):-1:1
+        if !placed && (i > k || w > verts[i])
+            v = w; placed = true
+        else
+            v = verts[i]; i += 1
+        end
+        idx += B[v + 1, p + 1]
+    end
+    return idx
+end
+
+# Pivot order on coboundary entries (diam, index): the pivot of a reduced column
+# is its EARLIEST cofacet — smallest diameter (a class dies as soon as a cofacet
+# fills it: the elder rule), ties broken by smaller index. This is the dual of the
+# homology "lowest one" (the anti-transpose flips max↔min). The reduced column is
+# kept sorted pivot-first, so the pivot is always its first entry.
+@inline _co_before(x::Tuple{Float64, Int}, y::Tuple{Float64, Int}) =
+    x[1] < y[1] || (x[1] == y[1] && x[2] < y[2])
+
+# Binary min-heap of coboundary entries (diam, index) ordered by `_co_before`
+# (the heap top is the ≺-minimal entry). The working coboundary column is a heap;
+# entries are added (Z₂) by pushing and cancelled lazily when popping the pivot.
+@inline function _heap_push!(h::Vector{Tuple{Float64, Int}}, x::Tuple{Float64, Int})
+    push!(h, x)
+    i = length(h)
+    @inbounds while i > 1
+        p = i >> 1
+        if _co_before(h[i], h[p])
+            h[i], h[p] = h[p], h[i]; i = p
+        else
+            break
+        end
+    end
+end
+
+@inline function _heap_pop!(h::Vector{Tuple{Float64, Int}})
+    top = h[1]
+    n = length(h)
+    h[1] = h[n]
+    pop!(h)
+    n -= 1
+    i = 1
+    @inbounds while true
+        l = 2i; r = 2i + 1; m = i
+        if l <= n && _co_before(h[l], h[m]); m = l; end
+        if r <= n && _co_before(h[r], h[m]); m = r; end
+        m == i && break
+        h[i], h[m] = h[m], h[i]; i = m
+    end
+    return top
+end
+
+# Pop the pivot: the ≺-minimal entry surviving Z₂ cancellation of equal indices
+# (a cofacet appearing an even number of times cancels). Returns nothing if empty.
+function _pop_pivot!(h::Vector{Tuple{Float64, Int}})
+    isempty(h) && return nothing
+    piv = _heap_pop!(h)
+    @inbounds while !isempty(h) && h[1][2] == piv[2]
+        _heap_pop!(h)                            # cancel the duplicate
+        isempty(h) && return nothing
+        piv = _heap_pop!(h)
+    end
+    return piv
+end
+
+# Peek the pivot without consuming the column (pop, then push it back).
+function _get_pivot!(h::Vector{Tuple{Float64, Int}})
+    piv = _pop_pivot!(h)
+    piv !== nothing && _heap_push!(h, piv)
+    return piv
+end
+
+# Cofacets of the simplex `verts` (descending, diameter `sdiam`): every common
+# neighbour w of all its vertices, with cofacet diameter max(sdiam, max_i d(w,v_i)).
+function _rips_cofacets(verts::Vector{Int}, sdiam::Float64,
+                        nbr::Vector{Vector{Int}}, nbd::Vector{Vector{Float64}},
+                        B::Matrix{Int})
+    out = Vector{Tuple{Float64, Int}}()
+    k = length(verts)
+    cand = nbr[verts[1] + 1]                     # w must be adjacent to verts[1]
+    @inbounds for w in cand
+        cofdiam = sdiam
+        ok = true
+        for i in 1:k
+            vi = verts[i]
+            if w == vi
+                ok = false; break
+            end
+            dwi = _rips_edist(vi, w, nbr, nbd)
+            if dwi < 0.0
+                ok = false; break
+            end
+            if dwi > cofdiam
+                cofdiam = dwi
+            end
+        end
+        ok || continue
+        push!(out, (cofdiam, _rips_cofacet_index(verts, w, B)))
+    end
+    return out
+end
+
+# Generate all (d+1)-simplices as cofacets of every d-simplex, deduplicated by index.
+function _rips_generate_next(cur_idx::Vector{Int}, cur_diam::Vector{Float64}, d::Int,
+                             nbr::Vector{Vector{Int}}, nbd::Vector{Vector{Float64}},
+                             B::Matrix{Int}, n::Int)
+    nxt = Dict{Int, Float64}()
+    @inbounds for t in 1:length(cur_idx)
+        verts = _rips_get_vertices(cur_idx[t], d, n, B)
+        for (cd, ci) in _rips_cofacets(verts, cur_diam[t], nbr, nbd, B)
+            if !haskey(nxt, ci)
+                nxt[ci] = cd
+            end
+        end
+    end
+    idxs = collect(keys(nxt))
+    diams = Vector{Float64}(undef, length(idxs))
+    @inbounds for t in 1:length(idxs)
+        diams[t] = nxt[idxs[t]]
+    end
+    return idxs, diams
+end
+
+"""
+    _compute_rips_cohomology(points, epsilon, max_dim)
+
+Implicit persistent cohomology of the Vietoris–Rips filtration of `points` up to
+`epsilon`/`max_dim`. Returns the same payload tuple as
+[`_compute_rips_filtration`](@ref): `(bar_dim, bar_birth, bar_death, eps_values,
+dim_ids, dim_first_val, dim_count, total)`.
+"""
+function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max_dim::Int)
+    n = size(points, 1)
+    nbr, nbd = _rips_neighbor_lists(points, epsilon)
+    B = _rips_binomial(n, max_dim + 2)
+
+    bar_dim = Int[]; bar_birth = Float64[]; bar_death = Float64[]
+    gridset = Set{Float64}(); push!(gridset, 0.0)
+    @inbounds for v in 1:n
+        for t in 1:length(nbd[v])
+            push!(gridset, nbd[v][t])
+        end
+    end
+
+    dim_ids = Int[]; dim_first_val = Float64[]; dim_count = Int[]
+    total = 0
+
+    cur_idx = collect(0:(n - 1))                 # dim 0: vertices, index == id
+    cur_diam = zeros(Float64, n)
+    cleared = Set{Int}()
+    d = 0
+    while true
+        if !isempty(cur_idx)
+            total += length(cur_idx)
+            push!(dim_ids, d)
+            push!(dim_count, length(cur_idx))
+            push!(dim_first_val, minimum(cur_diam))
+        end
+
+        # Owner-recompute reduction (Ripser-style): store only which column owns
+        # each pivot and the small "V" list of columns summed into it; the working
+        # coboundary is rebuilt on demand from those columns' coboundaries. For an
+        # apparent/emergent pair the V-list is a singleton, so the column resolves
+        # in one heap step — no full reduced column is ever stored.
+        pivot_owner = Dict{Int, Int}()                      # cofacet idx → owner col's simplex idx
+        Vcols = Dict{Int, Vector{Tuple{Int, Float64}}}()    # owner sidx → member (idx, diam) list
+        next_pivots = Set{Int}()                            # (d+1)-pivots → clear next dim
+
+        # Persistent cohomology reduces columns in REVERSE filtration order
+        # (the anti-transpose duality): latest simplex first — larger diameter,
+        # ties by larger index (the ≺-greatest first, consistent with `_co_before`).
+        order = Int[t for t in 1:length(cur_idx) if !(cur_idx[t] in cleared)]
+        sort!(order, lt = (s, t) ->
+            (cur_diam[s] > cur_diam[t]) ||
+            (cur_diam[s] == cur_diam[t] && cur_idx[s] > cur_idx[t]))
+
+        working = Tuple{Float64, Int}[]
+        for t in order
+            sidx = cur_idx[t]; sdiam = cur_diam[t]
+            if d >= max_dim
+                push!(bar_dim, d); push!(bar_birth, sdiam); push!(bar_death, Inf)
+                continue                                     # top dimension: no cofacets
+            end
+
+            empty!(working)
+            verts = _rips_get_vertices(sidx, d, n, B)
+            for c in _rips_cofacets(verts, sdiam, nbr, nbd, B)
+                _heap_push!(working, c)
+            end
+            members = Tuple{Int, Float64}[(sidx, sdiam)]
+
+            piv = _get_pivot!(working)
+            while piv !== nothing
+                ow = get(pivot_owner, piv[2], -1)
+                ow == -1 && break                            # unclaimed pivot → pair found
+                @inbounds for (midx, mdiam) in Vcols[ow]
+                    mverts = _rips_get_vertices(midx, d, n, B)
+                    for c in _rips_cofacets(mverts, mdiam, nbr, nbd, B)
+                        _heap_push!(working, c)
+                    end
+                    push!(members, (midx, mdiam))
+                end
+                piv = _get_pivot!(working)
+            end
+
+            if piv === nothing
+                push!(bar_dim, d); push!(bar_birth, sdiam); push!(bar_death, Inf)
+            else
+                if piv[1] > sdiam
+                    push!(bar_dim, d); push!(bar_birth, sdiam); push!(bar_death, piv[1])
+                end
+                pivot_owner[piv[2]] = sidx
+                Vcols[sidx] = members
+                push!(next_pivots, piv[2])
+            end
+        end
+
+        if d >= max_dim
+            break
+        end
+        nxt_idx, nxt_diam = _rips_generate_next(cur_idx, cur_diam, d, nbr, nbd, B, n)
+        if isempty(nxt_idx)
+            break
+        end
+        cleared = next_pivots
+        cur_idx = nxt_idx
+        cur_diam = nxt_diam
+        d += 1
+    end
+
+    eps_values = sort(collect(gridset))
+    return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+            dim_count, total)
+end
+
+"""
+    compute_rips_cohomology(points, epsilon, max_dim)
+
+PythonCall entry point for [`_compute_rips_cohomology`](@ref).
+"""
+function compute_rips_cohomology(points_raw, epsilon_raw, max_dim_raw)
+    return _compute_rips_cohomology(
         pyconvert(Matrix{Float64}, points_raw),
         pyconvert(Float64, epsilon_raw),
         pyconvert(Int, max_dim_raw),
@@ -3157,6 +3540,9 @@ end
 
         # --- Fused Rips filtration (build + longest-edge values + reduction) ---
         _compute_rips_filtration(pts_3d, 5.0, 2)
+
+        # --- Implicit cohomology Rips engine (Phase B) ---
+        _compute_rips_cohomology(pts_3d, 5.0, 3)
 
         # --- Alexander-Whitney Cup Product ---
         # Using strictly typed Dicts to avoid PyDict overhead during warm-up
