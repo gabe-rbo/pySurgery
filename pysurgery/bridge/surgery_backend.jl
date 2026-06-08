@@ -3758,119 +3758,102 @@ Handles N-dimensional point clouds with robust linear circumradius solvers.
 function compute_alpha_complex_simplices_jl(
     points::AbstractMatrix{Float64},
     max_simplices::AbstractMatrix{Int64},
-    alpha2::Float64,
+    alpha2_threshold::Float64,
     max_dim::Int
 )
-    n_pts, dim_pts = size(points)
-    n_max = size(max_simplices, 1)
-
-    valid_simplices = Set{Tuple{Vararg{Int64}}}()
-    r2_cache = Dict{Tuple{Vararg{Int64}}, Float64}()
-
-    function get_r2(simplex_indices)
-        if haskey(r2_cache, simplex_indices)
-            return r2_cache[simplex_indices]
-        end
-
-        k = length(simplex_indices)
-        if k == 1
-            return 0.0
-        end
-        if k == 2
-            u, v = simplex_indices[1]+1, simplex_indices[2]+1
-            d2 = sum(abs2, points[u, :] .- points[v, :])
-            val = d2 / 4.0
-            r2_cache[simplex_indices] = val
-            return val
-        end
-
-        # For k > 2, check if any face is obtuse (minimum enclosing sphere logic)
-        if k == 3
-            # Triangle: acute circumradius or diametral sphere of longest edge
-            p0, p1, p2 = points[simplex_indices[1]+1, :], points[simplex_indices[2]+1, :], points[simplex_indices[3]+1, :]
-            a2 = sum(abs2, p1 .- p2)
-            b2 = sum(abs2, p0 .- p2)
-            c2 = sum(abs2, p0 .- p1)
-
-            # Area^2 via Cayley-Menger or cross product
-            v1 = p1 .- p0
-            v2 = p2 .- p0
-            if dim_pts == 3
-                area2 = 0.25 * sum(abs2, cross(v1, v2))
-            else
-                area2 = 0.25 * (v1[1]*v2[2] - v1[2]*v2[1])^2
+    n_pts = size(points, 1)
+    full_dim = size(points, 2)
+    
+    # 1. Generate all faces of all dimensions up to full_dim from the Delaunay triangulation
+    faces_by_dim = [Set{Vector{Int}}() for _ in 1:(full_dim + 1)]
+    opposite = Dict{Vector{Int}, Set{Int}}()
+    
+    n_top = size(max_simplices, 1)
+    d_top = size(max_simplices, 2)
+    for i in 1:n_top
+        t = sort([max_simplices[i, j] + 1 for j in 1:d_top])
+        t_set = Set(t)
+        
+        for d in 0:min(full_dim, d_top - 1)
+            for f in combinations(t, d + 1)
+                push!(faces_by_dim[d + 1], f)
+                opp = setdiff(t_set, f)
+                s = get!(opposite, f, Set{Int}())
+                union!(s, opp)
             end
-
-            r2_acute = (a2 * b2 * c2) / (16.0 * area2 + 1e-30)
-            is_obtuse = (a2 + b2 < c2) || (a2 + c2 < b2) || (b2 + c2 < a2)
-            val = is_obtuse ? maximum([a2, b2, c2]) / 4.0 : r2_acute
-            r2_cache[simplex_indices] = val
-            return val
         end
-
-        # Generic N-dimensional case (Tetrahedra k=4, etc.)
-        p0 = @view points[simplex_indices[1]+1, :]
-        A = zeros(Float64, k-1, dim_pts)
-        b = zeros(Float64, k-1)
-        for i in 2:k
-            pi = @view points[simplex_indices[i]+1, :]
-            for j in 1:dim_pts
-                A[i-1, j] = pi[j] - p0[j]
-            end
-            b[i-1] = 0.5 * sum(abs2, pi .- p0)
-        end
-
-        try
-            # For 3-simplices in 3D (k=4), A is 3x3. Check for degeneracy.
-            if k-1 == dim_pts && abs(det(A)) < 1e-15
-                # Degenerate: use maximum of sub-face circumradii
-                r2_max = 0.0
-                for face in combinations(simplex_indices, k-1)
-                    r2_max = max(r2_max, get_r2(Tuple(face)))
+    end
+    
+    # 2. Compute circumspheres
+    circ = Dict{Vector{Int}, Tuple{Vector{Float64}, Float64}}()
+    for d in 0:full_dim
+        for f in faces_by_dim[d + 1]
+            P = Matrix{Float64}(undef, length(f), full_dim)
+            for r in 1:length(f)
+                for c in 1:full_dim
+                    P[r, c] = points[f[r], c]
                 end
-                r2_cache[simplex_indices] = r2_max
-                return r2_max
             end
-
-            c = A \ b
-            val = sum(abs2, c)
+            circ[f] = _circumsphere_jl(P)
+        end
+    end
+    
+    # 3. Compute Gabriel empty-sphere test and propagate alpha values
+    alpha2_vals = Dict{Vector{Int}, Float64}()
+    for d in full_dim:-1:0
+        for f in faces_by_dim[d + 1]
+            center, r2 = circ[f]
             
-            # If circumcenter is outside the simplex, it might be obtuse
-            # For tetrahedra, check if any face is a better candidate
-            # This is a simplified "minimum enclosing sphere" logic
-            r2_cache[simplex_indices] = val
-            return val
-        catch
-            r2_cache[simplex_indices] = Inf
-            return Inf
+            gabriel = true
+            for p in opposite[f]
+                d2 = 0.0
+                for j in 1:full_dim
+                    diff = points[p, j] - center[j]
+                    d2 += diff * diff
+                end
+                if d2 < r2 - 1e-12
+                    gabriel = false
+                    break
+                end
+            end
+            
+            min_a2 = r2
+            has_coface = false
+            for p in opposite[f]
+                coface = copy(f)
+                insert_idx = searchsortedfirst(coface, p)
+                insert!(coface, insert_idx, p)
+                
+                if haskey(alpha2_vals, coface)
+                    val = alpha2_vals[coface]
+                    if !has_coface || val < min_a2
+                        min_a2 = val
+                        has_coface = true
+                    end
+                end
+            end
+            
+            if gabriel
+                alpha2_vals[f] = min(r2, min_a2)
+            else
+                alpha2_vals[f] = min_a2
+            end
         end
     end
 
-    # Gabriel condition: A simplex is in Alpha complex if its R^2 <= alpha2
-    for i in 1:n_max
-        s_raw = sort(vec(max_simplices[i, :]))
-        # Collect all sub-faces up to max_dim
-        for r in 1:length(s_raw)
-            for face in combinations(s_raw, r)
-                t_face = Tuple(face)
-                if get_r2(t_face) <= alpha2
-                    push!(valid_simplices, t_face)
+    # 4. Filter up to max_dim and collect indices (0-indexed for python)
+    valid_simplices = Vector{Vector{Int64}}()
+    for d in 0:max_dim
+        if d <= full_dim
+            for f in faces_by_dim[d + 1]
+                if alpha2_vals[f] <= alpha2_threshold
+                    push!(valid_simplices, [v - 1 for v in f])
                 end
             end
         end
     end
 
-    # Ensure all faces of valid simplices are included (simplicial complex property)
-    final_simplices = Set{Tuple{Vararg{Int64}}}()
-    for s in valid_simplices
-        for r in 1:length(s)
-            for face in combinations(collect(s), r)
-                push!(final_simplices, Tuple(face))
-            end
-        end
-    end
-
-    return [collect(Int64, s) for s in final_simplices]
+    return valid_simplices
 end
 
 function quick_mapper_jl(G_raw_py::PyDict{Any, Any}, max_loops::Int=1, min_modularity_gain::Float64=1e-6)

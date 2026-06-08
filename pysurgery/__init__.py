@@ -315,7 +315,7 @@ from .auto_surgery import (
 
 from . import integrations
 
-__version__ = "2.1.1"
+__version__ = "2.1.2"
                                 
 def __getattr__(name):
     if name == "JuliaBridge":

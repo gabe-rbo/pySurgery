@@ -2841,79 +2841,14 @@ class SimplicialComplex(ChainComplex):
                 import warnings
                 warnings.warn(f"Julia Alpha Complex failed ({e!r}). Falling back to pure Python.")
 
-        # Python fallback - Robust Alpha Complex (Gabriel condition)
-        # A simplex is included if its circumradius is <= alpha.
-        def get_all_faces(simplices, d):
-            faces = set()
-            for s in simplices:
-                for combo in itertools.combinations(s, d+1):
-                    faces.add(tuple(sorted(int(v) for v in combo)))
-            if not faces:
-                return np.zeros((0, d + 1), dtype=np.int64)
-            return np.array(list(faces), dtype=np.int64)
+        # Python fallback - Robust Alpha Complex (Gabriel condition & coface propagation)
+        from pysurgery.topology.filtration_values import alpha_filtration_values
+        correct_vals = alpha_filtration_values(pts, simplices_d, max_dim=dim)
+        
+        alpha_val = np.sqrt(alpha2)
+        valid_simplices_final = [list(s) for s, val in correct_vals.items() if val <= alpha_val]
 
-        _r2_cache_py = {}
-
-        def get_r2_py(s_indices):
-            s_key = tuple(sorted(s_indices))
-            if s_key in _r2_cache_py:
-                return _r2_cache_py[s_key]
-
-            k = len(s_key)
-            if k == 1:
-                return 0.0
-
-            pts_s = pts[list(s_key)]
-            if k == 2:
-                val = np.sum((pts_s[0] - pts_s[1])**2) / 4.0
-                _r2_cache_py[s_key] = val
-                return val
-
-            if k == 3:
-                # Triangle
-                p0, p1, p2 = pts_s[0], pts_s[1], pts_s[2]
-                v1, v2 = p1 - p0, p2 - p0
-                area2 = 0.25 * np.sum(np.cross(v1, v2)**2)
-                a2, b2, c2 = np.sum((p1-p2)**2), np.sum((p0-p2)**2), np.sum((p0-p1)**2)
-                r2_acute = (a2 * b2 * c2) / (16.0 * area2 + 1e-30)
-                is_obtuse = (a2 + b2 < c2) | (a2 + c2 < b2) | (b2 + c2 < a2)
-                val = max(a2, b2, c2) / 4.0 if is_obtuse else r2_acute
-                _r2_cache_py[s_key] = val
-                return val
-
-            # Generic N-dimensional
-            p0 = pts_s[0]
-            A_mat = pts_s[1:] - p0
-            b_vec = 0.5 * np.sum((pts_s[1:] - p0)**2, axis=1)
-            try:
-                # Check for degeneracy in 3D (k=4)
-                if k-1 == dim and abs(np.linalg.det(A_mat)) < 1e-15:
-                    r2_max = 0.0
-                    for face in itertools.combinations(s_key, k-1):
-                        r2_max = max(r2_max, get_r2_py(face))
-                    _r2_cache_py[s_key] = r2_max
-                    return r2_max
-
-                c_vec, _, _, _ = np.linalg.lstsq(A_mat, b_vec, rcond=None)
-                val = np.sum(c_vec**2)
-                _r2_cache_py[s_key] = val
-                return val
-            except Exception:
-                _r2_cache_py[s_key] = np.inf
-                return np.inf
-
-        valid_simplices_final = set()
-        for i in range(n_pts):
-            valid_simplices_final.add((i,))
-
-        # Evaluate all faces of Delaunay triangulation
-        for d in range(1, dim + 1):
-            d_simplices = get_all_faces(simplices_d, d)
-            for s in d_simplices:
-                if get_r2_py(s) <= alpha2:
-                    valid_simplices_final.add(tuple(s))
-
-        sc = cls.from_simplices(list(valid_simplices_final), coefficient_ring=coefficient_ring, close_under_faces=True)
+        sc = cls.from_simplices(valid_simplices_final, coefficient_ring=coefficient_ring, close_under_faces=True)
         sc._coordinates = pts
         sc._generate_point_cloud_mappings(pts)
         return sc
