@@ -3896,6 +3896,68 @@ class SimplicialComplex(ChainComplex):
         # if we include all faces. from_simplices will organize them.
         return SimplicialComplex.from_simplices(link_simplices, coefficient_ring=self.coefficient_ring, close_under_faces=True)
 
+    def get_subfaces(self, simplex: Iterable[int], dimension: Optional[int] = None) -> Set[Tuple[int, ...]]:
+        """Return all subfaces of a simplex present in the complex, optionally filtered by dimension.
+
+        A subface of sigma is any simplex tau in the complex that is a subset of sigma.
+
+        Args:
+            simplex: The simplex to find subfaces of.
+            dimension: Optional dimension to filter by.
+
+        Returns:
+            A set of tuples representing the subfaces.
+        """
+        sigma = _normalize_simplex(simplex)
+        subfaces = set()
+        
+        for r in range(1, len(sigma) + 1):
+            d = r - 1
+            if dimension is not None and d != dimension:
+                continue
+            if d not in self._simplices_table:
+                continue
+            for combo in itertools.combinations(sigma, r):
+                f = tuple(sorted(combo))
+                if f in self._simplices_table[d]:
+                    subfaces.add(f)
+        return subfaces
+
+    def get_cofaces(self, simplex: Iterable[int], dimension: Optional[int] = None) -> Set[Tuple[int, ...]]:
+        """Return all cofaces of a simplex in the complex, optionally filtered by dimension.
+
+        A coface of sigma is any simplex tau in the complex that contains sigma.
+
+        Args:
+            simplex: The simplex to find cofaces of.
+            dimension: Optional dimension to filter by.
+
+        Returns:
+            A set of tuples representing the cofaces.
+        """
+        cofaces = self.star(simplex)
+        if dimension is not None:
+            cofaces = {c for c in cofaces if len(c) - 1 == dimension}
+        return cofaces
+
+    def to_dynamic_complex(self) -> "DynamicComplex":
+        """Convert this static SimplicialComplex into a DynamicComplex.
+
+        Preserves the simplices, coefficient ring, filtration, and coordinates.
+
+        Returns:
+            DynamicComplex: The dynamic complex representation.
+        """
+        dc = DynamicComplex(
+            simplices=self.simplices_field,
+            coefficient_ring=self.coefficient_ring,
+            filtration=self.filtration,
+        )
+        if hasattr(self, "_coordinates") and self._coordinates is not None:
+            dc._coordinates = self._coordinates.copy()
+            dc._generate_point_cloud_mappings(dc._coordinates)
+        return dc
+
     def simplex_to_index(self, d: int) -> Dict[Tuple[int, ...], int]:
         """Map each d-simplex to its index in the ordered simplex list.
 

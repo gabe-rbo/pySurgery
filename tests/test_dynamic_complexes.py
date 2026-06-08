@@ -40,3 +40,31 @@ def test_dynamic_complex_skeletal_closure_removal():
     assert dc.count_simplices(1) == 0
     assert dc.count_simplices(0) == 1
     assert dc.n_simplices(0) == [(1,)]
+
+
+def test_new_simplicial_complex_methods():
+    sc = SimplicialComplex.from_simplices([(0, 1, 2)], close_under_faces=True)
+    
+    # Test get_subfaces
+    subfaces_all = sc.get_subfaces((0, 1, 2))
+    assert (0,) in subfaces_all
+    assert (0, 1) in subfaces_all
+    assert (0, 1, 2) in subfaces_all
+    
+    subfaces_dim1 = sc.get_subfaces((0, 1, 2), dimension=1)
+    assert subfaces_dim1 == {(0, 1), (1, 2), (0, 2)}
+    
+    # Test get_cofaces
+    cofaces_all = sc.get_cofaces((0,))
+    assert (0,) in cofaces_all
+    assert (0, 1) in cofaces_all
+    assert (0, 1, 2) in cofaces_all
+    
+    cofaces_dim2 = sc.get_cofaces((0,), dimension=2)
+    assert cofaces_dim2 == {(0, 1, 2)}
+    
+    # Test to_dynamic_complex
+    dc = sc.to_dynamic_complex()
+    assert isinstance(dc, DynamicComplex)
+    assert dc.betti_number(0) == 1
+    assert dc.betti_number(1) == 0
