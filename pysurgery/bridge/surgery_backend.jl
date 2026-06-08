@@ -6881,24 +6881,25 @@ function _compute_alpha_filtration(points::Matrix{Float64}, top_simplices::Matri
                 end
             end
             
-            if gabriel
-                alpha2[f] = r2
-            else
-                min_a2 = r2
-                has_coface = false
-                for p in opposite[f]
-                    coface = copy(f)
-                    insert_idx = searchsortedfirst(coface, p)
-                    insert!(coface, insert_idx, p)
-                    
-                    if haskey(alpha2, coface)
-                        val = alpha2[coface]
-                        if !has_coface || val < min_a2
-                            min_a2 = val
-                            has_coface = true
-                        end
+            min_a2 = r2
+            has_coface = false
+            for p in opposite[f]
+                coface = copy(f)
+                insert_idx = searchsortedfirst(coface, p)
+                insert!(coface, insert_idx, p)
+                
+                if haskey(alpha2, coface)
+                    val = alpha2[coface]
+                    if !has_coface || val < min_a2
+                        min_a2 = val
+                        has_coface = true
                     end
                 end
+            end
+            
+            if gabriel
+                alpha2[f] = min(r2, min_a2)
+            else
                 alpha2[f] = min_a2
             end
         end
