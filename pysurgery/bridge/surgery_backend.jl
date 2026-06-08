@@ -436,10 +436,20 @@ function _extract_apparent_pairs(simplices::Vector{Vector{Int}}, vals::Vector{Fl
             if info[2] == 1
                 tau_idx = code_to_idx[facet_code]
                 sigma_idx = info[1]
-                if abs(vals[tau_idx] - vals[sigma_idx]) < 1e-12
-                    if !(tau_idx in removed) && !(sigma_idx in removed)
-                        push!(removed, tau_idx)
-                        push!(removed, sigma_idx)
+                
+                # Check if sigma itself is a maximal simplex (has no cofaces)
+                s_sigma = simplices[sigma_idx]
+                sigma_code = 0
+                for v in s_sigma
+                    sigma_code = (sigma_code << b) | (v + 1)
+                end
+                
+                if !haskey(coface_info, sigma_code)
+                    if abs(vals[tau_idx] - vals[sigma_idx]) < 1e-12
+                        if !(tau_idx in removed) && !(sigma_idx in removed)
+                            push!(removed, tau_idx)
+                            push!(removed, sigma_idx)
+                        end
                     end
                 end
             end
@@ -482,10 +492,15 @@ function _extract_apparent_pairs(simplices::Vector{Vector{Int}}, vals::Vector{Fl
             if info[2] == 1
                 tau_idx = vindex[facet]
                 sigma_idx = info[1]
-                if abs(vals[tau_idx] - vals[sigma_idx]) < 1e-12
-                    if !(tau_idx in removed) && !(sigma_idx in removed)
-                        push!(removed, tau_idx)
-                        push!(removed, sigma_idx)
+                
+                # Check if sigma itself is a maximal simplex
+                sigma = simplices[sigma_idx]
+                if !haskey(coface_info, sigma)
+                    if abs(vals[tau_idx] - vals[sigma_idx]) < 1e-12
+                        if !(tau_idx in removed) && !(sigma_idx in removed)
+                            push!(removed, tau_idx)
+                            push!(removed, sigma_idx)
+                        end
                     end
                 end
             end
