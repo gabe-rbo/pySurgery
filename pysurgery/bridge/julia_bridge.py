@@ -558,6 +558,17 @@ class JuliaBridge:
                 ),
             ),
             (
+                # The fused Alpha complex build + Gabriel test + reduce path. Warm it on
+                # a small square with Delaunay top simplices.
+                "alpha_filtration",
+                lambda: self.compute_alpha_filtration(
+                    np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+                             dtype=np.float64),
+                    np.array([[0, 1, 2], [1, 2, 3]], dtype=np.int64),
+                    2,
+                ),
+            ),
+            (
                 # The implicit-cohomology Rips engine (Phase B), used for high
                 # max_dimension. Warm it on a small tetrahedral cloud at max_dim=3
                 # so its first real call does not pay the JIT cost.
@@ -2430,6 +2441,76 @@ class JuliaBridge:
             return payload
         except Exception as e:
             raise RuntimeError(f"compute_rips_filtration failed: {e!r}")
+
+    def compute_alpha_filtration(
+        self,
+        points: np.ndarray,
+        top_simplices: np.ndarray,
+        max_dim: int,
+        analyze_manifolds: bool = False,
+        n_samples: Optional[int] = None,
+        eps_max: Optional[float] = None,
+    ) -> dict:
+        """Fused Alpha complex build + Gabriel testing + Z2 persistence in Julia.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            top_simplices: (M, D + 1) array of Delaunay top simplices (vertex indices).
+            max_dim: Maximum simplex dimension to build.
+            analyze_manifolds: If True, run the per-threshold manifold analysis in Julia.
+            n_samples: If given, select this many thresholds from distinct values.
+            eps_max: If given, maximum filtration value to include.
+
+        Returns:
+            A dict with keys:
+                ``barcode`` -- list of ``(dim, birth, death)`` tuples;
+                ``eps_values`` -- sorted distinct appearance values;
+                ``dim_first_appear`` -- ``{dim: minimum appearance value}``;
+                ``total`` -- total number of simplices in the complex;
+                ``manifold_data`` -- dict of manifold results per threshold if analyze_manifolds is True.
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        self.require_julia()
+        try:
+            res = self.backend.compute_alpha_filtration(
+                np.ascontiguousarray(points, dtype=np.float64),
+                np.ascontiguousarray(top_simplices, dtype=np.int64),
+                int(max_dim),
+                bool(analyze_manifolds),
+                n_samples,
+                float(eps_max) if eps_max is not None else None,
+            )
+            bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val, _dim_count, total = res[0:8]
+            dims = np.asarray(bar_dim, dtype=np.int64).tolist()
+            births = np.asarray(bar_birth, dtype=np.float64).tolist()
+            deaths = np.asarray(bar_death, dtype=np.float64).tolist()
+            barcode = list(zip(dims, births, deaths))
+
+            ids = np.asarray(dim_ids, dtype=np.int64).tolist()
+            firsts = np.asarray(dim_first_val, dtype=np.float64).tolist()
+            payload = {
+                "barcode": barcode,
+                "eps_values": np.asarray(eps_values, dtype=np.float64).tolist(),
+                "dim_first_appear": {int(d): float(f) for d, f in zip(ids, firsts)},
+                "total": int(total),
+            }
+
+            if len(res) > 8 and res[8]:
+                payload["manifold_data"] = {
+                    "epsilons": np.asarray(res[9], dtype=np.float64).tolist(),
+                    "is_manifold": np.asarray(res[10], dtype=bool).tolist(),
+                    "dimensions": np.asarray(res[11], dtype=np.int64).tolist(),
+                    "is_closed": np.asarray(res[12], dtype=bool).tolist(),
+                    "failures": np.asarray(res[13], dtype=np.int64).tolist(),
+                }
+            else:
+                payload["manifold_data"] = None
+
+            return payload
+        except Exception as e:
+            raise RuntimeError(f"compute_alpha_filtration failed: {e!r}")
 
     def compute_rips_cohomology(
         self,

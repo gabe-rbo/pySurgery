@@ -1065,15 +1065,13 @@ class _BaseFiltrationReport:
             for birth, death in dim_bars:
                 is_inf = math.isinf(death) or death is None
                 end_x = cap_val if is_inf else death
-                hover = f"Dimension: {dim}<br>Birth: {birth:.4f}<br>Death: {'inf' if is_inf else f'{death:.4f}'}<br>Persistence: {'inf' if is_inf else f'{death - birth:.4f}'}"
                 
                 fig.add_trace(go.Scatter(
                     x=[birth, end_x],
                     y=[y_val, y_val],
                     mode="lines",
                     line=dict(color=dim_color, width=3),
-                    hoverinfo="text",
-                    hovertext=hover,
+                    hoverinfo="skip",
                     showlegend=False
                 ))
                 
@@ -1083,8 +1081,7 @@ class _BaseFiltrationReport:
                         y=[y_val],
                         mode="markers",
                         marker=dict(symbol="triangle-right", size=8, color=dim_color),
-                        hoverinfo="text",
-                        hovertext=hover,
+                        hoverinfo="skip",
                         showlegend=False
                     ))
                 y_val += 1
@@ -1112,6 +1109,27 @@ class _BaseFiltrationReport:
                     line=dict(color="rgba(0,0,0,0.1)", width=1, dash="dash")
                 )
 
+        # Add invisible trace across the epsilons grid to show the Betti numbers in unified hover
+        betti_x = [res["epsilon"] for res in self.results]
+        betti_text = []
+        all_dims = sorted(list(self.all_betti_dims))
+        for res in self.results:
+            eps = res["epsilon"]
+            bettis = res["bettis"]
+            b_str = ", ".join(f"b_{d}={bettis.get(d, 0)}" for d in all_dims)
+            betti_text.append(f"Betti: {b_str}")
+
+        fig.add_trace(go.Scatter(
+            x=betti_x,
+            y=[y_val / 2.0] * len(betti_x),
+            mode="lines",
+            line=dict(color="rgba(0,0,0,0)"),
+            name="Invariants",
+            hoverinfo="text",
+            hovertext=betti_text,
+            showlegend=False
+        ))
+
         fig.update_layout(
             title=f"Persistence Barcode ({self.method_name})",
             xaxis_title=self.param_label,
@@ -1122,7 +1140,16 @@ class _BaseFiltrationReport:
                 zeroline=False
             ),
             template="plotly_white",
-            showlegend=True
+            showlegend=True,
+            hovermode="x unified"
+        )
+        fig.update_xaxes(
+            showspikes=True,
+            spikemode="across",
+            spikesnap="cursor",
+            spikedash="dash",
+            spikecolor="rgba(0,0,0,0.3)",
+            spikethickness=1
         )
         return fig
 
@@ -1341,6 +1368,51 @@ class AlphaFiltrationReport(_BaseFiltrationReport):
 
     param_label = "Alpha"
     method_name = "Alpha"
+    _ALPHA_FUSED_MIN_POINTS = 256
+
+    def _assemble(self):
+        """Fuse the Alpha complex build, Gabriel empty-sphere test, and Z2 reduction inside Julia.
+
+        For large clouds, this runs the entire hot path inside Julia, bypassing the
+        staged build and python loops entirely. For small complexes, we defer to the
+        staged build.
+        """
+        need_explicit = self.track_connected_components or self.compute_torsion
+        if (need_explicit or self.backend == "python"
+                or len(self.points) < self._ALPHA_FUSED_MIN_POINTS):
+            return super()._assemble()
+        try:
+            from scipy.spatial import Delaunay
+            from pysurgery.bridge.julia_bridge import julia_engine
+            if not julia_engine.available:
+                return super()._assemble()
+            
+            pts = self.points
+            n, dim = pts.shape
+            if n < dim + 1:
+                return super()._assemble()
+                
+            dt = Delaunay(pts, qhull_options="QJ")
+            payload = julia_engine.compute_alpha_filtration(
+                pts, dt.simplices, self.max_dimension,
+                analyze_manifolds=self.analyze_manifolds,
+                n_samples=self.n_samples,
+                eps_max=self.eps_max,
+            )
+        except Exception as exc:
+            warnings.warn(
+                f"Fused Julia Alpha filtration failed ({exc!r}); falling back to the "
+                "staged build.", stacklevel=2)
+            return super()._assemble()
+
+        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
+            return super()._assemble()
+
+        if "manifold_data" in payload and payload["manifold_data"] is not None:
+            self._precomputed_manifolds = payload["manifold_data"]
+
+        return (None, None, payload["barcode"], payload["dim_first_appear"],
+                payload["total"], payload["eps_values"])
 
     def _build_maximal_and_values(self):
         """Build the Delaunay complex with circumradius/Gabriel alpha values."""

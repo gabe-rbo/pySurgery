@@ -5604,7 +5604,7 @@ class SimplicialComplex(ChainComplex):
         Returns:
             The homology basis result.
         """
-        from ..core.homology_generators import compute_homology_basis_from_complex
+        from ..homology.homology_generators import compute_homology_basis_from_complex
 
         return compute_homology_basis_from_complex(
             self,
@@ -5635,7 +5635,7 @@ class SimplicialComplex(ChainComplex):
         Returns:
             The optimal H1 basis result.
         """
-        from ..core.homology_generators import compute_optimal_h1_basis_from_complex
+        from ..homology.homology_generators import compute_optimal_h1_basis_from_complex
 
         return compute_optimal_h1_basis_from_complex(
             self,

@@ -16,6 +16,7 @@ import pytest
 from pysurgery.topology.filtration_tools import (
     RipsFiltrationReport,
     CknnFiltrationReport,
+    AlphaFiltrationReport,
     _BaseFiltrationReport,
 )
 
@@ -286,3 +287,25 @@ def test_filtration_report_plot():
     fig_barcode = rep.plot(barcode=True)
     assert isinstance(fig_barcode, go.Figure)
     assert len(fig_barcode.data) > 0
+    
+    # Assert layout configurations for vertical hover line and Betti numbers/epsilon tooltip
+    assert fig_barcode.layout.hovermode == "x unified"
+    assert fig_barcode.layout.xaxis.showspikes is True
+    assert fig_barcode.layout.xaxis.spikemode == "across"
+    assert any(trace.name == "Invariants" for trace in fig_barcode.data)
+
+
+class _ForceFusedAlpha(AlphaFiltrationReport):
+    _ALPHA_FUSED_MIN_POINTS = 0
+    _MANIFOLD_MAX_SIMPLICES = 0
+
+
+@pytest.mark.skipif(not _julia_available(), reason="Julia backend unavailable")
+def test_fused_alpha_implicit_path_matches_python():
+    """Verify that the fused Julia Alpha complex path matches the staged Python path."""
+    pts = _circle(20)
+    fused = _ForceFusedAlpha(pts, max_dimension=2, analyze_manifolds=True, n_samples=5)
+    py = AlphaFiltrationReport(pts, max_dimension=2, analyze_manifolds=True, n_samples=5, backend="python")
+    
+    assert fused.max_sc is None                      # complex kept implicit
+    assert _bagify(fused.barcode) == _bagify(py.barcode)

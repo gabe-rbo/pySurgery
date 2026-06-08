@@ -16,7 +16,7 @@ export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomolo
     snf_markowitz_column_order, modular_rank_certification_jl, padic_snf_diagonal_jl, batch_exact_snf_sparse,
     todd_coxeter_index_jl, cayley_table_jl, cayley_convolve_jl, lift_boundary_to_cover_jl,
     fox_derivative_block_real_jl, fox_derivative_block_complex_jl, twisted_alexander_whitney_jl,
-    BarcodeResult, compute_persistence_barcodes, compute_filtration_persistence, compute_rips_filtration, compute_rips_cohomology,
+    BarcodeResult, compute_persistence_barcodes, compute_filtration_persistence, compute_rips_filtration, compute_rips_cohomology, compute_alpha_filtration,
     surgery_relative_boundary_sparse, linking_seifert_solve_z, linking_intersection_pairing,
     surgery_handle_attach, sphere_recognition_pl,
     linking_intersection_batch, compute_cohomology_basis_jl, linking_intersect_2chains,
@@ -373,7 +373,143 @@ this — the flat path sorts on reconstruction, the Rips DFS emits ascending
 cliques). The barcode is invariant to the order of equal-`(value, dimension)`
 simplices, so no vertex tie-break is needed in the sort key.
 """
+function _extract_apparent_pairs(simplices::Vector{Vector{Int}}, vals::Vector{Float64})
+    M = length(simplices)
+    if M <= 1
+        return Set{Int}()
+    end
+
+    maxvert = 0
+    max_len = 0
+    @inbounds for s in simplices
+        len_s = length(s)
+        if len_s > max_len
+            max_len = len_s
+        end
+        if len_s > 0 && s[end] > maxvert
+            maxvert = s[end]
+        end
+    end
+
+    b = 8 * sizeof(Int) - leading_zeros(maxvert + 1)
+    removed = Set{Int}()
+
+    if max_len * b <= 62
+        code_to_idx = Dict{Int, Int}()
+        sizehint!(code_to_idx, M)
+        @inbounds for i in 1:M
+            s = simplices[i]
+            code = 0
+            for v in s
+                code = (code << b) | (v + 1)
+            end
+            code_to_idx[code] = i
+        end
+
+        coface_info = Dict{Int, Tuple{Int, Int}}()
+        sizehint!(coface_info, M)
+
+        @inbounds for i in 1:M
+            s = simplices[i]
+            k = length(s)
+            k < 2 && continue
+            for p in 1:k
+                facet_code = 0
+                for q in 1:k
+                    if q != p
+                        facet_code = (facet_code << b) | (s[q] + 1)
+                    end
+                end
+
+                if haskey(code_to_idx, facet_code)
+                    info = get(coface_info, facet_code, (0, 0))
+                    if info[2] == 0
+                        coface_info[facet_code] = (i, 1)
+                    elseif info[2] == 1
+                        coface_info[facet_code] = (0, 2)
+                    end
+                end
+            end
+        end
+
+        for (facet_code, info) in coface_info
+            if info[2] == 1
+                tau_idx = code_to_idx[facet_code]
+                sigma_idx = info[1]
+                if abs(vals[tau_idx] - vals[sigma_idx]) < 1e-12
+                    if !(tau_idx in removed) && !(sigma_idx in removed)
+                        push!(removed, tau_idx)
+                        push!(removed, sigma_idx)
+                    end
+                end
+            end
+        end
+    else
+        vindex = Dict{Vector{Int}, Int}()
+        sizehint!(vindex, M)
+        @inbounds for i in 1:M
+            vindex[simplices[i]] = i
+        end
+
+        coface_info = Dict{Vector{Int}, Tuple{Int, Int}}()
+        sizehint!(coface_info, M)
+
+        buf = Int[]
+        @inbounds for i in 1:M
+            s = simplices[i]
+            k = length(s)
+            k < 2 && continue
+            resize!(buf, k - 1)
+            for p in 1:k
+                idx = 1
+                for q in 1:k
+                    if q != p
+                        buf[idx] = s[q]; idx += 1
+                    end
+                end
+                if haskey(vindex, buf)
+                    info = get(coface_info, buf, (0, 0))
+                    if info[2] == 0
+                        coface_info[copy(buf)] = (i, 1)
+                    elseif info[2] == 1
+                        coface_info[buf] = (0, 2)
+                    end
+                end
+            end
+        end
+
+        for (facet, info) in coface_info
+            if info[2] == 1
+                tau_idx = vindex[facet]
+                sigma_idx = info[1]
+                if abs(vals[tau_idx] - vals[sigma_idx]) < 1e-12
+                    if !(tau_idx in removed) && !(sigma_idx in removed)
+                        push!(removed, tau_idx)
+                        push!(removed, sigma_idx)
+                    end
+                end
+            end
+        end
+    end
+
+    return removed
+end
+
 function _reduce_from_simplices(simplices::Vector{Vector{Int}}, vals::Vector{Float64})
+    removed = _extract_apparent_pairs(simplices, vals)
+    if !isempty(removed)
+        M_orig = length(simplices)
+        keep = Int[]
+        sizehint!(keep, M_orig - length(removed))
+        for i in 1:M_orig
+            if !(i in removed)
+                push!(keep, i)
+            end
+        end
+        simplices = simplices[keep]
+        vals = vals[keep]
+    end
+
     M = length(simplices)
     if M <= 0
         return (Int[], Float64[], Float64[])
@@ -6626,6 +6762,199 @@ function _generate_all_cliques_and_values(points::Matrix{Float64}, epsilon::Floa
     cliques = reduce(vcat, cliques_threads)
     vals = reduce(vcat, vals_threads)
     return cliques, vals
+end
+
+function _circumsphere_jl(P::Matrix{Float64})
+    k, D = size(P)
+    if k == 1
+        return P[1, :], 0.0
+    end
+    Q = Matrix{Float64}(undef, k - 1, D)
+    for j in 1:D
+        p1 = P[1, j]
+        for i in 2:k
+            Q[i - 1, j] = P[i, j] - p1
+        end
+    end
+    rhs = Vector{Float64}(undef, k - 1)
+    for i in 1:(k - 1)
+        s = 0.0
+        for j in 1:D
+            q_val = Q[i, j]
+            s += q_val * q_val
+        end
+        rhs[i] = 0.5 * s
+    end
+    G = Q * Q'
+    a = try
+        if size(G, 1) == size(G, 2)
+            G \ rhs
+        else
+            pinv(G) * rhs
+        end
+    catch
+        pinv(G) * rhs
+    end
+    center = [P[1, j] for j in 1:D]
+    for j in 1:D
+        for i in 1:(k - 1)
+            center[j] += Q[i, j] * a[i]
+        end
+    end
+    r2 = 0.0
+    for j in 1:D
+        diff = center[j] - P[1, j]
+        r2 += diff * diff
+    end
+    return center, r2
+end
+
+function _compute_alpha_filtration(points::Matrix{Float64}, top_simplices::Matrix{Int}, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, eps_max::Union{Nothing, Float64}=nothing)
+    n_pts = size(points, 1)
+    full_dim = size(points, 2)
+    
+    # 1. Generate all faces of all dimensions up to full_dim from the Delaunay triangulation
+    faces_by_dim = [Set{Vector{Int}}() for _ in 1:(full_dim + 1)]
+    opposite = Dict{Vector{Int}, Set{Int}}()
+    
+    n_top = size(top_simplices, 1)
+    d_top = size(top_simplices, 2)
+    for i in 1:n_top
+        t = sort([top_simplices[i, j] + 1 for j in 1:d_top])
+        t_set = Set(t)
+        
+        for d in 0:min(full_dim, d_top - 1)
+            for f in combinations(t, d + 1)
+                push!(faces_by_dim[d + 1], f)
+                opp = setdiff(t_set, f)
+                s = get!(opposite, f, Set{Int}())
+                union!(s, opp)
+            end
+        end
+    end
+    
+    # 2. Compute circumspheres
+    circ = Dict{Vector{Int}, Tuple{Vector{Float64}, Float64}}()
+    for d in 0:full_dim
+        for f in faces_by_dim[d + 1]
+            P = Matrix{Float64}(undef, length(f), full_dim)
+            for r in 1:length(f)
+                for c in 1:full_dim
+                    P[r, c] = points[f[r], c]
+                end
+            end
+            circ[f] = _circumsphere_jl(P)
+        end
+    end
+    
+    # 3. Compute Gabriel empty-sphere test and propagate alpha values
+    alpha2 = Dict{Vector{Int}, Float64}()
+    for d in full_dim:-1:0
+        for f in faces_by_dim[d + 1]
+            center, r2 = circ[f]
+            
+            gabriel = true
+            for p in opposite[f]
+                d2 = 0.0
+                for j in 1:full_dim
+                    diff = points[p, j] - center[j]
+                    d2 += diff * diff
+                end
+                if d2 < r2 - 1e-12
+                    gabriel = false
+                    break
+                end
+            end
+            
+            if gabriel
+                alpha2[f] = r2
+            else
+                min_a2 = r2
+                has_coface = false
+                for p in opposite[f]
+                    coface = copy(f)
+                    insert_idx = searchsortedfirst(coface, p)
+                    insert!(coface, insert_idx, p)
+                    
+                    if haskey(alpha2, coface)
+                        val = alpha2[coface]
+                        if !has_coface || val < min_a2
+                            min_a2 = val
+                            has_coface = true
+                        end
+                    end
+                end
+                alpha2[f] = min_a2
+            end
+        end
+    end
+    
+    # 4. Filter up to max_dim and compute sqrt values
+    cliques = Vector{Vector{Int}}()
+    vals = Float64[]
+    for d in 0:max_dim
+        if d <= full_dim
+            for f in faces_by_dim[d + 1]
+                a2 = alpha2[f]
+                val = sqrt(max(a2, 0.0))
+                if eps_max === nothing || val <= eps_max
+                    push!(cliques, f)
+                    push!(vals, val)
+                end
+            end
+        end
+    end
+    
+    M = length(cliques)
+    
+    # 5. Persistent homology reduction
+    (bar_dim, bar_birth, bar_death) = _reduce_from_simplices(cliques, vals)
+    
+    # Distinct values grid
+    eps_values = sort(unique(vals))
+    dim_first = Dict{Int, Float64}()
+    dim_cnt = Dict{Int, Int}()
+    @inbounds for j in 1:M
+        d = length(cliques[j]) - 1
+        v = vals[j]
+        if haskey(dim_first, d)
+            v < dim_first[d] && (dim_first[d] = v)
+            dim_cnt[d] += 1
+        else
+            dim_first[d] = v
+            dim_cnt[d] = 1
+        end
+    end
+    dim_ids = sort(collect(keys(dim_first)))
+    dim_first_val = Float64[dim_first[d] for d in dim_ids]
+    dim_count = Int[dim_cnt[d] for d in dim_ids]
+    
+    # 6. Manifold analysis
+    if analyze_manifolds
+        epsilon_val = (eps_max !== nothing) ? eps_max : (isempty(vals) ? 1.0 : maximum(vals))
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon_val, n_samples, n_pts)
+        return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+                dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
+    else
+        return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+                dim_count, M, false, Float64[], Bool[], Int[], Bool[], Int[])
+    end
+end
+
+"""
+    compute_alpha_filtration(points, top_simplices, max_dim, analyze_manifolds, n_samples, eps_max)
+
+PythonCall entry point for [`_compute_alpha_filtration`](@ref).
+"""
+function compute_alpha_filtration(points_raw, top_simplices_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, eps_max_raw=nothing)
+    return _compute_alpha_filtration(
+        pyconvert(Matrix{Float64}, points_raw),
+        pyconvert(Matrix{Int}, top_simplices_raw),
+        pyconvert(Int, max_dim_raw),
+        pyconvert(Bool, analyze_manifolds_raw),
+        pyconvert(Union{Nothing, Int}, n_samples_raw),
+        pyconvert(Union{Nothing, Float64}, eps_max_raw),
+    )
 end
 
 end # module
