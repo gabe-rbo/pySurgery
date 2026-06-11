@@ -2478,6 +2478,7 @@ class SimplicialComplex(ChainComplex):
         """
         from ..bridge.julia_bridge import julia_engine
 
+        original_pc = points
         points = np.asarray(points, dtype=np.float64)
         n_pts = points.shape[0]
 
@@ -2489,6 +2490,7 @@ class SimplicialComplex(ChainComplex):
                 )
                 sc._coordinates = points
                 sc._generate_point_cloud_mappings(points)
+                sc._link_point_cloud(original_pc)
                 return sc
             except Exception as e:
                 warnings.warn(f"Julia Vietoris-Rips failed: {e!r}. Falling back to Python.")
@@ -2509,6 +2511,7 @@ class SimplicialComplex(ChainComplex):
             sc._coordinates = points
         
         sc._generate_point_cloud_mappings(points)
+        sc._link_point_cloud(original_pc)
         return sc
 
     @classmethod
@@ -2692,6 +2695,7 @@ class SimplicialComplex(ChainComplex):
             sc = cls.from_simplices([], coefficient_ring=coefficient_ring)
             sc._coordinates = pts
             sc._generate_point_cloud_mappings(pts)
+            sc._link_point_cloud(points)
             return sc
         if k >= n:
             k = n - 1
@@ -2699,6 +2703,7 @@ class SimplicialComplex(ChainComplex):
             sc = cls.from_simplices([(i,) for i in range(n)], coefficient_ring=coefficient_ring)
             sc._coordinates = pts
             sc._generate_point_cloud_mappings(pts)
+            sc._link_point_cloud(points)
             return sc
 
         simplices = [(i,) for i in range(n)]
@@ -2744,6 +2749,7 @@ class SimplicialComplex(ChainComplex):
             sc = sc.expand(max_dimension)
         sc._coordinates = pts
         sc._generate_point_cloud_mappings(pts)
+        sc._link_point_cloud(points)
         return sc
     @classmethod
     def from_alpha_complex(
@@ -2780,6 +2786,7 @@ class SimplicialComplex(ChainComplex):
             sc = cls.from_simplices([[i] for i in range(n_pts)], coefficient_ring=coefficient_ring)
             sc._coordinates = pts
             sc._generate_point_cloud_mappings(pts)
+            sc._link_point_cloud(points)
             return sc
 
         dt = Delaunay(pts, qhull_options="QJ")
@@ -2835,6 +2842,7 @@ class SimplicialComplex(ChainComplex):
                 sc = cls.from_simplices(valid_simplices_list, coefficient_ring=coefficient_ring, close_under_faces=True)
                 sc._coordinates = pts
                 sc._generate_point_cloud_mappings(pts)
+                sc._link_point_cloud(points)
                 return sc
             except Exception as e:
                 if backend_norm == "julia":
@@ -2852,6 +2860,7 @@ class SimplicialComplex(ChainComplex):
         sc = cls.from_simplices(valid_simplices_final, coefficient_ring=coefficient_ring, close_under_faces=True)
         sc._coordinates = pts
         sc._generate_point_cloud_mappings(pts)
+        sc._link_point_cloud(points)
         return sc
 
     @classmethod
@@ -2884,6 +2893,7 @@ class SimplicialComplex(ChainComplex):
             sc = cls.from_simplices([[i] for i in range(n_pts)], coefficient_ring=coefficient_ring)
             sc._coordinates = pts
             sc._generate_point_cloud_mappings(pts)
+            sc._link_point_cloud(points)
             return sc
         
         # 1. Compute Voronoi diagram to get poles (Voronoi vertices)
@@ -2912,6 +2922,7 @@ class SimplicialComplex(ChainComplex):
         sc = cls.from_simplices(valid_simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
         sc._coordinates = pts
         sc._generate_point_cloud_mappings(pts)
+        sc._link_point_cloud(points)
         return sc
 
     @classmethod
@@ -2941,6 +2952,7 @@ class SimplicialComplex(ChainComplex):
             sc = cls.from_simplices([], coefficient_ring=coefficient_ring)
             sc._coordinates = pts
             sc.filtration = {}
+            sc._link_point_cloud(points)
             return sc
         dim = pts.shape[1]
         if n < dim + 1:
@@ -2949,6 +2961,7 @@ class SimplicialComplex(ChainComplex):
             sc._coordinates = pts
             sc.filtration = {(i,): 0.0 for i in range(n)}
             sc._generate_point_cloud_mappings(pts)
+            sc._link_point_cloud(points)
             return sc
 
         from scipy.spatial import Delaunay
@@ -2977,6 +2990,7 @@ class SimplicialComplex(ChainComplex):
 
         sc.filtration = vals
         sc._generate_point_cloud_mappings(pts)
+        sc._link_point_cloud(points)
         return sc
 
     @classmethod
@@ -3154,6 +3168,7 @@ class SimplicialComplex(ChainComplex):
                 pts = np.asarray(pc, dtype=np.float64)
             self._coordinates = pts
             self._generate_point_cloud_mappings(pts)
+            self._link_point_cloud(pc)
 
     @property
     def point_cloud_to_simplices(self) -> Dict[int, List[Tuple[int, ...]]]:
@@ -3180,6 +3195,12 @@ class SimplicialComplex(ChainComplex):
             for vertex in simplex:
                 if vertex in self._point_cloud_to_simplices:
                     self._point_cloud_to_simplices[vertex].append(simplex)
+
+    def _link_point_cloud(self, points: Any) -> None:
+        """Link a PointCloud back to this complex as its parent."""
+        from ..geometry.point_cloud import PointCloud
+        if isinstance(points, PointCloud):
+            points._parent = self
 
     @classmethod
     def concatenate(cls, complexes: Iterable["SimplicialComplex"]) -> "SimplicialComplex":
@@ -5640,7 +5661,7 @@ class SimplicialComplex(ChainComplex):
 
     def compute_optimal_h1_basis(
         self,
-        point_cloud: Optional[np.ndarray] = None,
+        point_cloud: Optional[Union[np.ndarray, "PointCloud"]] = None,
         *,
         max_roots: Optional[int] = None,
         root_stride: int = 1,

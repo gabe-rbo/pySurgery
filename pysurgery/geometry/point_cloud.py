@@ -635,6 +635,90 @@ class PointCloud:
         self._update_parent(new_points)
         return PointCloud(new_points, parent=self._parent)
 
+    def unbend(
+        self,
+        curvature: float,
+        axis: int,
+        control_axis: int,
+        anchor: Optional[Any] = None
+    ) -> "PointCloud":
+        """Reverses a bending transformation along a specified axis.
+        
+        Mathematical Formulation:
+            Let c be the curvature (c = 1/R, where R is the bending radius).
+            For bend axis d_1 and control axis d_2, and anchor point 'a':
+            For each point P_i, let:
+                X = P_{i, d_1} - a_{d_1}
+                Y = P_{i, d_2} - a_{d_2}
+                
+            If curvature is non-zero (or very small):
+                r = 1/c
+                theta = atan2(X * sign(c), (r - Y) * sign(c))
+                d = sqrt(X^2 + (r - Y)^2)
+                x = theta / c
+                y = r - sign(c) * d
+                
+                P'_{i, d_1} = a_{d_1} + x
+                P'_{i, d_2} = a_{d_2} + y
+            If curvature is zero (or near zero), we use first-order Taylor expansion:
+                P'_{i, d_1} = a_{d_1} + X + c * X * Y
+                P'_{i, d_2} = a_{d_2} + Y - 0.5 * c * X^2
+                
+            For all other coordinate axes j not in {d_1, d_2}:
+                P'_{i, j} = P_{i, j}
+                
+        Args:
+            curvature: Bending curvature to undo.
+            axis: The primary axis along which the unbent points will be aligned.
+            control_axis: The axis perpendicular to the bend axis in which bending occurred.
+            anchor: The anchor point marking the origin of the bend. Can be:
+                    - None / "center": Defaults to the center of mass.
+                    - "min" / "max": Extreme point along the bend axis.
+                    - np.ndarray: Custom coordinates array.
+                    
+        Returns:
+            A new PointCloud instance with unbent points.
+        """
+        if axis < 0 or axis >= self.dimension or control_axis < 0 or control_axis >= self.dimension:
+            raise ValueError("Axis indices are out of bounds.")
+        if axis == control_axis:
+            raise ValueError("Bend axis and control axis must be distinct.")
+
+        # Determine anchor point coordinates
+        if anchor is None or (isinstance(anchor, str) and anchor == "center"):
+            anchor_pt = self.center_of_mass
+        elif isinstance(anchor, str) and anchor in ("min", "max"):
+            anchor_pt = self.get_extreme_points(axis=axis, extreme=anchor)
+        elif isinstance(anchor, np.ndarray):
+            if anchor.shape != (self.dimension,):
+                raise ValueError("Anchor shape must match dimension.")
+            anchor_pt = anchor
+        else:
+            raise ValueError(f"Invalid anchor: {anchor}")
+
+        X = self.points[:, axis] - anchor_pt[axis]
+        Y = self.points[:, control_axis] - anchor_pt[control_axis]
+
+        new_points = self.points.copy()
+
+        # Handle very small curvature using first-order approximation
+        if np.abs(curvature) < 1e-8:
+            new_points[:, axis] = anchor_pt[axis] + X + curvature * X * Y
+            new_points[:, control_axis] = anchor_pt[control_axis] + Y - 0.5 * curvature * (X**2)
+        else:
+            r = 1.0 / curvature
+            sign_c = np.sign(curvature)
+            theta = np.arctan2(X * sign_c, (r - Y) * sign_c)
+            d = np.sqrt(X**2 + (r - Y)**2)
+            x = theta / curvature
+            y = r - sign_c * d
+            
+            new_points[:, axis] = anchor_pt[axis] + x
+            new_points[:, control_axis] = anchor_pt[control_axis] + y
+
+        self._update_parent(new_points)
+        return PointCloud(new_points, parent=self._parent)
+
     def taper(
         self,
         factor: float,

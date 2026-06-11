@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Dict, Iterable, List, Literal, Optional, Tuple
 
 if TYPE_CHECKING:
     from pysurgery.topology.complexes import SimplicialComplex, ChainComplex
+    from pysurgery.geometry.point_cloud import PointCloud
 
 import numpy as np
 import scipy.sparse as sp
@@ -273,7 +274,7 @@ def _rank_mod2(A: np.ndarray) -> int:
 def _components_h0_generators(
     edges: list[Edge],
     num_vertices: int,
-    point_cloud: Optional[np.ndarray] = None,
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]] = None,
 ) -> HomologyBasisResult:
     """Compute H0 generators as one representative per connected component.
 
@@ -357,7 +358,7 @@ def _components_h0_generators(
 def _weight_k_chain(
     chain: np.ndarray,
     k_simplices: list[tuple[int, ...]],
-    point_cloud: Optional[np.ndarray],
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]],
 ) -> float:
     """Compute a geometric/algebraic proxy weight for an active k-chain.
 
@@ -411,7 +412,7 @@ def _hk_generators_mod2(
     simplices: Iterable[Tuple[int, ...]],
     num_vertices: int,
     dimension: int,
-    point_cloud: Optional[np.ndarray],
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]],
     mode: Literal["valid", "optimal"],
 ) -> HomologyBasisResult:
     """Compute H_k representatives over Z/2 via kernel/image quotient.
@@ -520,7 +521,7 @@ def _hk_generators_mod2(
     )
 
 
-def _edge_weight(u: int, v: int, points: Optional[np.ndarray]) -> float:
+def _edge_weight(u: int, v: int, points: Optional[Union[np.ndarray, "PointCloud"]]) -> float:
     """Return edge length weight (or unit weight when no geometry is provided).
 
     Args:
@@ -766,7 +767,7 @@ def _path_edges(path_vertices: List[int]) -> List[Edge]:
 
 
 def _cycle_weight(
-    cycle: Cycle, edge_weights: Dict[Edge, float], point_cloud: Optional[np.ndarray]
+    cycle: Cycle, edge_weights: Dict[Edge, float], point_cloud: Optional[Union[np.ndarray, "PointCloud"]]
 ) -> float:
     """Compute cycle weight using supplied edge weights or geometric fallback.
 
@@ -791,7 +792,7 @@ def _cycle_weight(
 def generator_cycles_from_simplices(
     simplices: Iterable[Tuple[int, ...]],
     num_vertices: int,
-    point_cloud: Optional[np.ndarray] = None,
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]] = None,
     *,
     max_roots: Optional[int] = None,
     root_stride: int = 1,
@@ -844,7 +845,7 @@ def _generator_cycles_from_normalized_edges(
     edges: list[Edge],
     vertex_ids: set[int],
     num_vertices: int,
-    point_cloud: Optional[np.ndarray] = None,
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]] = None,
     *,
     max_roots: Optional[int] = None,
     root_stride: int = 1,
@@ -998,7 +999,7 @@ def greedy_h1_basis(
     cycles: List[Cycle],
     simplices: Iterable[Tuple[int, ...]],
     num_vertices: int,
-    point_cloud: Optional[np.ndarray] = None,
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]] = None,
     backend: str = "auto",
 ) -> List[Cycle]:
     """Select a greedy independent H1 basis from cycle candidates.
@@ -1052,7 +1053,7 @@ def _greedy_h1_basis_from_normalized(
     triangles: list[Triangle],
     vertex_ids: set[int],
     num_vertices: int,
-    point_cloud: Optional[np.ndarray] = None,
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]] = None,
 ) -> List[Cycle]:
     """Internal greedy H1 basis selection on normalized complexes.
 
@@ -1112,7 +1113,7 @@ def _greedy_h1_basis_from_normalized(
 def compute_optimal_h1_basis_from_simplices(
     simplices: Iterable[Tuple[int, ...]],
     num_vertices: int,
-    point_cloud: Optional[np.ndarray] = None,
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]] = None,
     *,
     max_roots: Optional[int] = None,
     root_stride: int = 1,
@@ -1237,7 +1238,7 @@ def compute_homology_basis_from_simplices(
     simplices: Iterable[Tuple[int, ...]],
     num_vertices: int,
     dimension: int,
-    point_cloud: Optional[np.ndarray] = None,
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]] = None,
     *,
     mode: Literal["valid", "optimal"] = "valid",
     max_roots: Optional[int] = None,
@@ -1369,7 +1370,7 @@ def compute_homology_basis_from_simplices(
 def compute_homology_basis_from_complex(
     complex: "SimplicialComplex",
     dimension: int,
-    point_cloud: Optional[np.ndarray] = None,
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]] = None,
     *,
     mode: Literal["valid", "optimal"] = "valid",
     max_roots: Optional[int] = None,
@@ -1439,7 +1440,7 @@ def compute_homology_basis_from_complex(
 
 def compute_optimal_h1_basis_from_complex(
     complex: "SimplicialComplex",
-    point_cloud: Optional[np.ndarray] = None,
+    point_cloud: Optional[Union[np.ndarray, "PointCloud"]] = None,
     *,
     max_roots: Optional[int] = None,
     root_stride: int = 1,

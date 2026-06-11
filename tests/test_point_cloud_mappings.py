@@ -120,3 +120,38 @@ def test_simplicial_complex_concatenation():
     assert sc_concat.filtration[(0, 1)] == 0.5
     assert sc_concat.filtration[(3,)] == 0.2
     assert sc_concat.filtration[(3, 4)] == 0.6
+
+def test_point_cloud_parent_linkage():
+    from pysurgery.geometry import PointCloud
+    pts = np.array([
+        [0.0, 0.0],
+        [1.0, 0.0],
+        [0.0, 1.0],
+        [1.0, 1.0]
+    ])
+    pc = PointCloud(pts)
+    assert pc._parent is None
+
+    # 1. Test from_vietoris_rips links pc
+    sc_rips = SimplicialComplex.from_vietoris_rips(pc, epsilon=1.5, max_dimension=1)
+    assert pc._parent is sc_rips
+    
+    # Rotate pc, check that coordinates of sc_rips are updated!
+    pc_rot = pc.rotate(90.0, plane="xy", center=np.zeros(2))
+    np.testing.assert_allclose(sc_rips._coordinates, pc_rot.points)
+
+    # 2. Test from_alpha_complex links pc
+    pc2 = PointCloud(pts)
+    sc_alpha = SimplicialComplex.from_alpha_complex(pc2, alpha=2.0)
+    assert pc2._parent is sc_alpha
+    pc2_trans = pc2.translate([10.0, 10.0])
+    np.testing.assert_allclose(sc_alpha._coordinates, pc2_trans.points)
+
+    # 3. Test setter
+    pc3 = PointCloud(pts)
+    sc_empty = SimplicialComplex.from_simplices([[0], [1], [2]])
+    sc_empty.point_cloud = pc3
+    assert pc3._parent is sc_empty
+    pc3_trans = pc3.translate([-5.0, 0.0])
+    np.testing.assert_allclose(sc_empty._coordinates, pc3_trans.points)
+

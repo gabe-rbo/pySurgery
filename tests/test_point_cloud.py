@@ -296,6 +296,33 @@ def test_bend():
     pc_flat = pc.bend(curvature=0.0, axis=0, control_axis=1, anchor="min")
     np.testing.assert_allclose(pc_flat.points, pts)
 
+def test_unbend():
+    # 1. Test unbending a bent point cloud
+    pts = np.array([
+        [0.0, 0.0],
+        [np.pi / 2, 0.5],
+        [np.pi, -0.2]
+    ])
+    pc = PointCloud(pts)
+    
+    # Bend with curvature 0.5
+    pc_bent = pc.bend(curvature=0.5, axis=0, control_axis=1, anchor="min")
+    
+    # Unbend with curvature 0.5
+    pc_unbent = pc_bent.unbend(curvature=0.5, axis=0, control_axis=1, anchor="min")
+    np.testing.assert_allclose(pc_unbent.points, pts, atol=1e-7)
+
+    # 2. Test negative curvature
+    pc_bent_neg = pc.bend(curvature=-0.5, axis=0, control_axis=1, anchor="min")
+    pc_unbent_neg = pc_bent_neg.unbend(curvature=-0.5, axis=0, control_axis=1, anchor="min")
+    np.testing.assert_allclose(pc_unbent_neg.points, pts, atol=1e-7)
+
+    # 3. Test near-zero curvature (Taylor series)
+    pc_bent_zero = pc.bend(curvature=1e-9, axis=0, control_axis=1, anchor="min")
+    pc_unbent_zero = pc_bent_zero.unbend(curvature=1e-9, axis=0, control_axis=1, anchor="min")
+    np.testing.assert_allclose(pc_unbent_zero.points, pts, atol=1e-7)
+
+
 def test_taper():
     pts_offset = np.array([
         [2.0, 3.0, 0.0],
