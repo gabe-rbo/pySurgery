@@ -206,7 +206,7 @@ class PointCloud:
         args: Dict[str, Any],
         metadata: Optional[Dict[str, Any]] = None
     ) -> "PointCloud":
-        """Generates a new PointCloud representing the deformed state, updating history.
+        """Updates coordinates and parent in-place, logs transformation history, and returns self.
 
         Args:
             new_points (np.ndarray): The deformed coordinate array.
@@ -216,9 +216,9 @@ class PointCloud:
                 movable masks) needed for reversion.
 
         Returns:
-            PointCloud: A new PointCloud object with the updated points, sharing the parent,
-            and carrying the updated transformation log.
+            PointCloud: The current PointCloud object mutated in-place.
         """
+        self.points = new_points
         self._update_parent(new_points)
         history_entry = {
             "method": method_name,
@@ -226,13 +226,8 @@ class PointCloud:
         }
         if metadata is not None:
             history_entry["metadata"] = metadata
-        new_history = self._history + [history_entry]
-        return PointCloud(
-            new_points,
-            parent=self._parent,
-            history=new_history,
-            original_points=self._original_points
-        )
+        self._history.append(history_entry)
+        return self
 
     def list_transformations(self) -> List[Dict[str, Any]]:
         """Lists all transformations applied to this point cloud since its original state.
@@ -245,7 +240,7 @@ class PointCloud:
         return [{"method": item["method"], "args": copy.deepcopy(item["args"])} for item in self._history]
 
     def undo(self, indices: Optional[Union[int, List[int]]] = None) -> "PointCloud":
-        """Undoes one or more transformations in the history log.
+        """Undoes one or more transformations in the history log by mutating coordinates and history in-place.
 
         An undo is performed by removing the specified transformation entries from the
         history log, resetting the point cloud coordinates to the original coordinates,
@@ -257,7 +252,7 @@ class PointCloud:
                 If None, defaults to undoing the very last transformation (-1).
 
         Returns:
-            PointCloud: A new PointCloud representing the updated state after removing the specified transformations.
+            PointCloud: The current PointCloud object mutated in-place.
 
         Raises:
             ValueError: If the transformation history is empty.
@@ -286,21 +281,23 @@ class PointCloud:
             if idx not in indices_to_remove
         ]
 
-        # Start from original points
-        current_pc = PointCloud(self._original_points.copy(), parent=self._parent, original_points=self._original_points)
+        # Start from original points on a temporary PointCloud to avoid mutating intermediate states
+        temp_pc = PointCloud(self._original_points.copy(), original_points=self._original_points)
 
         # Re-apply remaining transformations sequentially
         for item in new_history_entries:
             method_name = item["method"]
             args = item["args"]
-            method = getattr(current_pc, method_name)
-            current_pc = method(**args)
+            method = getattr(temp_pc, method_name)
+            method(**args)
 
-        self._update_parent(current_pc.points)
-        return current_pc
+        self.points = temp_pc.points
+        self._history = new_history_entries
+        self._update_parent(self.points)
+        return self
 
     def revert(self) -> "PointCloud":
-        """Reverts all transformations by mathematically inverting them in reverse order.
+        """Reverts all transformations by mathematically inverting them in reverse order, mutating self in-place.
 
         Instead of re-applying transformations from the original state (like `undo`), `revert`
         directly applies the analytical mathematical inverse of each transformation step in
@@ -315,7 +312,7 @@ class PointCloud:
                 p_i^{prev} = p_i^{current}          if M[i] is False
 
         Returns:
-            PointCloud: A new PointCloud instance with reverted coordinates and an empty history log.
+            PointCloud: The current PointCloud instance reverted in-place with reverted coordinates and an empty history log.
 
         Raises:
             ValueError: If any transformation in history cannot be mathematically inverted
@@ -515,13 +512,11 @@ class PointCloud:
             else:
                 current_points = inv_points
 
-        self._update_parent(current_points)
-        return PointCloud(
-            current_points,
-            parent=self._parent,
-            history=[],
-            original_points=self._original_points
-        )
+        self.points = current_points
+        self._history = []
+        self._update_parent(self.points)
+        return self
+
 
     def block_division(
         self,

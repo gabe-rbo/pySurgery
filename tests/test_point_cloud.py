@@ -125,10 +125,10 @@ def test_translate():
     pc = PointCloud(pts)
     pc_translated = pc.translate([10.0, -5.0])
     
-    # Check that original is unchanged
-    np.testing.assert_allclose(pc.points, pts)
-    # Check translated values
+    # Since operations are in-place, the original pc is mutated
+    np.testing.assert_allclose(pc.points, [[11.0, -3.0], [13.0, -1.0]])
     np.testing.assert_allclose(pc_translated.points, [[11.0, -3.0], [13.0, -1.0]])
+
 
     with pytest.raises(ValueError):
         pc.translate([1.0, 2.0, 3.0])  # dimension mismatch
@@ -146,12 +146,14 @@ def test_rotate():
     # [0, 1] rotated 90 deg -> [-1, 0]
     np.testing.assert_allclose(pc_rot.points, [[0.0, 1.0], [-1.0, 0.0]], atol=1e-7)
 
-    # Rotate with "min" anchor point (min X is 0.0 at point [0.0, 1.0])
-    pc_rot_min = pc.rotate(180.0, plane="xy", center="min")
+    # For the second rotation test, use a fresh PointCloud copy to avoid operating on already-rotated coordinates
+    pc2 = PointCloud(pts.copy())
+    pc_rot_min = pc2.rotate(180.0, plane="xy", center="min")
     # Rotation center should be [0.0, 1.0]
     # Point [0.0, 1.0] stays static
     # Point [1.0, 0.0] rotates 180 around [0.0, 1.0] -> [-1.0, 2.0]
     np.testing.assert_allclose(pc_rot_min.points, [[-1.0, 2.0], [0.0, 1.0]], atol=1e-7)
+
 
 def test_shear():
     pts = np.array([
@@ -189,10 +191,10 @@ def test_scale_to_diameter():
         [5.0, 0.0],
         [0.0, 3.0]
     ])
-    pc = PointCloud(pts)
+    pc1 = PointCloud(pts.copy())
     
     # 1. Uniform scaling to diameter 5.0, anchor="center" (which is [0, 1])
-    pc_scaled_uniform = pc.scale_to_diameter(5.0, axis=None, anchor="center")
+    pc_scaled_uniform = pc1.scale_to_diameter(5.0, axis=None, anchor="center")
     # Scale factor should be 5.0 / 10.0 = 0.5
     # center is [0.0, 1.0]
     # p' = center + 0.5 * (p - center)
@@ -205,7 +207,8 @@ def test_scale_to_diameter():
     )
     
     # 2. Axis specific scaling (axis=0, target_diameter=2.0) relative to "min" (which is [-5, 0])
-    pc_scaled_axis = pc.scale_to_diameter(2.0, axis=0, anchor="min")
+    pc2 = PointCloud(pts.copy())
+    pc_scaled_axis = pc2.scale_to_diameter(2.0, axis=0, anchor="min")
     # Current diameter along axis 0 is 5.0 - (-5.0) = 10.0
     # Scale factor along axis 0 is 2.0 / 10.0 = 0.2
     # anchor coordinate X is -5.0
@@ -219,10 +222,12 @@ def test_scale_to_diameter():
     )
 
     # 3. Invalid params
+    pc3 = PointCloud(pts.copy())
     with pytest.raises(ValueError):
-        pc.scale_to_diameter(-1.0)
+        pc3.scale_to_diameter(-1.0)
     with pytest.raises(ValueError):
-        pc.scale_to_diameter(5.0, axis=2)  # axis out of bounds
+        pc3.scale_to_diameter(5.0, axis=2)  # axis out of bounds
+
 
 def test_simplicial_complex_integration():
     from pysurgery.topology.complexes import SimplicialComplex
@@ -284,8 +289,7 @@ def test_bend():
         [0.0, 0.0],
         [np.pi, 0.0]
     ])
-    pc = PointCloud(pts)
-    
+    pc = PointCloud(pts.copy())
     pc_bent = pc.bend(curvature=1.0, axis=0, control_axis=1, anchor="min")
     np.testing.assert_allclose(
         pc_bent.points,
@@ -293,7 +297,8 @@ def test_bend():
         atol=1e-7
     )
 
-    pc_flat = pc.bend(curvature=0.0, axis=0, control_axis=1, anchor="min")
+    pc2 = PointCloud(pts.copy())
+    pc_flat = pc2.bend(curvature=0.0, axis=0, control_axis=1, anchor="min")
     np.testing.assert_allclose(pc_flat.points, pts)
 
 def test_unbend():
@@ -303,24 +308,26 @@ def test_unbend():
         [np.pi / 2, 0.5],
         [np.pi, -0.2]
     ])
-    pc = PointCloud(pts)
+    pc = PointCloud(pts.copy())
     
     # Bend with curvature 0.5
-    pc_bent = pc.bend(curvature=0.5, axis=0, control_axis=1, anchor="min")
-    
+    pc.bend(curvature=0.5, axis=0, control_axis=1, anchor="min")
     # Unbend with curvature 0.5
-    pc_unbent = pc_bent.unbend(curvature=0.5, axis=0, control_axis=1, anchor="min")
-    np.testing.assert_allclose(pc_unbent.points, pts, atol=1e-7)
+    pc.unbend(curvature=0.5, axis=0, control_axis=1, anchor="min")
+    np.testing.assert_allclose(pc.points, pts, atol=1e-7)
 
     # 2. Test negative curvature
-    pc_bent_neg = pc.bend(curvature=-0.5, axis=0, control_axis=1, anchor="min")
-    pc_unbent_neg = pc_bent_neg.unbend(curvature=-0.5, axis=0, control_axis=1, anchor="min")
-    np.testing.assert_allclose(pc_unbent_neg.points, pts, atol=1e-7)
+    pc_neg = PointCloud(pts.copy())
+    pc_neg.bend(curvature=-0.5, axis=0, control_axis=1, anchor="min")
+    pc_neg.unbend(curvature=-0.5, axis=0, control_axis=1, anchor="min")
+    np.testing.assert_allclose(pc_neg.points, pts, atol=1e-7)
 
     # 3. Test near-zero curvature (Taylor series)
-    pc_bent_zero = pc.bend(curvature=1e-9, axis=0, control_axis=1, anchor="min")
-    pc_unbent_zero = pc_bent_zero.unbend(curvature=1e-9, axis=0, control_axis=1, anchor="min")
-    np.testing.assert_allclose(pc_unbent_zero.points, pts, atol=1e-7)
+    pc_zero = PointCloud(pts.copy())
+    pc_zero.bend(curvature=1e-9, axis=0, control_axis=1, anchor="min")
+    pc_zero.unbend(curvature=1e-9, axis=0, control_axis=1, anchor="min")
+    np.testing.assert_allclose(pc_zero.points, pts, atol=1e-7)
+
 
 
 def test_taper():
@@ -351,7 +358,7 @@ def test_spherize():
         [-3.0, 0.0],
         [0.0, 4.0]
     ])
-    pc = PointCloud(pts)
+    pc = PointCloud(pts.copy())
     pc_sph = pc.spherize(factor=1.0, radius=5.0, center=np.zeros(2))
     np.testing.assert_allclose(
         pc_sph.points,
@@ -359,13 +366,15 @@ def test_spherize():
         atol=1e-7
     )
     
-    pc_sph_def = pc.spherize(factor=1.0, radius=None, center=np.zeros(2))
+    pc2 = PointCloud(pts.copy())
+    pc_sph_def = pc2.spherize(factor=1.0, radius=None, center=np.zeros(2))
     avg_rad = 10.0 / 3.0
     np.testing.assert_allclose(
         pc_sph_def.points,
         [[avg_rad, 0.0], [-avg_rad, 0.0], [0.0, avg_rad]],
         atol=1e-7
     )
+
 
 def test_array_protocols():
     pts = np.array([
@@ -440,96 +449,112 @@ def test_point_cloud_undo_revert():
     assert len(pc.list_transformations()) == 0
     np.testing.assert_allclose(pc.points, pts)
 
-    # 1. Apply translation
+    # 1. Apply translation (mutates pc in-place)
     pc2 = pc.translate([1.0, 2.0, 3.0])
-    assert len(pc2.list_transformations()) == 1
-    assert pc2.list_transformations()[0]["method"] == "translate"
-    np.testing.assert_allclose(pc2.points, pts + [1.0, 2.0, 3.0])
+    assert pc2 is pc  # Verify in-place behavior
+    assert len(pc.list_transformations()) == 1
+    assert pc.list_transformations()[0]["method"] == "translate"
+    np.testing.assert_allclose(pc.points, pts + [1.0, 2.0, 3.0])
     np.testing.assert_allclose(sc._coordinates, pts + [1.0, 2.0, 3.0])
 
-    # 2. Apply rotation
-    pc3 = pc2.rotate(90.0, plane="xy", center="center")
-    assert len(pc3.list_transformations()) == 2
-    assert pc3.list_transformations()[1]["method"] == "rotate"
+    # 2. Apply rotation (mutates pc in-place)
+    pc.rotate(90.0, plane="xy", center="center")
+    assert len(pc.list_transformations()) == 2
+    assert pc.list_transformations()[1]["method"] == "rotate"
     
-    # 3. Apply shear
-    pc4 = pc3.shear(factor=0.5, axis=0, control_axis=1, anchor="min")
-    assert len(pc4.list_transformations()) == 3
-    assert pc4.list_transformations()[2]["method"] == "shear"
+    # 3. Apply shear (mutates pc in-place)
+    pc.shear(factor=0.5, axis=0, control_axis=1, anchor="min")
+    assert len(pc.list_transformations()) == 3
+    assert pc.list_transformations()[2]["method"] == "shear"
 
-    # 4. Revert all
-    pc_reverted = pc4.revert()
-    assert len(pc_reverted.list_transformations()) == 0
-    np.testing.assert_allclose(pc_reverted.points, pts, atol=1e-7)
+    # Store the shear-applied points for later comparison
+    pts_sheared = pc.points.copy()
+
+    # 4. Revert all (reverts to original in-place)
+    pc.revert()
+    assert len(pc.list_transformations()) == 0
+    np.testing.assert_allclose(pc.points, pts, atol=1e-7)
     np.testing.assert_allclose(sc._coordinates, pts, atol=1e-7)
 
+    # Re-apply transformations to test undo
+    pc.translate([1.0, 2.0, 3.0])
+    pc.rotate(90.0, plane="xy", center="center")
+    pc.shear(factor=0.5, axis=0, control_axis=1, anchor="min")
+    assert len(pc.list_transformations()) == 3
+
     # 5. Undo last (which is shear)
-    pc_undone_last = pc4.undo()
-    assert len(pc_undone_last.list_transformations()) == 2
-    # Should match pc3 coordinates
-    np.testing.assert_allclose(pc_undone_last.points, pc3.points, atol=1e-7)
-    np.testing.assert_allclose(sc._coordinates, pc3.points, atol=1e-7)
+    pc.undo()
+    assert len(pc.list_transformations()) == 2
+    # Verify coordinates match state before shear
+    pc_expected_pre_shear = PointCloud(pts.copy()).translate([1.0, 2.0, 3.0]).rotate(90.0, plane="xy", center="center")
+    np.testing.assert_allclose(pc.points, pc_expected_pre_shear.points, atol=1e-7)
+    np.testing.assert_allclose(sc._coordinates, pc_expected_pre_shear.points, atol=1e-7)
+
+    # Re-apply shear to go back to 3 transformations
+    pc.shear(factor=0.5, axis=0, control_axis=1, anchor="min")
 
     # 6. Undo multiple/specific indices
-    # Let's undo the first operation (translate) from pc4, leaving rotate and shear
-    pc_undone_first = pc4.undo(indices=0)
-    assert len(pc_undone_first.list_transformations()) == 2
-    # Verify the remaining transformations in history
-    assert pc_undone_first.list_transformations()[0]["method"] == "rotate"
-    assert pc_undone_first.list_transformations()[1]["method"] == "shear"
+    # Let's undo the first operation (translate) leaving rotate and shear
+    pc.undo(indices=0)
+    assert len(pc.list_transformations()) == 2
+    assert pc.list_transformations()[0]["method"] == "rotate"
+    assert pc.list_transformations()[1]["method"] == "shear"
     
-    # Check that we can recreate pc_undone_first by manually applying those on original pts
-    pc_expected = pc.rotate(90.0, plane="xy", center="center").shear(factor=0.5, axis=0, control_axis=1, anchor="min")
-    np.testing.assert_allclose(pc_undone_first.points, pc_expected.points, atol=1e-7)
+    # Check that we recreated by manually applying those on original pts
+    pc_expected = PointCloud(pts.copy()).rotate(90.0, plane="xy", center="center").shear(factor=0.5, axis=0, control_axis=1, anchor="min")
+    np.testing.assert_allclose(pc.points, pc_expected.points, atol=1e-7)
 
     # 7. Check non-invertible transformations
-    pc_mapped = pc4.apply_mapping(lambda p: p ** 2)
-    
-    # revert() should raise ValueError for apply_mapping
+    pc.apply_mapping(lambda p: p ** 2)
     with pytest.raises(ValueError, match="apply_mapping"):
-        pc_mapped.revert()
+        pc.revert()
 
     # undo() should work perfectly even with apply_mapping in history
-    pc_undone_mapping = pc_mapped.undo() # undoes the mapping
-    np.testing.assert_allclose(pc_undone_mapping.points, pc4.points, atol=1e-7)
+    pc.undo() # undoes the mapping
+    np.testing.assert_allclose(pc.points, pc_expected.points, atol=1e-7)
 
     # 8. Spherize invertibility checks
-    pc_sph_9 = pc4.spherize(factor=0.9, radius=10.0, center="center")
-    pc_sph_reverted = pc_sph_9.revert()
-    np.testing.assert_allclose(pc_sph_reverted.points, pts, atol=1e-7)
+    pc_sph_9 = PointCloud(pts.copy()).spherize(factor=0.9, radius=10.0, center="center")
+    pc_sph_9.revert()
+    np.testing.assert_allclose(pc_sph_9.points, pts, atol=1e-7)
 
     # Revert just spherize using undo
-    pc_sph_undone = pc_sph_9.undo()
-    np.testing.assert_allclose(pc_sph_undone.points, pc4.points, atol=1e-7)
+    pc_sph_9 = PointCloud(pts.copy()).translate([1.0, 2.0, 3.0]).spherize(factor=0.9, radius=10.0, center="center")
+    pc_sph_9.undo()
+    pc_expected_spherize_undone = PointCloud(pts.copy()).translate([1.0, 2.0, 3.0])
+    np.testing.assert_allclose(pc_sph_9.points, pc_expected_spherize_undone.points, atol=1e-7)
 
-    pc_sph_1 = pc4.spherize(factor=1.0, radius=10.0, center="center")
+    pc_sph_1 = PointCloud(pts.copy()).spherize(factor=1.0, radius=10.0, center="center")
     with pytest.raises(ValueError, match="Spherization with factor=1.0 is not mathematically invertible"):
         pc_sph_1.revert()
 
-    # 9. Taper, bend, unbend, radial_scale, scale_to_diameter revert round-trip
-    pc_t = pc.taper(factor=0.5, axis=0, control_axis=2, anchor="center")
-    np.testing.assert_allclose(pc_t.revert().points, pc.points, atol=1e-7)
+    # 9. Taper, bend, unbend, radial_scale, scale_to_diameter revert round-trip using fresh copies
+    pc_t = PointCloud(pts.copy()).taper(factor=0.5, axis=0, control_axis=2, anchor="center")
+    np.testing.assert_allclose(pc_t.revert().points, pts, atol=1e-7)
 
-    pc_b = pc.bend(curvature=0.2, axis=0, control_axis=1, anchor="center")
-    np.testing.assert_allclose(pc_b.revert().points, pc.points, atol=1e-7)
+    pc_b = PointCloud(pts.copy()).bend(curvature=0.2, axis=0, control_axis=1, anchor="center")
+    np.testing.assert_allclose(pc_b.revert().points, pts, atol=1e-7)
 
-    pc_ub = pc.unbend(curvature=0.2, axis=0, control_axis=1, anchor="center")
-    np.testing.assert_allclose(pc_ub.revert().points, pc.points, atol=1e-7)
+    pc_ub = PointCloud(pts.copy()).unbend(curvature=0.2, axis=0, control_axis=1, anchor="center")
+    np.testing.assert_allclose(pc_ub.revert().points, pts, atol=1e-7)
 
-    pc_rs = pc.radial_scale(factor=3.0, center="center")
-    np.testing.assert_allclose(pc_rs.revert().points, pc.points, atol=1e-7)
+    pc_rs = PointCloud(pts.copy()).radial_scale(factor=3.0, center="center")
+    np.testing.assert_allclose(pc_rs.revert().points, pts, atol=1e-7)
 
-    pc_sd = pc.scale_to_diameter(target_diameter=4.0, axis=0, anchor="center")
-    np.testing.assert_allclose(pc_sd.revert().points, pc.points, atol=1e-7)
+    pc_sd = PointCloud(pts.copy()).scale_to_diameter(target_diameter=4.0, axis=0, anchor="center")
+    np.testing.assert_allclose(pc_sd.revert().points, pts, atol=1e-7)
     
-    pc_sd_uniform = pc.scale_to_diameter(target_diameter=4.0, axis=None, anchor="center")
-    np.testing.assert_allclose(pc_sd_uniform.revert().points, pc.points, atol=1e-7)
+    pc_sd_uniform = PointCloud(pts.copy()).scale_to_diameter(target_diameter=4.0, axis=None, anchor="center")
+    np.testing.assert_allclose(pc_sd_uniform.revert().points, pts, atol=1e-7)
 
     # 10. Errors on undo out of bounds
+    pc_err = PointCloud(pts.copy()).translate([1.0, 2.0, 3.0])
     with pytest.raises(IndexError):
-        pc4.undo(indices=99)
+        pc_err.undo(indices=99)
+    
+    pc_empty_err = PointCloud(pts.copy())
     with pytest.raises(ValueError, match="No transformations to undo"):
-        pc.undo()
+        pc_empty_err.undo()
 
 
 def test_point_cloud_space_blocks():
@@ -598,11 +623,20 @@ def test_point_cloud_space_blocks():
     np.testing.assert_allclose(pc_trans.points, [[-2.0, -2.0], [12.0, 12.0]])
 
     # 4. Revert and Undo
-    pc_reverted = pc_trans.revert()
+    # Use copy for revert to keep pc_trans un-reverted for undo test
+    import copy
+    pc_revert_test = PointCloud(
+        pc_trans.points.copy(),
+        history=copy.deepcopy(pc_trans._history),
+        original_points=pc_trans._original_points.copy()
+    )
+    pc_reverted = pc_revert_test.revert()
     np.testing.assert_allclose(pc_reverted.points, pts_def)
+
 
     pc_undone = pc_trans.undo()
     np.testing.assert_allclose(pc_undone.points, pts_def)
+
 
     # Test static_blocks
     pc_static = pc_def.translate([10.0, 10.0], static_blocks=top_right_block)
