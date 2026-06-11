@@ -151,6 +151,7 @@ from .geometry.immersion_obstructions import (
     StructuralObstruction,
     immersion_obstruction_analysis,
 )
+from .geometry.point_cloud import PointCloud
 from .algebra.intersection_forms import IntersectionForm
 from .algebra.quadratic_forms import QuadraticForm, arf_invariant_gf2
 from .algebra.group_rings import GroupRingElement
@@ -315,7 +316,7 @@ from .auto_surgery import (
 
 from . import integrations
 
-__version__ = "2.1.3"
+__version__ = "2.2.0"
                                 
 def __getattr__(name):
     if name == "JuliaBridge":
@@ -332,6 +333,7 @@ __all__ = [
     "ImmersionResult",
     "PLMap",
     "ProjectionResult",
+    "PointCloud",
     "SelfIntersectionReport",
     "SimplexIntersectionWitness",
     "analyze_embedding",

@@ -3131,6 +3131,30 @@ class SimplicialComplex(ChainComplex):
         return self._simplices_table
 
     @property
+    def point_cloud(self) -> Optional["PointCloud"]:
+        """Return the PointCloud wrapper for coordinates, if coordinates exist."""
+        if hasattr(self, "_coordinates") and self._coordinates is not None:
+            from ..geometry.point_cloud import PointCloud
+            return PointCloud(self._coordinates, parent=self)
+        return None
+
+    @point_cloud.setter
+    def point_cloud(self, pc: Optional[Union["PointCloud", np.ndarray]]) -> None:
+        """Set the point cloud coordinates of the complex."""
+        if pc is None:
+            self._coordinates = None
+            self._point_cloud_to_simplices = {}
+            self._simplices_to_point_cloud = {}
+        else:
+            from ..geometry.point_cloud import PointCloud
+            if isinstance(pc, PointCloud):
+                pts = pc.points
+            else:
+                pts = np.asarray(pc, dtype=np.float64)
+            self._coordinates = pts
+            self._generate_point_cloud_mappings(pts)
+
+    @property
     def point_cloud_to_simplices(self) -> Dict[int, List[Tuple[int, ...]]]:
         """Return the mapping from point cloud indices to simplices containing them."""
         return self._point_cloud_to_simplices
