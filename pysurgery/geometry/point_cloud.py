@@ -3,6 +3,46 @@
 import numpy as np
 from typing import Dict, Tuple, Optional, Union, Any, List
 
+class SpaceBlock:
+    """Represents a D-dimensional block of space defined by min and max coordinate bounds."""
+
+    def __init__(self, min_bounds: Any, max_bounds: Any):
+        """Initialize a SpaceBlock with min and max bounds for each dimension.
+        
+        Args:
+            min_bounds: Array-like of shape (D,) representing lower bounds.
+            max_bounds: Array-like of shape (D,) representing upper bounds.
+        """
+        self.min_bounds = np.asarray(min_bounds, dtype=float)
+        self.max_bounds = np.asarray(max_bounds, dtype=float)
+        if self.min_bounds.shape != self.max_bounds.shape or self.min_bounds.ndim != 1:
+            raise ValueError("Bounds must be 1D arrays of the same shape.")
+
+    def contains(self, points: Any) -> np.ndarray:
+        """Returns a boolean mask of shape (N,) indicating which points are inside this block.
+        
+        Args:
+            points: Array-like of shape (N, D) or a PointCloud.
+        """
+        pts = np.asarray(points, dtype=float)
+        if pts.ndim == 1:
+            pts = pts[np.newaxis, :]
+        if pts.shape[1] != self.min_bounds.shape[0]:
+            raise ValueError(
+                f"Points dimension {pts.shape[1]} does not match block dimension {self.min_bounds.shape[0]}"
+            )
+        return np.all((pts >= self.min_bounds) & (pts <= self.max_bounds), axis=1)
+
+    def __contains__(self, point: Any) -> bool:
+        """Allows syntax like `point in space_block` for a single point of shape (D,)."""
+        pt = np.asarray(point, dtype=float)
+        if pt.shape != self.min_bounds.shape:
+            return False
+        return bool(np.all((pt >= self.min_bounds) & (pt <= self.max_bounds)))
+
+    def __repr__(self) -> str:
+        return f"SpaceBlock(min_bounds={self.min_bounds.tolist()}, max_bounds={self.max_bounds.tolist()})"
+
 class PointCloud:
     """A class representing a point cloud in D-dimensional space.
     
@@ -10,12 +50,21 @@ class PointCloud:
     generate angular reference lines for plotting, and apply continuous deformations.
     """
 
-    def __init__(self, points: Any, parent: Optional[Any] = None):
+    def __init__(
+        self,
+        points: Any,
+        parent: Optional[Any] = None,
+        *,
+        history: Optional[List[Dict[str, Any]]] = None,
+        original_points: Optional[np.ndarray] = None
+    ):
         """Initialize the PointCloud with an (N, D) array-like of points.
         
         Args:
             points: An array-like object of shape (N, D) containing point coordinates.
             parent: Optional parent object (e.g., SimplicialComplex) that holds these points.
+            history: Optional list of transformations applied.
+            original_points: Optional original coordinates array.
             
         Raises:
             ValueError: If points cannot be cast to a 2D float array.
@@ -26,6 +75,12 @@ class PointCloud:
                 f"Points must be a 2D array of shape (N, D), got shape {self.points.shape}"
             )
         self._parent = parent
+        self._history = list(history) if history is not None else []
+        self._original_points = (
+            np.asarray(original_points, dtype=float).copy()
+            if original_points is not None
+            else self.points.copy()
+        )
 
     def _update_parent(self, new_points: np.ndarray) -> None:
         """Updates the parent object coordinates and mappings if a parent is set."""
@@ -33,6 +88,389 @@ class PointCloud:
             self._parent._coordinates = new_points
             if hasattr(self._parent, "_generate_point_cloud_mappings"):
                 self._parent._generate_point_cloud_mappings(new_points)
+
+    def _get_movable_mask(
+        self,
+        movable_blocks: Optional[Union[SpaceBlock, List[SpaceBlock], Tuple[SpaceBlock, ...]]] = None,
+        static_blocks: Optional[Union[SpaceBlock, List[SpaceBlock], Tuple[SpaceBlock, ...]]] = None
+    ) -> np.ndarray:
+        """Computes a boolean mask indicating which points are allowed to move."""
+        mask = np.ones(self.num_points, dtype=bool)
+        
+        if movable_blocks is not None:
+            if isinstance(movable_blocks, SpaceBlock):
+                mov_list = [movable_blocks]
+            else:
+                mov_list = list(movable_blocks)
+                
+            mov_mask = np.zeros(self.num_points, dtype=bool)
+            for block in mov_list:
+                mov_mask |= block.contains(self.points)
+            mask &= mov_mask
+            
+        if static_blocks is not None:
+            if isinstance(static_blocks, SpaceBlock):
+                stat_list = [static_blocks]
+            else:
+                stat_list = list(static_blocks)
+                
+            stat_mask = np.zeros(self.num_points, dtype=bool)
+            for block in stat_list:
+                stat_mask |= block.contains(self.points)
+            mask &= ~stat_mask
+            
+        return mask
+
+    def _create_deformed_pc(
+        self,
+        new_points: np.ndarray,
+        method_name: str,
+        args: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> "PointCloud":
+        """Updates the parent and returns a new PointCloud with updated history."""
+        self._update_parent(new_points)
+        history_entry = {
+            "method": method_name,
+            "args": args,
+        }
+        if metadata is not None:
+            history_entry["metadata"] = metadata
+        new_history = self._history + [history_entry]
+        return PointCloud(
+            new_points,
+            parent=self._parent,
+            history=new_history,
+            original_points=self._original_points
+        )
+
+    def list_transformations(self) -> List[Dict[str, Any]]:
+        """Returns a copy of the transformation history log, containing method names and arguments."""
+        import copy
+        return [{"method": item["method"], "args": copy.deepcopy(item["args"])} for item in self._history]
+
+    def undo(self, indices: Optional[Union[int, List[int]]] = None) -> "PointCloud":
+        """Undoes specified transformations by removing them from history and re-applying the rest from the original points."""
+        if not self._history:
+            raise ValueError("No transformations to undo.")
+            
+        if indices is None:
+            indices_to_remove = {len(self._history) - 1}
+        elif isinstance(indices, int):
+            idx = indices if indices >= 0 else len(self._history) + indices
+            if idx < 0 or idx >= len(self._history):
+                raise IndexError("Transformation index out of range.")
+            indices_to_remove = {idx}
+        else:
+            indices_to_remove = set()
+            for i in indices:
+                idx = i if i >= 0 else len(self._history) + i
+                if idx < 0 or idx >= len(self._history):
+                    raise IndexError("Transformation index out of range.")
+                indices_to_remove.add(idx)
+                
+        new_history_entries = [
+            item for idx, item in enumerate(self._history)
+            if idx not in indices_to_remove
+        ]
+        
+        # Start from original points
+        current_pc = PointCloud(self._original_points.copy(), parent=self._parent, original_points=self._original_points)
+        
+        # Re-apply remaining transformations sequentially
+        for item in new_history_entries:
+            method_name = item["method"]
+            args = item["args"]
+            method = getattr(current_pc, method_name)
+            current_pc = method(**args)
+            
+        self._update_parent(current_pc.points)
+        return current_pc
+
+    def revert(self) -> "PointCloud":
+        """Reverts all transformations by mathematically inverting them in reverse order."""
+        if not self._history:
+            return self
+            
+        current_points = self.points.copy()
+        
+        for item in reversed(self._history):
+            method = item["method"]
+            args = item["args"]
+            metadata = item.get("metadata", {})
+            
+            inv_points = current_points.copy()
+            
+            if method == "translate":
+                v = np.asarray(args["translation_vector"], dtype=float)
+                inv_points = inv_points - v
+                
+            elif method == "rotate":
+                angle = args["angle"]
+                plane = args["plane"]
+                use_degrees = args.get("use_degrees", True)
+                resolved_center = metadata["resolved_center"]
+                
+                if isinstance(plane, str):
+                    plane_lower = plane.lower()
+                    mapping = {"xy": (0, 1), "yz": (1, 2), "zx": (2, 0), "xz": (0, 2)}
+                    axis1, axis2 = mapping[plane_lower]
+                else:
+                    axis1, axis2 = plane
+                
+                theta = np.radians(-angle) if use_degrees else -angle
+                cos_t, sin_t = np.cos(theta), np.sin(theta)
+                R = np.array([[cos_t, -sin_t], [sin_t, cos_t]])
+                
+                shifted = inv_points - resolved_center
+                coords_plane = shifted[:, [axis1, axis2]]
+                rotated_plane = coords_plane @ R.T
+                inv_points[:, [axis1, axis2]] = rotated_plane + resolved_center[[axis1, axis2]]
+                
+            elif method == "scale_to_diameter":
+                scale_factor = metadata["scale_factor"]
+                resolved_anchor_pt = metadata["resolved_anchor_pt"]
+                axis = args.get("axis", None)
+                
+                if np.isclose(scale_factor, 0.0):
+                    raise ValueError("Cannot revert scale_to_diameter: scale factor is zero.")
+                
+                inv_factor = 1.0 / scale_factor
+                if axis is None:
+                    inv_points = resolved_anchor_pt + inv_factor * (inv_points - resolved_anchor_pt)
+                else:
+                    coords = inv_points[:, axis]
+                    inv_points[:, axis] = resolved_anchor_pt[axis] + inv_factor * (coords - resolved_anchor_pt[axis])
+                    
+            elif method == "shear":
+                factor = args["factor"]
+                axis = args["axis"]
+                control_axis = args["control_axis"]
+                resolved_anchor_pt = metadata["resolved_anchor_pt"]
+                
+                control_coords = inv_points[:, control_axis]
+                displacement = factor * (control_coords - resolved_anchor_pt[control_axis])
+                inv_points[:, axis] -= displacement
+                
+            elif method == "twist":
+                rate = args["rate"]
+                plane = args["plane"]
+                control_axis = args.get("control_axis", 2)
+                use_degrees = args.get("use_degrees", True)
+                resolved_anchor_pt = metadata["resolved_anchor_pt"]
+                
+                if isinstance(plane, str):
+                    plane_lower = plane.lower()
+                    mapping = {"xy": (0, 1), "yz": (1, 2), "zx": (2, 0), "xz": (0, 2)}
+                    axis1, axis2 = mapping[plane_lower]
+                else:
+                    axis1, axis2 = plane
+                
+                dist_along_control = inv_points[:, control_axis] - resolved_anchor_pt[control_axis]
+                angles = -rate * dist_along_control
+                if use_degrees:
+                    angles = np.radians(angles)
+                
+                cos_vals = np.cos(angles)
+                sin_vals = np.sin(angles)
+                
+                x = inv_points[:, axis1] - resolved_anchor_pt[axis1]
+                y = inv_points[:, axis2] - resolved_anchor_pt[axis2]
+                
+                inv_points[:, axis1] = resolved_anchor_pt[axis1] + x * cos_vals - y * sin_vals
+                inv_points[:, axis2] = resolved_anchor_pt[axis2] + x * sin_vals + y * cos_vals
+                
+            elif method == "bend":
+                curvature = args["curvature"]
+                axis = args.get("axis", 0)
+                control_axis = args.get("control_axis", 1)
+                resolved_anchor_pt = metadata["resolved_anchor_pt"]
+                
+                X = inv_points[:, axis] - resolved_anchor_pt[axis]
+                Y = inv_points[:, control_axis] - resolved_anchor_pt[control_axis]
+                
+                if np.abs(curvature) < 1e-8:
+                    inv_points[:, axis] = resolved_anchor_pt[axis] + X + curvature * X * Y
+                    inv_points[:, control_axis] = resolved_anchor_pt[control_axis] + Y - 0.5 * curvature * (X**2)
+                else:
+                    r = 1.0 / curvature
+                    sign_c = np.sign(curvature)
+                    theta = np.arctan2(X * sign_c, (r - Y) * sign_c)
+                    d = np.sqrt(X**2 + (r - Y)**2)
+                    x_unbent = theta / curvature
+                    y_unbent = r - sign_c * d
+                    
+                    inv_points[:, axis] = resolved_anchor_pt[axis] + x_unbent
+                    inv_points[:, control_axis] = resolved_anchor_pt[control_axis] + y_unbent
+                    
+            elif method == "unbend":
+                curvature = args["curvature"]
+                axis = args["axis"]
+                control_axis = args["control_axis"]
+                resolved_anchor_pt = metadata["resolved_anchor_pt"]
+                
+                x_unbent = inv_points[:, axis] - resolved_anchor_pt[axis]
+                y_unbent = inv_points[:, control_axis] - resolved_anchor_pt[control_axis]
+                
+                if np.abs(curvature) < 1e-8:
+                    inv_points[:, axis] = resolved_anchor_pt[axis] + x_unbent - curvature * x_unbent * y_unbent
+                    inv_points[:, control_axis] = resolved_anchor_pt[control_axis] + y_unbent + 0.5 * curvature * (x_unbent**2)
+                else:
+                    r = 1.0 / curvature
+                    theta = curvature * x_unbent
+                    inv_points[:, axis] = resolved_anchor_pt[axis] + (r - y_unbent) * np.sin(theta)
+                    inv_points[:, control_axis] = resolved_anchor_pt[control_axis] + r - (r - y_unbent) * np.cos(theta)
+                    
+            elif method == "taper":
+                factor = args["factor"]
+                axis_arg = args.get("axis", None)
+                control_axis = args.get("control_axis", 2)
+                resolved_anchor_pt = metadata["resolved_anchor_pt"]
+                
+                if axis_arg is None:
+                    axes_to_scale = [d for d in range(self.dimension) if d != control_axis]
+                elif isinstance(axis_arg, int):
+                    axes_to_scale = [axis_arg]
+                else:
+                    axes_to_scale = list(axis_arg)
+                    
+                h = inv_points[:, control_axis] - resolved_anchor_pt[control_axis]
+                multipliers = 1.0 + factor * h
+                if np.any(np.isclose(multipliers, 0.0)):
+                    raise ValueError("Cannot revert taper: some scale multipliers are zero.")
+                    
+                for d in axes_to_scale:
+                    inv_points[:, d] = resolved_anchor_pt[d] + (inv_points[:, d] - resolved_anchor_pt[d]) / multipliers
+                    
+            elif method == "radial_scale":
+                factor = args["factor"]
+                resolved_center = metadata["resolved_center"]
+                
+                if np.isclose(factor, 0.0):
+                    raise ValueError("Cannot revert radial_scale: scale factor is zero.")
+                
+                inv_points = resolved_center + (inv_points - resolved_center) / factor
+                
+            elif method == "spherize":
+                factor = args["factor"]
+                resolved_center = metadata["resolved_center"]
+                resolved_radius = metadata["resolved_radius"]
+                
+                if np.isclose(factor, 1.0):
+                    raise ValueError("Spherization with factor=1.0 is not mathematically invertible.")
+                    
+                diff = inv_points - resolved_center
+                distances_prime = np.linalg.norm(diff, axis=1)
+                
+                original_distances = (distances_prime - factor * resolved_radius) / (1.0 - factor)
+                
+                valid_indices = distances_prime > 0
+                reconstructed_points = inv_points.copy()
+                scale_ratio = original_distances[valid_indices] / distances_prime[valid_indices]
+                reconstructed_points[valid_indices] = resolved_center + diff[valid_indices] * scale_ratio[:, np.newaxis]
+                inv_points = reconstructed_points
+                
+            elif method == "apply_mapping":
+                raise ValueError("apply_mapping is an arbitrary function and cannot be mathematically inverted.")
+                
+            else:
+                raise ValueError(f"Unknown transformation method: {method}")
+                
+            movable_mask = metadata.get("movable_mask", None)
+            if movable_mask is not None:
+                current_points = np.where(movable_mask[:, np.newaxis], inv_points, current_points)
+            else:
+                current_points = inv_points
+                
+        self._update_parent(current_points)
+        return PointCloud(
+            current_points,
+            parent=self._parent,
+            history=[],
+            original_points=self._original_points
+        )
+
+    def block_division(
+        self,
+        num_blocks: Optional[Union[int, List[int], Tuple[int, ...]]] = None
+    ) -> List[SpaceBlock]:
+        """Divides the space occupied by the point cloud into SpaceBlock objects.
+        
+        Args:
+            num_blocks:
+                - None: Divides the space into 2^D quadrants/octants relative to the center of mass.
+                - int: Divides the bounding box of the point cloud into `num_blocks` equal subblocks
+                       along the axis with the largest coordinate span.
+                - list/tuple of D ints: Divides the bounding box into a grid of subblocks according
+                       to the specified divisions along each coordinate axis.
+                       
+        Returns:
+            A list of SpaceBlock objects.
+        """
+        if self.num_points == 0:
+            return []
+            
+        D = self.dimension
+        
+        if num_blocks is None:
+            # 2^D quadrants/octants from the center of mass
+            c = self.center_of_mass
+            intervals = []
+            for j in range(D):
+                intervals.append([(-np.inf, c[j]), (c[j], np.inf)])
+            
+            import itertools
+            blocks = []
+            for combo in itertools.product(*intervals):
+                min_b = [bound[0] for bound in combo]
+                max_b = [bound[1] for bound in combo]
+                blocks.append(SpaceBlock(min_b, max_b))
+            return blocks
+            
+        elif isinstance(num_blocks, int):
+            if num_blocks <= 0:
+                raise ValueError("Number of blocks must be positive.")
+            min_coords = np.min(self.points, axis=0)
+            max_coords = np.max(self.points, axis=0)
+            spans = max_coords - min_coords
+            longest_axis = np.argmax(spans)
+            
+            edges = np.linspace(min_coords[longest_axis], max_coords[longest_axis], num_blocks + 1)
+            blocks = []
+            for i in range(num_blocks):
+                min_b = min_coords.copy()
+                max_b = max_coords.copy()
+                min_b[longest_axis] = edges[i]
+                max_b[longest_axis] = edges[i+1]
+                blocks.append(SpaceBlock(min_b, max_b))
+            return blocks
+            
+        else:
+            divisions = list(num_blocks)
+            if len(divisions) != D:
+                raise ValueError(f"Grid divisions length ({len(divisions)}) must match dimension ({D}).")
+            for div in divisions:
+                if div <= 0:
+                    raise ValueError("Grid divisions must be positive integers.")
+                    
+            min_coords = np.min(self.points, axis=0)
+            max_coords = np.max(self.points, axis=0)
+            
+            axis_intervals = []
+            for j in range(D):
+                edges = np.linspace(min_coords[j], max_coords[j], divisions[j] + 1)
+                intervals_j = []
+                for i in range(divisions[j]):
+                    intervals_j.append((edges[i], edges[i+1]))
+                axis_intervals.append(intervals_j)
+                
+            import itertools
+            blocks = []
+            for combo in itertools.product(*axis_intervals):
+                min_b = [bound[0] for bound in combo]
+                max_b = [bound[1] for bound in combo]
+                blocks.append(SpaceBlock(min_b, max_b))
+            return blocks
 
     @property
     def num_points(self) -> int:
@@ -193,29 +631,11 @@ class PointCloud:
         self,
         target_diameter: float,
         axis: Optional[int] = None,
-        anchor: Optional[Union[str, np.ndarray]] = None
+        anchor: Optional[Union[str, np.ndarray]] = None,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
     ) -> "PointCloud":
         """Stretches or compresses the point cloud to a target diameter.
-        
-        Mathematical Formulation:
-            Let P_i be the coordinate vector of point i, and 'a' be the coordinate of the anchor point.
-            
-            1. Uniform Scaling (axis = None):
-               We calculate the current Euclidean diameter:
-                   D_curr = max_{i, j} || P_i - P_j ||_2
-               The uniform scale factor is:
-                   s = D_target / D_curr
-               Each transformed point is computed as:
-                   P'_i = a + s * (P_i - a)
-
-            2. Axis-Specific Scaling (axis = d):
-               We calculate the current coordinate span along axis d:
-                   D_curr = max_i(P_{i, d}) - min_i(P_{i, d})
-               The scale factor along axis d is:
-                   s = D_target / D_curr
-               Each transformed coordinate is computed as:
-                   P'_{i, d} = a_d + s * (P_{i, d} - a_d)
-                   P'_{i, j} = P_{i, j}  for all coordinate axes j != d
         
         Args:
             target_diameter: The desired target diameter (must be non-negative).
@@ -223,21 +643,9 @@ class PointCloud:
                   overall pairwise Euclidean diameter.
                   If an integer, scales only the coordinates along the specified axis 
                   to match the target diameter span.
-            anchor: The point that remains stationary. Can be:
-                    - None: Defaults to the center of mass.
-                    - "center": Center of mass (centroid).
-                    - "min": The minimum extreme point along the scaling axis (if axis is specified) 
-                             or the overall minimum point.
-                    - "max": The maximum extreme point along the scaling axis (if axis is specified) 
-                             or the overall maximum point.
-                    - np.ndarray: A custom coordinate array of shape (D,).
-                    
-        Returns:
-            A new PointCloud instance with transformed points.
-            
-        Raises:
-            ValueError: If target_diameter is negative.
-            ValueError: If the current diameter is zero (cannot scale).
+            anchor: The point that remains stationary.
+            movable_blocks: Optional block or collection of SpaceBlock. Only points inside will be deformed.
+            static_blocks: Optional block or collection of SpaceBlock. Points inside will remain static.
         """
         if target_diameter < 0:
             raise ValueError("Target diameter must be non-negative.")
@@ -245,11 +653,12 @@ class PointCloud:
         if self.num_points == 0:
             raise ValueError("Cannot scale an empty point cloud.")
 
+        M = self._get_movable_mask(movable_blocks, static_blocks)
+
         # Determine anchor point coordinates
         if anchor is None or (isinstance(anchor, str) and anchor == "center"):
             anchor_pt = self.center_of_mass
         elif isinstance(anchor, str) and anchor in ("min", "max"):
-            # If axis is specified, get extreme point along that axis
             ext_axis = axis if axis is not None else 0
             anchor_pt = self.get_extreme_points(axis=ext_axis, extreme=anchor)
         elif isinstance(anchor, np.ndarray):
@@ -260,7 +669,6 @@ class PointCloud:
             raise ValueError(f"Invalid anchor: {anchor}")
 
         if axis is None:
-            # Uniform scaling based on overall pairwise Euclidean diameter
             if self.num_points < 2:
                 raise ValueError("Cannot compute overall diameter for point cloud with fewer than 2 points.")
             
@@ -274,7 +682,6 @@ class PointCloud:
             scale_factor = target_diameter / current_diameter
             new_points = anchor_pt + scale_factor * (self.points - anchor_pt)
         else:
-            # Non-uniform scaling along specified axis
             if axis < 0 or axis >= self.dimension:
                 raise ValueError(f"Axis {axis} is out of bounds for dimension {self.dimension}")
                 
@@ -289,48 +696,24 @@ class PointCloud:
             new_points = self.points.copy()
             new_points[:, axis] = anchor_pt[axis] + scale_factor * (coords - anchor_pt[axis])
 
-        self._update_parent(new_points)
-        return PointCloud(new_points, parent=self._parent)
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+        return self._create_deformed_pc(
+            new_points,
+            "scale_to_diameter",
+            args={"target_diameter": target_diameter, "axis": axis, "anchor": anchor, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"scale_factor": scale_factor, "resolved_anchor_pt": anchor_pt, "movable_mask": M}
+        )
 
     def rotate(
         self,
         angle: float,
         plane: Union[str, Tuple[int, int]] = "xy",
         center: Optional[Union[str, np.ndarray]] = None,
-        use_degrees: bool = True
+        use_degrees: bool = True,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
     ) -> "PointCloud":
-        """Rotates the point cloud in the specified coordinate plane.
-        
-        Mathematical Formulation:
-            Let theta be the rotation angle in radians, and 'c' be the center of rotation.
-            For coordinate plane spanned by axes (a_1, a_2), we define the 2D rotation matrix:
-                R = [[cos(theta), -sin(theta)],
-                     [sin(theta),  cos(theta)]]
-                     
-            For each point P_i:
-                1. Project and shift points to the rotation center:
-                   u_i = [[ P_{i, a_1} - c_{a_1} ],
-                          [ P_{i, a_2} - c_{a_2} ]]
-                2. Apply the 2D rotation:
-                   u'_i = R * u_i
-                3. Update coordinates:
-                   P'_{i, a_1} = c_{a_1} + (P_{i, a_1} - c_{a_1})*cos(theta) - (P_{i, a_2} - c_{a_2})*sin(theta)
-                   P'_{i, a_2} = c_{a_2} + (P_{i, a_1} - c_{a_1})*sin(theta) + (P_{i, a_2} - c_{a_2})*cos(theta)
-                   P'_{i, j} = P_{i, j}  for all coordinate axes j not in {a_1, a_2}
-        
-        Args:
-            angle: The rotation angle.
-            plane: The coordinate plane for rotation (e.g., 'xy', 'yz', or tuple of indices).
-            center: The center of rotation. Can be:
-                    - None / "center": Defaults to the center of mass.
-                    - "min": The minimum extreme point along plane axis 1.
-                    - "max": The maximum extreme point along plane axis 1.
-                    - np.ndarray: A custom center coordinates array.
-            use_degrees: If True, angle is interpreted as degrees. If False, as radians.
-            
-        Returns:
-            A new PointCloud instance with rotated points.
-        """
+        """Rotates the point cloud in the specified coordinate plane."""
         if isinstance(plane, str):
             plane_lower = plane.lower()
             mapping = {
@@ -349,6 +732,8 @@ class PointCloud:
 
         if axis1 < 0 or axis1 >= self.dimension or axis2 < 0 or axis2 >= self.dimension:
             raise ValueError(f"Plane axes exceed point cloud dimension.")
+
+        M = self._get_movable_mask(movable_blocks, static_blocks)
 
         if center is None or (isinstance(center, str) and center == "center"):
             c = self.center_of_mass
@@ -375,61 +760,49 @@ class PointCloud:
         rotated_plane = coords_plane @ R.T
         new_points[:, [axis1, axis2]] = rotated_plane + c[[axis1, axis2]]
 
-        self._update_parent(new_points)
-        return PointCloud(new_points, parent=self._parent)
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+        return self._create_deformed_pc(
+            new_points,
+            "rotate",
+            args={"angle": angle, "plane": plane, "center": center, "use_degrees": use_degrees, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"resolved_center": c, "movable_mask": M}
+        )
 
-    def translate(self, translation_vector: Any) -> "PointCloud":
-        """Translates the point cloud by a given vector.
-        
-        Mathematical Formulation:
-            Let P_i be the coordinate vector of point i, and v be the D-dimensional translation vector.
-            The transformed point is computed as:
-                P'_i = P_i + v
-        
-        Args:
-            translation_vector: Array-like of shape (D,) representing translation.
-            
-        Returns:
-            A new PointCloud instance with translated points.
-        """
+    def translate(
+        self,
+        translation_vector: Any,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
+    ) -> "PointCloud":
+        """Translates the point cloud by a given vector."""
         v = np.asarray(translation_vector, dtype=float)
         if v.shape != (self.dimension,):
             raise ValueError(f"Translation vector must have shape {(self.dimension,)}, got {v.shape}")
         
+        M = self._get_movable_mask(movable_blocks, static_blocks)
         new_points = self.points + v
-        self._update_parent(new_points)
-        return PointCloud(new_points, parent=self._parent)
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+        return self._create_deformed_pc(
+            new_points,
+            "translate",
+            args={"translation_vector": translation_vector, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"movable_mask": M}
+        )
 
     def shear(
         self,
         factor: float,
         axis: int,
         control_axis: int,
-        anchor: Optional[Union[str, np.ndarray]] = None
+        anchor: Optional[Union[str, np.ndarray]] = None,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
     ) -> "PointCloud":
-        """Applies a shear deformation to the point cloud.
-        
-        Mathematical Formulation:
-            Let k be the shear factor, and 'a' be the anchor coordinate vector.
-            The coordinates along 'axis' (d_1) are shifted proportionally to the distance 
-            from the anchor along the 'control_axis' (d_2):
-                P'_{i, d_1} = P_{i, d_1} + k * (P_{i, d_2} - a_{d_2})
-                P'_{i, j} = P_{i, j}  for all coordinate axes j != d_1
-        
-        Args:
-            factor: The shear factor.
-            axis: The axis along which displacement occurs.
-            control_axis: The axis that controls the displacement.
-            anchor: The anchor point where no displacement occurs. Can be:
-                    - None / "center": Defaults to the center of mass.
-                    - "min" / "max": Extreme point along the control axis.
-                    - np.ndarray: Custom coordinates array.
-                    
-        Returns:
-            A new PointCloud instance with sheared points.
-        """
+        """Applies a shear deformation to the point cloud."""
         if axis < 0 or axis >= self.dimension or control_axis < 0 or control_axis >= self.dimension:
             raise ValueError("Axes indices are out of bounds.")
+
+        M = self._get_movable_mask(movable_blocks, static_blocks)
 
         if anchor is None or (isinstance(anchor, str) and anchor == "center"):
             anchor_pt = self.center_of_mass
@@ -447,30 +820,33 @@ class PointCloud:
         displacement = factor * (control_coords - anchor_pt[control_axis])
         new_points[:, axis] += displacement
 
-        self._update_parent(new_points)
-        return PointCloud(new_points, parent=self._parent)
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+        return self._create_deformed_pc(
+            new_points,
+            "shear",
+            args={"factor": factor, "axis": axis, "control_axis": control_axis, "anchor": anchor, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"resolved_anchor_pt": anchor_pt, "movable_mask": M}
+        )
 
-    def apply_mapping(self, func: Any) -> "PointCloud":
-        """Applies an arbitrary coordinate mapping function to the point cloud.
-        
-        Mathematical Formulation:
-            Let P be the coordinate matrix of shape (N, D), and f be the mapping function.
-            The transformed point cloud coordinate matrix is:
-                P' = f(P)
-        
-        Args:
-            func: A callable that accepts a NumPy array of shape (N, D) 
-                  and returns a transformed NumPy array of shape (N, D).
-                  
-        Returns:
-            A new PointCloud instance with the transformed points.
-        """
+    def apply_mapping(
+        self,
+        func: Any,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
+    ) -> "PointCloud":
+        """Applies an arbitrary coordinate mapping function to the point cloud."""
         if not callable(func):
             raise TypeError("func must be a callable.")
-        transformed = func(self.points)
         
-        self._update_parent(transformed)
-        return PointCloud(transformed, parent=self._parent)
+        M = self._get_movable_mask(movable_blocks, static_blocks)
+        transformed = func(self.points)
+        transformed = np.where(M[:, np.newaxis], transformed, self.points)
+        return self._create_deformed_pc(
+            transformed,
+            "apply_mapping",
+            args={"func": func, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"movable_mask": M}
+        )
 
     def twist(
         self,
@@ -478,39 +854,11 @@ class PointCloud:
         plane: Union[str, Tuple[int, int]] = "xy",
         control_axis: int = 2,
         anchor: Optional[Union[str, np.ndarray]] = None,
-        use_degrees: bool = True
+        use_degrees: bool = True,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
     ) -> "PointCloud":
-        """Applies a twist deformation by rotating points dynamically along a control axis.
-        
-        Mathematical Formulation:
-            Let theta_i be the angle of rotation for point i, and 'a' be the anchor coordinate vector.
-            For coordinate plane spanned by axes (a_1, a_2) and control axis c_ax:
-                theta_i = rate * (P_{i, c_ax} - a_{c_ax})
-                
-            For each point P_i, we compute its rotation matrix R_i using theta_i:
-                R_i = [[cos(theta_i), -sin(theta_i)],
-                       [sin(theta_i),  cos(theta_i)]]
-                       
-            The coordinates are updated by applying rotation R_i in the plane:
-                P'_{i, a_1} = a_{a_1} + (P_{i, a_1} - a_{a_1})*cos(theta_i) - (P_{i, a_2} - a_{a_2})*sin(theta_i)
-                P'_{i, a_2} = a_{a_2} + (P_{i, a_1} - a_{a_1})*sin(theta_i) + (P_{i, a_2} - a_{a_2})*cos(theta_i)
-                P'_{i, j} = P_{i, j}  for all coordinate axes j not in {a_1, a_2}
-                
-        Args:
-            rate: The twist rate (rotation angle per unit distance along control axis).
-            plane: The coordinate plane in which rotation occurs (e.g., 'xy', 'yz', or tuple of indices).
-            control_axis: The axis that determines the angle of rotation.
-            anchor: The anchor point serving as the center of rotation and zero-twist reference.
-                    Can be:
-                    - None / "center": Defaults to the center of mass.
-                    - "min" / "max": Extreme point along the control axis.
-                    - np.ndarray: Custom coordinates array.
-            use_degrees: If True, rate is interpreted in degrees/unit distance.
-                         If False, in radians/unit distance.
-                         
-        Returns:
-            A new PointCloud instance with twisted points.
-        """
+        """Applies a twist deformation by rotating points dynamically along a control axis."""
         if isinstance(plane, str):
             plane_lower = plane.lower()
             mapping = {"xy": (0, 1), "yz": (1, 2), "zx": (2, 0), "xz": (0, 2)}
@@ -527,7 +875,8 @@ class PointCloud:
         if control_axis < 0 or control_axis >= self.dimension:
             raise ValueError("Control axis is out of bounds.")
 
-        # Determine anchor point coordinates
+        M = self._get_movable_mask(movable_blocks, static_blocks)
+
         if anchor is None or (isinstance(anchor, str) and anchor == "center"):
             anchor_pt = self.center_of_mass
         elif isinstance(anchor, str) and anchor in ("min", "max"):
@@ -539,7 +888,6 @@ class PointCloud:
         else:
             raise ValueError(f"Invalid anchor: {anchor}")
 
-        # Compute rotation angles for each point
         dist_along_control = self.points[:, control_axis] - anchor_pt[control_axis]
         angles = rate * dist_along_control
         if use_degrees:
@@ -549,63 +897,37 @@ class PointCloud:
         sin_vals = np.sin(angles)
 
         new_points = self.points.copy()
-        
-        # Center coordinates in rotation plane
         x = self.points[:, axis1] - anchor_pt[axis1]
         y = self.points[:, axis2] - anchor_pt[axis2]
 
-        # Apply rotation
         new_points[:, axis1] = anchor_pt[axis1] + x * cos_vals - y * sin_vals
         new_points[:, axis2] = anchor_pt[axis2] + x * sin_vals + y * cos_vals
 
-        self._update_parent(new_points)
-        return PointCloud(new_points, parent=self._parent)
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+        return self._create_deformed_pc(
+            new_points,
+            "twist",
+            args={"rate": rate, "plane": plane, "control_axis": control_axis, "anchor": anchor, "use_degrees": use_degrees, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"resolved_anchor_pt": anchor_pt, "movable_mask": M}
+        )
 
     def bend(
         self,
         curvature: float,
         axis: int = 0,
         control_axis: int = 1,
-        anchor: Optional[Union[str, np.ndarray]] = None
+        anchor: Optional[Union[str, np.ndarray]] = None,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
     ) -> "PointCloud":
-        """Bends the point cloud along a specified axis with a given curvature.
-        
-        Mathematical Formulation:
-            Let c be the curvature (c = 1/R, where R is the bending radius).
-            For bend axis d_1 and perpendicular control axis d_2, and anchor point 'a':
-            For each point P_i, let:
-                x = P_{i, d_1} - a_{d_1}
-                y = P_{i, d_2} - a_{d_2}
-                
-            If curvature is non-zero (or very small):
-                theta = c * x
-                P'_{i, d_1} = a_{d_1} + (1/c - y) * sin(theta)
-                P'_{i, d_2} = a_{d_2} + 1/c - (1/c - y) * cos(theta)
-            If curvature is zero (or near zero), we use first-order Taylor expansion:
-                P'_{i, d_1} = a_{d_1} + x - c * x * y
-                P'_{i, d_2} = a_{d_2} + y + 0.5 * c * x^2
-                
-            For all other coordinate axes j not in {d_1, d_2}:
-                P'_{i, j} = P_{i, j}
-                
-        Args:
-            curvature: Bending curvature. Positive curvatures bend towards positive control axis.
-            axis: The primary axis of extension along which bending occurs.
-            control_axis: The axis perpendicular to the bend axis in which displacement occurs.
-            anchor: The anchor point marking the start/origin of the bend. Can be:
-                    - None / "center": Defaults to the center of mass.
-                    - "min" / "max": Extreme point along the bend axis.
-                    - np.ndarray: Custom coordinates array.
-                    
-        Returns:
-            A new PointCloud instance with bent points.
-        """
+        """Bends the point cloud along a specified axis with a given curvature."""
         if axis < 0 or axis >= self.dimension or control_axis < 0 or control_axis >= self.dimension:
             raise ValueError("Axis indices are out of bounds.")
         if axis == control_axis:
             raise ValueError("Bend axis and control axis must be distinct.")
 
-        # Determine anchor point coordinates
+        M = self._get_movable_mask(movable_blocks, static_blocks)
+
         if anchor is None or (isinstance(anchor, str) and anchor == "center"):
             anchor_pt = self.center_of_mass
         elif isinstance(anchor, str) and anchor in ("min", "max"):
@@ -622,7 +944,6 @@ class PointCloud:
 
         new_points = self.points.copy()
 
-        # Handle very small curvature to prevent division by zero using Taylor series approximation
         if np.abs(curvature) < 1e-8:
             new_points[:, axis] = anchor_pt[axis] + x - curvature * x * y
             new_points[:, control_axis] = anchor_pt[control_axis] + y + 0.5 * curvature * (x**2)
@@ -632,59 +953,31 @@ class PointCloud:
             new_points[:, axis] = anchor_pt[axis] + (r - y) * np.sin(theta)
             new_points[:, control_axis] = anchor_pt[control_axis] + r - (r - y) * np.cos(theta)
 
-        self._update_parent(new_points)
-        return PointCloud(new_points, parent=self._parent)
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+        return self._create_deformed_pc(
+            new_points,
+            "bend",
+            args={"curvature": curvature, "axis": axis, "control_axis": control_axis, "anchor": anchor, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"resolved_anchor_pt": anchor_pt, "movable_mask": M}
+        )
 
     def unbend(
         self,
         curvature: float,
         axis: int,
         control_axis: int,
-        anchor: Optional[Any] = None
+        anchor: Optional[Any] = None,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
     ) -> "PointCloud":
-        """Reverses a bending transformation along a specified axis.
-        
-        Mathematical Formulation:
-            Let c be the curvature (c = 1/R, where R is the bending radius).
-            For bend axis d_1 and control axis d_2, and anchor point 'a':
-            For each point P_i, let:
-                X = P_{i, d_1} - a_{d_1}
-                Y = P_{i, d_2} - a_{d_2}
-                
-            If curvature is non-zero (or very small):
-                r = 1/c
-                theta = atan2(X * sign(c), (r - Y) * sign(c))
-                d = sqrt(X^2 + (r - Y)^2)
-                x = theta / c
-                y = r - sign(c) * d
-                
-                P'_{i, d_1} = a_{d_1} + x
-                P'_{i, d_2} = a_{d_2} + y
-            If curvature is zero (or near zero), we use first-order Taylor expansion:
-                P'_{i, d_1} = a_{d_1} + X + c * X * Y
-                P'_{i, d_2} = a_{d_2} + Y - 0.5 * c * X^2
-                
-            For all other coordinate axes j not in {d_1, d_2}:
-                P'_{i, j} = P_{i, j}
-                
-        Args:
-            curvature: Bending curvature to undo.
-            axis: The primary axis along which the unbent points will be aligned.
-            control_axis: The axis perpendicular to the bend axis in which bending occurred.
-            anchor: The anchor point marking the origin of the bend. Can be:
-                    - None / "center": Defaults to the center of mass.
-                    - "min" / "max": Extreme point along the bend axis.
-                    - np.ndarray: Custom coordinates array.
-                    
-        Returns:
-            A new PointCloud instance with unbent points.
-        """
+        """Reverses a bending transformation along a specified axis."""
         if axis < 0 or axis >= self.dimension or control_axis < 0 or control_axis >= self.dimension:
             raise ValueError("Axis indices are out of bounds.")
         if axis == control_axis:
             raise ValueError("Bend axis and control axis must be distinct.")
 
-        # Determine anchor point coordinates
+        M = self._get_movable_mask(movable_blocks, static_blocks)
+
         if anchor is None or (isinstance(anchor, str) and anchor == "center"):
             anchor_pt = self.center_of_mass
         elif isinstance(anchor, str) and anchor in ("min", "max"):
@@ -701,7 +994,6 @@ class PointCloud:
 
         new_points = self.points.copy()
 
-        # Handle very small curvature using first-order approximation
         if np.abs(curvature) < 1e-8:
             new_points[:, axis] = anchor_pt[axis] + X + curvature * X * Y
             new_points[:, control_axis] = anchor_pt[control_axis] + Y - 0.5 * curvature * (X**2)
@@ -716,44 +1008,24 @@ class PointCloud:
             new_points[:, axis] = anchor_pt[axis] + x
             new_points[:, control_axis] = anchor_pt[control_axis] + y
 
-        self._update_parent(new_points)
-        return PointCloud(new_points, parent=self._parent)
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+        return self._create_deformed_pc(
+            new_points,
+            "unbend",
+            args={"curvature": curvature, "axis": axis, "control_axis": control_axis, "anchor": anchor, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"resolved_anchor_pt": anchor_pt, "movable_mask": M}
+        )
 
     def taper(
         self,
         factor: float,
         axis: Optional[Union[int, List[int], Tuple[int, ...]]] = None,
         control_axis: int = 2,
-        anchor: Optional[Union[str, np.ndarray]] = None
+        anchor: Optional[Union[str, np.ndarray]] = None,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
     ) -> "PointCloud":
-        """Scales coordinates along specified axes proportionally to distance along a control axis.
-        
-        Mathematical Formulation:
-            Let k be the tapering factor, and 'a' be the anchor coordinate vector.
-            For each point P_i, the distance along the control axis c_ax is:
-                h = P_{i, c_ax} - a_{c_ax}
-                
-            The coordinate multiplier is defined as:
-                m(P_i) = 1 + k * h
-                
-            For each specified axis d:
-                P'_{i, d} = a_d + m(P_i) * (P_{i, d} - a_d)
-                
-            For all other coordinate axes (including the control axis):
-                P'_{i, j} = P_{i, j}
-                
-        Args:
-            factor: The tapering scale factor.
-            axis: The axis or list of axes to scale. If None, scales all axes except the control axis.
-            control_axis: The axis along which the scale factor varies.
-            anchor: The anchor point where scale factor is 1.0. Can be:
-                    - None / "center": Defaults to the center of mass.
-                    - "min" / "max": Extreme point along the control axis.
-                    - np.ndarray: Custom coordinates array.
-                    
-        Returns:
-            A new PointCloud instance with tapered points.
-        """
+        """Scales coordinates along specified axes proportionally to distance along a control axis."""
         if control_axis < 0 or control_axis >= self.dimension:
             raise ValueError("Control axis index is out of bounds.")
 
@@ -769,7 +1041,8 @@ class PointCloud:
             if d < 0 or d >= self.dimension:
                 raise ValueError(f"Axis index {d} is out of bounds.")
 
-        # Determine anchor point coordinates
+        M = self._get_movable_mask(movable_blocks, static_blocks)
+
         if anchor is None or (isinstance(anchor, str) and anchor == "center"):
             anchor_pt = self.center_of_mass
         elif isinstance(anchor, str) and anchor in ("min", "max"):
@@ -788,30 +1061,22 @@ class PointCloud:
         for d in axes_to_scale:
             new_points[:, d] = anchor_pt[d] + multipliers * (self.points[:, d] - anchor_pt[d])
 
-        self._update_parent(new_points)
-        return PointCloud(new_points, parent=self._parent)
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+        return self._create_deformed_pc(
+            new_points,
+            "taper",
+            args={"factor": factor, "axis": axis, "control_axis": control_axis, "anchor": anchor, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"resolved_anchor_pt": anchor_pt, "movable_mask": M}
+        )
 
     def radial_scale(
         self,
         factor: float,
-        center: Optional[Union[str, np.ndarray]] = None
+        center: Optional[Union[str, np.ndarray]] = None,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
     ) -> "PointCloud":
-        """Scales points radially outward or inward from a given center.
-        
-        Mathematical Formulation:
-            Let k be the scale factor, and 'c' be the center point coordinate.
-            Each transformed point is computed as:
-                P'_i = c + k * (P_i - c)
-                
-        Args:
-            factor: Radial scale factor.
-            center: The center of scaling. Can be:
-                    - None / "center": Defaults to the center of mass.
-                    - np.ndarray: Custom coordinates array.
-                    
-        Returns:
-            A new PointCloud instance with radially scaled points.
-        """
+        """Scales points radially outward or inward from a given center."""
         if center is None or (isinstance(center, str) and center == "center"):
             c = self.center_of_mass
         elif isinstance(center, np.ndarray):
@@ -821,45 +1086,25 @@ class PointCloud:
         else:
             raise ValueError(f"Invalid center: {center}")
 
+        M = self._get_movable_mask(movable_blocks, static_blocks)
         new_points = c + factor * (self.points - c)
-        self._update_parent(new_points)
-        return PointCloud(new_points, parent=self._parent)
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+        return self._create_deformed_pc(
+            new_points,
+            "radial_scale",
+            args={"factor": factor, "center": center, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"resolved_center": c, "movable_mask": M}
+        )
 
     def spherize(
         self,
         factor: float,
         radius: Optional[float] = None,
-        center: Optional[Union[str, np.ndarray]] = None
+        center: Optional[Union[str, np.ndarray]] = None,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
     ) -> "PointCloud":
-        """Blends points between their current layout and their projection onto a sphere.
-        
-        Mathematical Formulation:
-            Let f be the spherization factor (0.0 to 1.0), R be the sphere radius, 
-            and 'c' be the sphere center.
-            For each point P_i, let:
-                v_i = P_i - c
-                d_i = || v_i ||_2 (Euclidean distance from center)
-                
-            If d_i > 0, the spherized projection P_{sph, i} is:
-                P_{sph, i} = c + R * (v_i / d_i)
-                
-            The final blended coordinate is:
-                P'_i = (1 - f) * P_i + f * P_{sph, i} = c + v_i * (1 - f + f * R / d_i)
-                
-            If d_i = 0, the point remains static:
-                P'_i = P_i
-                
-        Args:
-            factor: The blending factor between 0.0 (no change) and 1.0 (perfect sphere).
-            radius: The target sphere radius. If None, defaults to the average distance 
-                    of the point cloud from the center.
-            center: The sphere center. Can be:
-                    - None / "center": Defaults to the center of mass.
-                    - np.ndarray: Custom coordinates array.
-                    
-        Returns:
-            A new PointCloud instance with spherized points.
-        """
+        """Blends points between their current layout and their projection onto a sphere."""
         if factor < 0.0 or factor > 1.0:
             raise ValueError("Spherize factor must be between 0.0 and 1.0.")
 
@@ -872,25 +1117,28 @@ class PointCloud:
         else:
             raise ValueError(f"Invalid center: {center}")
 
+        M = self._get_movable_mask(movable_blocks, static_blocks)
+
         diff = self.points - c
         distances = np.linalg.norm(diff, axis=1)
 
         if radius is None:
-            # Default to average distance
             radius = np.mean(distances) if len(distances) > 0 else 1.0
         elif radius < 0.0:
             raise ValueError("Radius must be non-negative.")
 
-        # Compute scaling factors for each point
         scale = np.ones_like(distances)
         valid_indices = distances > 0
-        
-        # Formula: 1 - f + f * (radius / d_i)
         scale[valid_indices] = (1.0 - factor) + factor * (radius / distances[valid_indices])
 
         new_points = c + diff * scale[:, np.newaxis]
-        self._update_parent(new_points)
-        return PointCloud(new_points, parent=self._parent)
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+        return self._create_deformed_pc(
+            new_points,
+            "spherize",
+            args={"factor": factor, "radius": radius, "center": center, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"resolved_center": c, "resolved_radius": radius, "movable_mask": M}
+        )
 
     def __getitem__(self, key: Any) -> np.ndarray:
         """Allows slicing and indexing the point cloud coordinates directly."""

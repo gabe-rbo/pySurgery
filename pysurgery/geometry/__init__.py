@@ -128,9 +128,11 @@ def __getattr__(name):
         return locals()[name]
     if name in [
         "PointCloud",
+        "SpaceBlock",
     ]:
         from .point_cloud import (  # noqa: F401
             PointCloud,
+            SpaceBlock,
         )
         return locals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -183,4 +185,5 @@ __all__ = [
     "StructuralObstruction",
     "immersion_obstruction_analysis",
     "PointCloud",
+    "SpaceBlock",
 ]
