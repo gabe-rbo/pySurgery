@@ -32,7 +32,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union, TYPE_CHECKING
+if TYPE_CHECKING:
+    from .point_cloud import PointCloud
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -327,7 +329,7 @@ class PLMap:
     def from_source(
         cls,
         source: object,
-        coordinates: Optional[np.ndarray] = None,
+        coordinates: Optional[Union[np.ndarray, "PointCloud"]] = None,
         *,
         projection_matrix: Optional[np.ndarray] = None,
         source_name: Optional[str] = None,
@@ -553,7 +555,7 @@ class SelfIntersectionReport:
 
 def analyze_embedding(
     source: object,
-    coordinates: Optional[np.ndarray] = None,
+    coordinates: Optional[Union[np.ndarray, "PointCloud"]] = None,
     *,
     target_dimension: Optional[int] = None,
     allow_projection: bool = False,
@@ -973,7 +975,7 @@ def detect_self_intersections(
 
 
 def project_coordinates(
-    points: np.ndarray,
+    points: np.ndarray | PointCloud,
     target_dimension: int,
     *,
     method: str = "pca",
@@ -1062,7 +1064,7 @@ def project_coordinates(
     raise ValueError("Unknown projection method: {!r}".format(method))
 
 
-def jitter_coordinates(points: np.ndarray, *, scale: float = 1e-8, random_state: int = 0) -> np.ndarray:
+def jitter_coordinates(points: np.ndarray | PointCloud, *, scale: float = 1e-8, random_state: int = 0) -> np.ndarray:
     """Apply a deterministic small jitter for transversality-style retries.
 
     Args:
@@ -1159,7 +1161,7 @@ def _coerce_source_complex(source: object) -> tuple[SimplicialComplex, list[int]
     )
 
 
-def _coerce_coordinates(source: object, *, coordinates: Optional[np.ndarray] = None) -> np.ndarray:
+def _coerce_coordinates(source: object, *, coordinates: Optional[Union[np.ndarray, "PointCloud"]] = None) -> np.ndarray:
     """Coerce various source types and optional input into a coordinate array.
 
     Args:

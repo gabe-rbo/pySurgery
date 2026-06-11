@@ -370,3 +370,31 @@ def test_array_protocols():
     assert isinstance(arr, np.ndarray)
     np.testing.assert_allclose(arr, pc.points)
 
+def test_intrinsic_dimension_and_alignment():
+    from pysurgery.geometry import estimate_intrinsic_dimension
+    from pysurgery.geometry.metrics import orthogonal_procrustes, compute_distance_matrix
+
+    # Generate a simple point cloud (helix)
+    t = np.linspace(0, 4 * np.pi, 50)
+    pts = np.column_stack([np.cos(t), np.sin(t), t])
+    pc = PointCloud(pts)
+
+    # 1. Test estimate_intrinsic_dimension accepts PointCloud
+    res = estimate_intrinsic_dimension(pc, methods=["twonn"])
+    assert res is not None
+
+    # 2. Test compute_distance_matrix accepts PointCloud
+    D = compute_distance_matrix(pc, metric="euclidean")
+    assert D.shape == (50, 50)
+
+    # 3. Test orthogonal_procrustes accepts PointCloud
+    # Rotate the helix slightly
+    pc_rot = pc.rotate(30.0, plane="xy", center=np.zeros(3))
+    
+    # Run orthogonal alignment
+    R, aligned, disparity = orthogonal_procrustes(pc, pc_rot)
+    assert R.shape == (3, 3)
+    assert aligned.shape == (50, 3)
+    assert disparity < 1e-7
+
+

@@ -18,10 +18,12 @@ Common Workflows:
 
 import numpy as np
 import scipy.spatial.distance as dist
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union, TYPE_CHECKING
+if TYPE_CHECKING:
+    from .point_cloud import PointCloud
 from ..bridge.julia_bridge import julia_engine
 
-def orthogonal_procrustes(A: np.ndarray, B: np.ndarray, backend: str = "auto") -> Tuple[np.ndarray, np.ndarray, float]:
+def orthogonal_procrustes(A: Union[np.ndarray, "PointCloud"], B: Union[np.ndarray, "PointCloud"], backend: str = "auto") -> Tuple[np.ndarray, np.ndarray, float]:
     """Find the optimal orthogonal transformation to align two point clouds.
 
     What is Being Computed?:
@@ -55,6 +57,8 @@ def orthogonal_procrustes(A: np.ndarray, B: np.ndarray, backend: str = "auto") -
     Example:
         R, aligned, err = orthogonal_procrustes(A, B)
     """
+    A = np.asarray(A)
+    B = np.asarray(B)
     # Normalize backend
     backend_norm = str(backend).lower().strip()
     use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
@@ -77,7 +81,7 @@ def orthogonal_procrustes(A: np.ndarray, B: np.ndarray, backend: str = "auto") -
     disparity = float(np.linalg.norm(A - B_aligned))
     return R, B_aligned, disparity
 
-def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean", backend: str = "auto") -> np.ndarray:
+def compute_distance_matrix(data: Union[np.ndarray, "PointCloud"], metric: str = "euclidean", backend: str = "auto") -> np.ndarray:
     """Computes pairwise distance matrix using the optimal implementation.
 
     What is Being Computed?:
@@ -112,6 +116,7 @@ def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean", backend
     Example:
         dist_mat = compute_distance_matrix(cloud, metric='euclidean')
     """
+    data = np.asarray(data)
     # Normalize backend
     backend_norm = str(backend).lower().strip()
     use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
@@ -137,7 +142,7 @@ def compute_distance_matrix(data: np.ndarray, metric: str = "euclidean", backend
     else:
         raise ValueError(f"Unsupported metric: {metric}")
 
-def frechet_distance(curve_a: np.ndarray, curve_b: np.ndarray, backend: str = "auto") -> float:
+def frechet_distance(curve_a: Union[np.ndarray, "PointCloud"], curve_b: Union[np.ndarray, "PointCloud"], backend: str = "auto") -> float:
     """Computes the Discrete Fréchet distance between two ordered point sequences.
 
     What is Being Computed?:
@@ -169,6 +174,8 @@ def frechet_distance(curve_a: np.ndarray, curve_b: np.ndarray, backend: str = "a
     Example:
         dist = frechet_distance(path1, path2)
     """
+    curve_a = np.asarray(curve_a)
+    curve_b = np.asarray(curve_b)
     # Normalize backend
     backend_norm = str(backend).lower().strip()
     use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
@@ -246,6 +253,12 @@ def gromov_wasserstein_distance(
     Example:
         gw = gromov_wasserstein_distance(D1, D2, epsilon=0.05)
     """
+    dist_matrix_A = np.asarray(dist_matrix_A)
+    dist_matrix_B = np.asarray(dist_matrix_B)
+    if p is not None:
+        p = np.asarray(p)
+    if q is not None:
+        q = np.asarray(q)
     # Normalize backend
     backend_norm = str(backend).lower().strip()
     use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
@@ -303,7 +316,7 @@ def gromov_wasserstein_distance(
     gw_dist = max(0.0, term1 + term2 - term3)
     return float(np.sqrt(gw_dist))
 
-def farthest_point_sampling(points: np.ndarray, n_samples: int, initial_idx: int = 0) -> np.ndarray:
+def farthest_point_sampling(points: Union[np.ndarray, "PointCloud"], n_samples: int, initial_idx: int = 0) -> np.ndarray:
     """Subsample a point cloud by greedily picking points that maximize distance to the current set.
 
     What is Being Computed?:

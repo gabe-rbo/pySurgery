@@ -3498,11 +3498,11 @@ Returns (R, B_aligned, disparity).
 function orthogonal_procrustes(A::AbstractMatrix{Float64}, B::AbstractMatrix{Float64})
     M = transpose(B) * A
     F = svd(M)
-    R = F.U * transpose(F.Vt)
+    R = F.U * F.Vt
     if det(R) < 0
         U = copy(F.U)
         U[:, end] .*= -1
-        R = U * transpose(F.Vt)
+        R = U * F.Vt
     end
     B_aligned = B * R
     disparity = norm(A - B_aligned)

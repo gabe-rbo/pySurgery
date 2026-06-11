@@ -22,7 +22,9 @@ Common Workflows:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union, TYPE_CHECKING
+if TYPE_CHECKING:
+    from .point_cloud import PointCloud
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
@@ -164,8 +166,8 @@ class _NeighborhoodCache:
 
 
 def _coerce_point_cloud(
-    data: np.ndarray | SimplicialComplex | object,
-    coordinates: Optional[np.ndarray] = None,
+    data: np.ndarray | PointCloud | SimplicialComplex | object,
+    coordinates: Optional[np.ndarray | PointCloud] = None,
 ) -> np.ndarray:
     """Coerce a point-cloud-like input to a dense float array.
 
@@ -185,7 +187,8 @@ def _coerce_point_cloud(
         TypeError: If the input type is not supported.
         ValueError: If the dimensions or sample size are invalid.
     """
-    if isinstance(data, np.ndarray):
+    from .point_cloud import PointCloud
+    if isinstance(data, (np.ndarray, PointCloud)):
         points = np.asarray(data, dtype=np.float64)
     elif coordinates is not None:
         points = np.asarray(coordinates, dtype=np.float64)
@@ -204,7 +207,7 @@ def _coerce_point_cloud(
 
 
 def _compute_knn_cache(
-    points: Optional[np.ndarray],
+    points: Optional[np.ndarray | PointCloud],
     *,
     k: int,
     distance_matrix: Optional[np.ndarray] = None,
@@ -373,10 +376,10 @@ def _aggregate_method_result(
 
 
 def levina_bickel_mle(
-    data: np.ndarray | SimplicialComplex | object,
+    data: np.ndarray | PointCloud | SimplicialComplex | object,
     k: int = 10,
     *,
-    coordinates: Optional[np.ndarray] = None,
+    coordinates: Optional[np.ndarray | PointCloud] = None,
     distance_matrix: Optional[np.ndarray] = None,
 ) -> IntrinsicDimensionMethodResult:
     """Estimate intrinsic dimension with the Levina--Bickel MLE.
@@ -440,9 +443,9 @@ def levina_bickel_mle(
 
 
 def twonn(
-    data: np.ndarray | SimplicialComplex | object,
+    data: np.ndarray | PointCloud | SimplicialComplex | object,
     *,
-    coordinates: Optional[np.ndarray] = None,
+    coordinates: Optional[np.ndarray | PointCloud] = None,
     distance_matrix: Optional[np.ndarray] = None,
 ) -> IntrinsicDimensionMethodResult:
     """Estimate intrinsic dimension using the TwoNN method.
@@ -525,10 +528,10 @@ def twonn(
 
 
 def local_pca_tangent_space_dimension(
-    data: np.ndarray | SimplicialComplex | object,
+    data: np.ndarray | PointCloud | SimplicialComplex | object,
     k: int = 12,
     *,
-    coordinates: Optional[np.ndarray] = None,
+    coordinates: Optional[np.ndarray | PointCloud] = None,
     distance_matrix: Optional[np.ndarray] = None,
     variance_threshold: float = 0.9,
     max_dimension: Optional[int] = None,
@@ -710,10 +713,10 @@ def exact_intrinsic_dimension(
 
 
 def estimate_intrinsic_dimension(
-    data: np.ndarray | SimplicialComplex | object,
+    data: np.ndarray | PointCloud | SimplicialComplex | object,
     k: int = 10,
     *,
-    coordinates: Optional[np.ndarray] = None,
+    coordinates: Optional[np.ndarray | PointCloud] = None,
     distance_matrix: Optional[np.ndarray] = None,
     methods: Sequence[str] = ("mle", "twonn", "pca"),
     variance_threshold: float = 0.9,

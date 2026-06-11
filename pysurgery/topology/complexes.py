@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from pysurgery.topology.fundamental_polyhedron import FundamentalPolyhedron
     from pysurgery.manifolds.handle_decompositions import HandleDecomposition
     from pysurgery.algebra.exact_sequences import ExactSequence
+    from pysurgery.geometry.point_cloud import PointCloud
 
 from pysurgery.algebra.math_core import get_sparse_snf_diagonal
 from pysurgery.core.exceptions import NotAManifoldError
@@ -2453,7 +2454,7 @@ class SimplicialComplex(ChainComplex):
     @classmethod
     def from_vietoris_rips(
         cls,
-        points: np.ndarray,
+        points: Union[np.ndarray, "PointCloud"],
         epsilon: float,
         max_dimension: int,
         coefficient_ring: str = "Z",
@@ -2660,7 +2661,7 @@ class SimplicialComplex(ChainComplex):
     @classmethod
     def from_point_cloud_cknn(
         cls,
-        points: np.ndarray,
+        points: Union[np.ndarray, "PointCloud"],
         k: int = 5,
         delta: float = 1.0,
         max_dimension: int = 2,
@@ -2747,7 +2748,7 @@ class SimplicialComplex(ChainComplex):
     @classmethod
     def from_alpha_complex(
         cls,
-        points: np.ndarray,
+        points: Union[np.ndarray, "PointCloud"],
         alpha: float | None = None,
         *,
         max_alpha_square: Optional[float] = None,
@@ -2856,7 +2857,7 @@ class SimplicialComplex(ChainComplex):
     @classmethod
     def from_crust_algorithm(
         cls,
-        points: np.ndarray,
+        points: Union[np.ndarray, "PointCloud"],
         coefficient_ring: str = "Z",
         backend: str = "auto",
     ) -> "SimplicialComplex":
@@ -2981,7 +2982,7 @@ class SimplicialComplex(ChainComplex):
     @classmethod
     def from_delaunay_rips(
         cls,
-        points: np.ndarray,
+        points: Union[np.ndarray, "PointCloud"],
         threshold: float | None = None,
         max_dimension: int = 2,
         *,
@@ -3015,7 +3016,7 @@ class SimplicialComplex(ChainComplex):
     @classmethod
     def from_delaunay_cech(
         cls,
-        points: np.ndarray,
+        points: Union[np.ndarray, "PointCloud"],
         threshold: float | None = None,
         max_dimension: int = 2,
         *,
@@ -3049,7 +3050,7 @@ class SimplicialComplex(ChainComplex):
     @classmethod
     def from_witness(
         cls,
-        points: np.ndarray,
+        points: Union[np.ndarray, "PointCloud"],
         n_landmarks: int,
         alpha: float | None = None,
         *,
@@ -3164,7 +3165,7 @@ class SimplicialComplex(ChainComplex):
         """Return the mapping from simplices to their point cloud coordinates."""
         return self._simplices_to_point_cloud
 
-    def _generate_point_cloud_mappings(self, points: np.ndarray) -> None:
+    def _generate_point_cloud_mappings(self, points: Union[np.ndarray, "PointCloud"]) -> None:
         """Generate mappings between point cloud indices/coordinates and simplices.
 
         Args:

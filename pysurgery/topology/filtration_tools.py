@@ -24,7 +24,11 @@ import hashlib
 import warnings
 import numpy as np
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pysurgery.geometry.point_cloud import PointCloud
+
 
 
 def _format_padded_table(rows: List[List[str]]) -> str:
@@ -89,7 +93,7 @@ class _BaseFiltrationReport:
 
     def __init__(
         self,
-        points: np.ndarray,
+        points: Union[np.ndarray, "PointCloud"],
         epsilons: Optional[List[float]] = None,
         max_dimension: int = 2,
         coefficient_ring: str = "Z",
@@ -190,7 +194,7 @@ class _BaseFiltrationReport:
         return np.random.default_rng(seed).choice(n, size=cap, replace=False)
 
     @classmethod
-    def _estimate_eps_max(cls, points: np.ndarray, factor: float = 1.2,
+    def _estimate_eps_max(cls, points: Union[np.ndarray, "PointCloud"], factor: float = 1.2,
                           k: Optional[int] = None, quantile: float = 0.95) -> float:
         """Local k-NN scale: high-quantile distance to the k-th nearest neighbour.
 
@@ -1166,7 +1170,7 @@ class _BaseFiltrationReport:
         return np.random.default_rng(0).standard_normal((12, 3))
 
     @classmethod
-    def warmup(cls, points: Optional[np.ndarray] = None) -> bool:
+    def warmup(cls, points: Optional[Union[np.ndarray, "PointCloud"]] = None) -> bool:
         """Run the full report path on a tiny complex to compile/JIT everything.
 
         Failures are non-fatal (warned), so warming one report type never blocks
@@ -1572,7 +1576,7 @@ _MODE_TO_CLASS = {
 
 
 def FiltrationReport(
-    points: np.ndarray,
+    points: Union[np.ndarray, "PointCloud"],
     epsilons: Optional[List[float]] = None,
     max_dimension: int = 2,
     coefficient_ring: str = "Z",
@@ -1626,7 +1630,7 @@ def FiltrationReport(
     )
 
 
-def warm_all(points: Optional[np.ndarray] = None) -> Dict[str, bool]:
+def warm_all(points: Optional[Union[np.ndarray, "PointCloud"]] = None) -> Dict[str, bool]:
     """Warm up every filtration report type on a tiny complex (best-effort).
 
     Exercises the full Python+Julia path for each method so the first real report
