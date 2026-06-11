@@ -807,3 +807,46 @@ class PointCloud:
         new_points = c + diff * scale[:, np.newaxis]
         self._update_parent(new_points)
         return PointCloud(new_points, parent=self._parent)
+
+    def __getitem__(self, key: Any) -> np.ndarray:
+        """Allows slicing and indexing the point cloud coordinates directly."""
+        return self.points[key]
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        """Allows setting coordinate values directly, updating the parent complex in sync."""
+        self.points[key] = value
+        self._update_parent(self.points)
+
+    def __len__(self) -> int:
+        """Returns the number of points (size along the first dimension)."""
+        return len(self.points)
+
+    def __iter__(self) -> Any:
+        """Allows iterating over the points in the cloud."""
+        return iter(self.points)
+
+    def __array__(self, dtype: Optional[Any] = None, copy: Optional[bool] = None) -> np.ndarray:
+        """NumPy array interface protocol to allow seamless conversion to numpy arrays."""
+        if dtype is not None:
+            return np.asarray(self.points, dtype=dtype)
+        return np.asarray(self.points)
+
+    def __repr__(self) -> str:
+        """String representation of the PointCloud."""
+        return f"PointCloud(num_points={self.num_points}, dimension={self.dimension})"
+
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        """Returns the shape of the point cloud array."""
+        return self.points.shape
+
+    @property
+    def ndim(self) -> int:
+        """Returns the number of dimensions of the point cloud array (always 2)."""
+        return self.points.ndim
+
+    @property
+    def dtype(self) -> np.dtype:
+        """Returns the data type of the coordinates."""
+        return self.points.dtype
+

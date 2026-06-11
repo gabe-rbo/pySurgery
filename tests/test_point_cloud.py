@@ -339,3 +339,34 @@ def test_spherize():
         [[avg_rad, 0.0], [-avg_rad, 0.0], [0.0, avg_rad]],
         atol=1e-7
     )
+
+def test_array_protocols():
+    pts = np.array([
+        [1.0, 2.0],
+        [3.0, 4.0]
+    ])
+    pc = PointCloud(pts)
+
+    # 1. Test slicing/indexing (__getitem__)
+    np.testing.assert_allclose(pc[0], [1.0, 2.0])
+    np.testing.assert_allclose(pc[:, 0], [1.0, 3.0])
+
+    # 2. Test direct mutation (__setitem__)
+    pc[0, 1] = 99.0
+    np.testing.assert_allclose(pc.points[0, 1], 99.0)
+
+    # 3. Test shape, ndim, dtype
+    assert pc.shape == (2, 2)
+    assert pc.ndim == 2
+    assert pc.dtype == np.float64
+
+    # 4. Test len and iteration
+    assert len(pc) == 2
+    pts_list = list(pc)
+    np.testing.assert_allclose(pts_list[0], [1.0, 99.0])
+
+    # 5. Test np.asarray (__array__)
+    arr = np.asarray(pc)
+    assert isinstance(arr, np.ndarray)
+    np.testing.assert_allclose(arr, pc.points)
+
