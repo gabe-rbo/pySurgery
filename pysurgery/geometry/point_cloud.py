@@ -454,6 +454,18 @@ class PointCloud:
                     inv_points[:, axis] = resolved_anchor_pt[axis] + (r - y_unbent) * np.sin(theta)
                     inv_points[:, control_axis] = resolved_anchor_pt[control_axis] + r - (r - y_unbent) * np.cos(theta)
 
+            elif method == "open_cut":
+                anchor_pt = metadata["resolved_anchor_pt"]
+                delta = metadata["delta"]
+                axis = args["axis"]
+                control_axis = args["control_axis"]
+
+                X = inv_points[:, axis] - anchor_pt[axis]
+                Y = inv_points[:, control_axis] - anchor_pt[control_axis]
+                cosd, sind = np.cos(-delta), np.sin(-delta)
+                inv_points[:, axis]         = anchor_pt[axis]         + X*cosd - Y*sind
+                inv_points[:, control_axis] = anchor_pt[control_axis] + X*sind + Y*cosd
+
             elif method == "taper":
                 factor = args["factor"]
                 axis_arg = args.get("axis", None)
@@ -1520,6 +1532,125 @@ class PointCloud:
             metadata={"resolved_anchor_pt": anchor_pt, "theta_seam": theta_seam, "movable_mask": M}
         )
 
+    def open_cut(
+        self,
+        seam: Any,
+        width: float,
+        axis: int,
+        control_axis: int,
+        anchor: Optional[Union[str, np.ndarray, List[float], Tuple[float, ...]]] = None,
+        movable_blocks: Optional[Any] = None,
+        static_blocks: Optional[Any] = None
+    ) -> "PointCloud":
+        """Opens a surgical cut into a real geometric gap.
+
+        Mathematical Foundations:
+            A tube or ring cut at one meridian is parted into a real coordinate gap
+            without deleting points. This is done by rotating each point about the
+            anchor point in the (axis, control_axis) plane by a per-point angle.
+            The angle is maximal at the seam and tapers linearly to zero on the opposite side
+            of the ring.
+
+        Args:
+            seam (Any): The seam index, list/array of indices (the cut-lip vertices),
+                or a coordinate point of shape (D,).
+            width (float): The width of the gap to open (arc length).
+            axis (int): The first axis of the rotation plane.
+            control_axis (int): The second axis of the rotation plane.
+            anchor (Optional[Union[str, np.ndarray, List[float], Tuple[float, ...]]]): The anchor
+                point about which the opening is rotated.
+            movable_blocks (Optional[Any]): SpaceBlock or sequence of SpaceBlocks. Only points within will rotate.
+            static_blocks (Optional[Any]): SpaceBlock or sequence of SpaceBlocks. Points within will not rotate.
+
+        Returns:
+            PointCloud: The current PointCloud instance deformed in-place with the opened cut.
+
+        Raises:
+            ValueError: If axis indices are invalid, identical, or if the seam or anchor is invalid.
+        """
+        if axis < 0 or axis >= self.dimension or control_axis < 0 or control_axis >= self.dimension:
+            raise ValueError("Axis indices are out of bounds.")
+        if axis == control_axis:
+            raise ValueError("Bend axis and control axis must be distinct.")
+
+        M = self._get_movable_mask(movable_blocks, static_blocks)
+
+        if anchor is None or (isinstance(anchor, str) and anchor == "center"):
+            anchor_pt = self.center_of_mass
+        elif isinstance(anchor, str) and anchor in ("min", "max"):
+            anchor_pt = self.get_extreme_points(axis=axis, extreme=anchor)
+        elif isinstance(anchor, (np.ndarray, list, tuple)):
+            anchor_arr = np.asarray(anchor, dtype=float)
+            if anchor_arr.shape != (self.dimension,):
+                raise ValueError("Anchor shape must match dimension.")
+            anchor_pt = anchor_arr
+        else:
+            raise ValueError(f"Invalid anchor: {anchor}")
+
+        X = self.points[:, axis] - anchor_pt[axis]
+        Y = self.points[:, control_axis] - anchor_pt[control_axis]
+        alpha = np.arctan2(Y, X)
+
+        if isinstance(seam, (int, np.integer)):
+            indices = [int(seam)]
+        elif isinstance(seam, (list, np.ndarray)) and len(seam) > 0 and isinstance(seam[0], (int, np.integer)):
+            indices = [int(idx) for idx in seam]
+        elif isinstance(seam, np.ndarray) and np.issubdtype(seam.dtype, np.integer):
+            indices = [int(idx) for idx in seam]
+        else:
+            pt = np.asarray(seam, dtype=float)
+            if pt.ndim == 1 and pt.shape[0] == self.dimension:
+                indices = None
+                X_pt = pt[axis] - anchor_pt[axis]
+                Y_pt = pt[control_axis] - anchor_pt[control_axis]
+                alpha_seam = np.arctan2(Y_pt, X_pt)
+                R_ring = np.sqrt(X_pt**2 + Y_pt**2)
+            else:
+                raise ValueError("seam must be an index, list of indices, or a coordinate point of shape (D,).")
+
+        if indices is not None:
+            X_v = self.points[indices, axis] - anchor_pt[axis]
+            Y_v = self.points[indices, control_axis] - anchor_pt[control_axis]
+            alpha_v = np.arctan2(Y_v, X_v)
+            mean_cos = np.mean(np.cos(alpha_v))
+            mean_sin = np.mean(np.sin(alpha_v))
+            alpha_seam = np.arctan2(mean_sin, mean_cos)
+            R_ring = np.mean(np.sqrt(X_v**2 + Y_v**2))
+
+        if R_ring < 1e-9:
+            raise ValueError("R_ring is close to zero, cannot compute opening angle.")
+
+        beta = (alpha - alpha_seam + np.pi) % (2.0 * np.pi) - np.pi
+        open_angle = width / (2.0 * R_ring)
+        taper = np.clip(1.0 - np.abs(beta) / np.pi, 0.0, 1.0)
+        delta = np.sign(beta) * open_angle * taper
+        cosd, sind = np.cos(delta), np.sin(delta)
+
+        new_points = self.points.copy()
+        new_points[:, axis] = anchor_pt[axis] + X * cosd - Y * sind
+        new_points[:, control_axis] = anchor_pt[control_axis] + X * sind + Y * cosd
+
+        new_points = np.where(M[:, np.newaxis], new_points, self.points)
+
+        return self._create_deformed_pc(
+            new_points,
+            "open_cut",
+            args={
+                "seam": seam,
+                "width": width,
+                "axis": axis,
+                "control_axis": control_axis,
+                "anchor": anchor,
+                "movable_blocks": movable_blocks,
+                "static_blocks": static_blocks
+            },
+            metadata={
+                "resolved_anchor_pt": anchor_pt,
+                "delta": delta,
+                "movable_mask": M
+            }
+        )
+
     def taper(
         self,
         factor: float,
@@ -1884,6 +2015,9 @@ class PointCloud:
             elif method_name == "unbend":
                 if "curvature" in kwargs:
                     kwargs_t["curvature"] = t * kwargs["curvature"]
+            elif method_name == "open_cut":
+                if "width" in kwargs:
+                    kwargs_t["width"] = t * kwargs["width"]
             elif method_name == "taper":
                 if "factor" in kwargs:
                     kwargs_t["factor"] = t * kwargs["factor"]
@@ -1947,6 +2081,17 @@ class PointCloud:
         distances, _ = tree1.query(other_pts, k=1)
         return float(np.min(distances))
 
+    def isotopy_frames(self, actions: List[Tuple[str, Dict[str, Any]]], steps: int = 10) -> Any:
+        """actions: list of (method_name:str, kwargs:dict). Yields (stage_index, t, PointCloud)."""
+        cur = PointCloud(self.points.copy(), parent=None,
+                         history=self._history.copy(), original_points=self._original_points)
+        for k, (method_name, kwargs) in enumerate(actions):
+            for t, frame_pc in cur.frames(method_name, steps=steps, **kwargs):
+                if k > 0 and t == 0.0:        # skip the duplicate seam between stages
+                    continue
+                yield k, t, frame_pc
+            getattr(cur, method_name)(**kwargs)   # commit the stage in place
+
     def verify_isotopy_clearance(
         self,
         obstacle: Union["PointCloud", np.ndarray],
@@ -1974,23 +2119,169 @@ class PointCloud:
                 - min_distance (float): The actual minimum distance.
         """
         violations = []
-        current_pc = PointCloud(
-            self.points.copy(),
-            parent=None,
-            history=self._history.copy(),
-            original_points=self._original_points
-        )
-
-        for action_idx, (method_name, kwargs) in enumerate(actions):
-            for t, frame_pc in current_pc.frames(method_name, steps=steps_per_action, **kwargs):
-                if action_idx > 0 and t == 0.0:
-                    continue
-                
-                dist = frame_pc.min_distance_to(obstacle)
-                if dist < safety_margin:
-                    continuous_time = float(action_idx) + t
-                    violations.append((continuous_time, method_name, dist))
-            
-            getattr(current_pc, method_name)(**kwargs)
-
+        for k, t, frame_pc in self.isotopy_frames(actions, steps=steps_per_action):
+            dist = frame_pc.min_distance_to(obstacle)
+            if dist < safety_margin:
+                continuous_time = float(k) + t
+                violations.append((continuous_time, actions[k][0], dist))
         return violations
+
+    def guided_isotopy(
+        self,
+        obstacle: Union["PointCloud", np.ndarray],
+        straighten: Dict[str, Any],
+        *,
+        push_axis: int = 1,
+        lift_axis: int = 2,
+        max_push: float = 4.0,
+        max_lift: float = 6.0,
+        n_grid: int = 7,
+        steps: int = 12,
+        safety_margin: float = 0.3,
+        apply: bool = False
+    ) -> Tuple[Optional[List[Tuple[str, Dict[str, Any]]]], float]:
+        """Finds a collision-certified unlinking deformation plan around an obstacle.
+
+        Mathematical Foundations:
+            Searches over a 2D grid of translations (push and lift) to find an action sequence
+            that translates the point cloud clear of the obstacle and then straightens it.
+            The search space is parameterized by (push, lift) over the grid [0, max_push] x [0, max_lift].
+            For each grid point, we construct the following stage sequence:
+                1. Translate by `push` along `push_axis`.
+                2. Translate by `lift` along `lift_axis`.
+                3. Unbend (straighten) the tube about a resolved anchor following the translation.
+            These action sequences are validated using the `verify_isotopy_clearance` oracle.
+            Candidates are ordered from small translations to large translations so that the minimal
+            clearing route is preferred.
+
+        Args:
+            obstacle (Union[PointCloud, np.ndarray]): The obstacle coordinates or PointCloud.
+            straighten (Dict[str, Any]): A kwargs dict for `unbend` describing the final straightening,
+                but without `anchor` (this method will dynamically compute and fill the anchor).
+            push_axis (int): The coordinate axis index to push/translate along. Defaults to 1.
+            lift_axis (int): The coordinate axis index to lift/translate along. Defaults to 2.
+            max_push (float): The maximum translation distance along the push axis. Defaults to 4.0.
+            max_lift (float): The maximum translation distance along the lift axis. Defaults to 6.0.
+            n_grid (int): The grid resolution (n_grid x n_grid). Defaults to 7.
+            steps (int): The number of frame interpolation steps per action stage. Defaults to 12.
+            safety_margin (float): The safety distance margin to maintain from the obstacle. Defaults to 0.3.
+            apply (bool): If True, commits the chosen actions in order to self in-place. Defaults to False.
+
+        Returns:
+            Tuple[Optional[List[Tuple[str, Dict[str, Any]]]], float]:
+                - best_actions: The list of actions if a clearing plan is found, otherwise None.
+                - clearance: The best min distance clearance seen.
+
+        Raises:
+            ValueError: If axis indices are invalid.
+
+        Notes:
+            Known limitation: with a thin cut and all points kept, the bulk of the tube still drags
+            through the obstacle, so `guided_isotopy` may return None. The caller must first widen
+            the gap via `open_cut` (or accept a partial cut). A true thin-cut per-vertex peel is out
+            of scope for this addition.
+        """
+        if push_axis < 0 or push_axis >= self.dimension or lift_axis < 0 or lift_axis >= self.dimension:
+            raise ValueError("Push/lift axis indices are out of bounds.")
+        if push_axis == lift_axis:
+            raise ValueError("Push axis and lift axis must be distinct.")
+
+        # Generate the grid of push and lift values
+        pushes = np.linspace(0.0, max_push, n_grid)
+        lifts = np.linspace(0.0, max_lift, n_grid)
+        
+        grid_points = []
+        for push in pushes:
+            for lift in lifts:
+                grid_points.append((push, lift))
+        
+        # Sort grid points by magnitude of translation (Euclidean norm) to prefer minimal routes
+        grid_points.sort(key=lambda p: p[0]**2 + p[1]**2)
+
+        best_clearance = -1.0
+        best_actions = None
+        best_min_distance_seen = -1.0
+
+        def e(axis):
+            vec = np.zeros(self.dimension)
+            vec[axis] = 1.0
+            return vec
+
+        for push, lift in grid_points:
+            anchor = list(self.center_of_mass)
+            anchor[push_axis] += push
+            anchor[lift_axis] += lift - 1.0 / straighten["curvature"]
+            
+            actions = [
+                ("translate", {"translation_vector": (e(push_axis) * push).tolist()}),
+                ("translate", {"translation_vector": (e(lift_axis) * lift).tolist()}),
+                ("unbend",    {**straighten, "anchor": tuple(anchor)}),
+            ]
+            
+            # Query the oracle for all frames by setting safety_margin to infinity
+            v = self.verify_isotopy_clearance(obstacle, actions, steps_per_action=steps, safety_margin=float('inf'))
+            if v:
+                min_dist_path = min(item[2] for item in v)
+            else:
+                min_dist_path = 0.0
+                
+            if min_dist_path >= safety_margin:
+                if min_dist_path > best_clearance:
+                    best_clearance = min_dist_path
+                    best_actions = actions
+            else:
+                if min_dist_path > best_min_distance_seen:
+                    best_min_distance_seen = min_dist_path
+
+        if best_actions is not None:
+            if apply:
+                for method_name, kwargs in best_actions:
+                    getattr(self, method_name)(**kwargs)
+            return best_actions, best_clearance
+        else:
+            return None, best_min_distance_seen
+
+    def save_to_file(
+        self,
+        path: Union[str, Any],
+        file_format: Optional[str] = None,
+        separator: str = ",",
+        fmt: str = "%.18e",
+        **kwargs
+    ) -> None:
+        """Saves the current point cloud coordinates to a file.
+
+        Supports saving to text formats (like CSV/TXT) using `numpy.savetxt`, or binary formats
+        (NPY/NPZ) using `numpy.save` / `numpy.savez`.
+
+        Args:
+            path (Union[str, Path]): Path to the destination file.
+            file_format (Optional[str]): Explicit file format selector ('txt', 'csv', 'npy', 'npz').
+                If None, detects the format from the path extension.
+            separator (str): Separator/delimiter character for text formats. Defaults to ",".
+            fmt (str): Format string for text saving, used by `numpy.savetxt`. Defaults to "%.18e".
+            **kwargs: Additional keyword arguments passed to the underlying numpy save function.
+        """
+        from pathlib import Path
+        
+        filepath = Path(path)
+        if file_format is None:
+            ext = filepath.suffix.lower().lstrip(".")
+            if ext in ("txt", "csv", "npy", "npz"):
+                file_format = ext
+            else:
+                file_format = "csv"
+        else:
+            file_format = file_format.lower().lstrip(".")
+
+        if filepath.parent:
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        if file_format == "npy":
+            np.save(filepath, self.points, **kwargs)
+        elif file_format == "npz":
+            np.savez(filepath, points=self.points, **kwargs)
+        elif file_format in ("txt", "csv"):
+            np.savetxt(filepath, self.points, fmt=fmt, delimiter=separator, **kwargs)
+        else:
+            raise ValueError(f"Unsupported save format: {file_format}")

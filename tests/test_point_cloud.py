@@ -715,3 +715,29 @@ def test_point_cloud_collision_and_clearance():
     # The first violation should be during the first translate
     assert violations[0][1] == "translate"
     assert violations[0][2] < 1.0
+
+
+def test_point_cloud_save_to_file(tmp_path):
+    pts = np.array([
+        [1.0, 2.0],
+        [3.0, 4.0]
+    ])
+    pc = PointCloud(pts)
+
+    # Test CSV save
+    csv_file = tmp_path / "pc.csv"
+    pc.save_to_file(csv_file, separator=";")
+    loaded_csv = np.loadtxt(csv_file, delimiter=";")
+    np.testing.assert_allclose(loaded_csv, pts)
+
+    # Test NPY save
+    npy_file = tmp_path / "pc.npy"
+    pc.save_to_file(npy_file)
+    loaded_npy = np.load(npy_file)
+    np.testing.assert_allclose(loaded_npy, pts)
+
+    # Test NPZ save
+    npz_file = tmp_path / "pc.npz"
+    pc.save_to_file(npz_file)
+    with np.load(npz_file) as data:
+        np.testing.assert_allclose(data["points"], pts)
