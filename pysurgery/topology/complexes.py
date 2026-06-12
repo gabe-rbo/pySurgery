@@ -2315,6 +2315,7 @@ class SimplicialComplex(ChainComplex):
     _simplices_table: Dict[int, List[Tuple[int, ...]]] = PrivateAttr(default_factory=dict)
     _point_cloud_to_simplices: Dict[int, List[Tuple[int, ...]]] = PrivateAttr(default_factory=dict)
     _simplices_to_point_cloud: Dict[Tuple[int, ...], np.ndarray] = PrivateAttr(default_factory=dict)
+    _point_cloud_cache: Optional[Any] = PrivateAttr(default=None)
     coefficient_ring: str = "Z"
     filtration: Dict[Tuple[int, ...], float] = Field(default_factory=dict)
 
@@ -3149,8 +3150,13 @@ class SimplicialComplex(ChainComplex):
     def point_cloud(self) -> Optional["PointCloud"]:
         """Return the PointCloud wrapper for coordinates, if coordinates exist."""
         if hasattr(self, "_coordinates") and self._coordinates is not None:
+            if getattr(self, "_point_cloud_cache", None) is not None:
+                if self._point_cloud_cache.points is self._coordinates:
+                    return self._point_cloud_cache
             from ..geometry.point_cloud import PointCloud
-            return PointCloud(self._coordinates, parent=self)
+            pc = PointCloud(self._coordinates, parent=self)
+            self._point_cloud_cache = pc
+            return pc
         return None
 
     @point_cloud.setter
@@ -3160,15 +3166,18 @@ class SimplicialComplex(ChainComplex):
             self._coordinates = None
             self._point_cloud_to_simplices = {}
             self._simplices_to_point_cloud = {}
+            self._point_cloud_cache = None
         else:
             from ..geometry.point_cloud import PointCloud
             if isinstance(pc, PointCloud):
                 pts = pc.points
+                self._point_cloud_cache = pc
             else:
                 pts = np.asarray(pc, dtype=np.float64)
+                self._point_cloud_cache = PointCloud(pts, parent=self)
             self._coordinates = pts
             self._generate_point_cloud_mappings(pts)
-            self._link_point_cloud(pc)
+            self._link_point_cloud(self._point_cloud_cache)
 
     @property
     def point_cloud_to_simplices(self) -> Dict[int, List[Tuple[int, ...]]]:
@@ -3202,7 +3211,102 @@ class SimplicialComplex(ChainComplex):
         if isinstance(points, PointCloud):
             points._parent = self
 
+    def verify_transformation_collision(self, tol: float = 1e-8) -> List[Dict[str, Any]]:
+        """Verifies if any self-intersections (collisions) occurred during the transformation history.
+
+        This method walks through the sequential history of geometric deformations applied
+        to the linked PointCloud. At each step (including the initial undeformed state), it
+        recreates the coordinate realization, constructs a piecewise-linear map (PLMap),
+        and runs broad-phase/narrow-phase intersection detection to identify any overlaps
+        between non-adjacent simplices.
+
+        Algorithm & Mathematical Foundations:
+            1. Initializes a temporary, parent-less `PointCloud` using the `original_points`
+               coordinates of the linked point cloud.
+            2. For each state (Step 0 up to Step N):
+               - Constructs a PLMap f: |K| -> R^D using the active coordinates.
+               - Checks for self-intersections by running `detect_self_intersections(pl_map)`.
+                 An intersection is detected if the realizations of two non-adjacent simplices
+                 intersect in ambient space within the given numerical tolerance.
+               - If intersections are found, records details about the colliding simplices
+                 and the ambient coordinates of their vertices.
+               - Applies the next transformation in the history sequence to the coordinates.
+            3. Returns the log of all detected collisions.
+
+        Args:
+            tol (float): Numerical tolerance for intersection tests (distance below which
+                simplices are considered to overlap). Defaults to 1e-8.
+
+        Returns:
+            List[Dict[str, Any]]: A list of dictionaries representing steps where collisions
+            were detected. Each dictionary contains:
+                - "step" (int): The step index (0 for initial state, 1..N for transformations).
+                - "method" (str): The name of the transformation applied (or "initial_state").
+                - "args" (Dict[str, Any]): The arguments supplied to the transformation.
+                - "witnesses" (List[Dict[str, Any]]): Details of each collision witness, including:
+                    - "simplex_a" (Tuple[int, ...]): Vertices of the first simplex.
+                    - "simplex_b" (Tuple[int, ...]): Vertices of the second simplex.
+                    - "simplex_a_coordinates" (List[List[float]]): Ambient coordinates of simplex_a vertices.
+                    - "simplex_b_coordinates" (List[List[float]]): Ambient coordinates of simplex_b vertices.
+                    - "kind" (str): Intersection type (e.g. 'segment_segment').
+                    - "distance" (float): Minimum distance between the simplices.
+                    - "overlap_dimension" (int): Dimension of the intersection set.
+                    - "notes" (List[str]): Diagnostic notes.
+
+        Raises:
+            ValueError: If the simplicial complex does not have a linked PointCloud/coordinates.
+        """
+        pc = self.point_cloud
+        if pc is None:
+            raise ValueError("SimplicialComplex has no coordinates/PointCloud linked.")
+
+        history = pc._history
+        original_pts = pc._original_points
+
+        from ..geometry.point_cloud import PointCloud
+        from ..geometry.embedding import PLMap, detect_self_intersections
+
+        temp_pc = PointCloud(original_pts.copy(), original_points=original_pts)
+        collisions = []
+
+        def check_collisions(step_idx: int, method_name: str, args: Dict[str, Any]) -> None:
+            pl_map = PLMap.from_source(self, coordinates=temp_pc.points)
+            report = detect_self_intersections(pl_map, tol=tol)
+            if report.has_intersections:
+                witness_list = []
+                for w in report.witnesses:
+                    witness_list.append({
+                        "simplex_a": w.simplex_a,
+                        "simplex_b": w.simplex_b,
+                        "simplex_a_coordinates": temp_pc.points[list(w.simplex_a)].tolist(),
+                        "simplex_b_coordinates": temp_pc.points[list(w.simplex_b)].tolist(),
+                        "kind": w.kind,
+                        "distance": w.distance,
+                        "overlap_dimension": w.overlap_dimension,
+                        "notes": w.notes,
+                    })
+                collisions.append({
+                    "step": step_idx,
+                    "method": method_name,
+                    "args": args,
+                    "witnesses": witness_list,
+                })
+
+        # Check initial state (Step 0)
+        check_collisions(step_idx=0, method_name="initial_state", args={})
+
+        # Apply transformations sequentially and check each step
+        for i, entry in enumerate(history):
+            method_name = entry["method"]
+            args = entry["args"]
+            method = getattr(temp_pc, method_name)
+            method(**args)
+            check_collisions(step_idx=i + 1, method_name=method_name, args=args)
+
+        return collisions
+
     @classmethod
+
     def concatenate(cls, complexes: Iterable["SimplicialComplex"]) -> "SimplicialComplex":
         """Concatenate multiple simplicial complexes (simplex trees) into a single larger complex.
 

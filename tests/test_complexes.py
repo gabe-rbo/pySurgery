@@ -667,3 +667,49 @@ def test_simplicial_complex_from_distance_matrix():
     if julia_engine.available:
         sc_jl = SimplicialComplex.from_distance_matrix(dist_mat, epsilon=1.1, max_dimension=2, backend="julia")
         assert sc_jl.count_simplices(2) == 1
+
+
+def test_simplicial_complex_verify_transformation_collision():
+    from pysurgery.geometry import SpaceBlock
+    from pysurgery.topology.complexes import SimplicialComplex
+
+    # 1. Create a simplicial complex representing two parallel, disjoint edges
+    pts = np.array([
+        [0.0, 0.0],  # vertex 0
+        [2.0, 0.0],  # vertex 1
+        [0.0, 1.0],  # vertex 2
+        [2.0, 1.0]   # vertex 3
+    ])
+    sc = SimplicialComplex.from_maximal_simplices([(0, 1), (2, 3)])
+    sc.point_cloud = pts
+
+    # Initial state (Step 0) has no collisions
+    collisions_init = sc.verify_transformation_collision()
+    assert len(collisions_init) == 0
+
+    # 2. Deform: shift vertex 2 down by Y=-2.0 so that the edges cross
+    # Define a SpaceBlock containing vertex 2 only
+    sb = SpaceBlock([-0.1, 0.9], [0.1, 1.1])
+    sc.point_cloud.translate([0.0, -2.0], movable_blocks=sb)
+
+    # Now verify collisions
+    collisions = sc.verify_transformation_collision()
+    
+    # Step 1 should contain a collision
+    assert len(collisions) == 1
+    report = collisions[0]
+    assert report["step"] == 1
+    assert report["method"] == "translate"
+    assert len(report["witnesses"]) == 1
+    
+    witness = report["witnesses"][0]
+    # The two edges (0, 1) and (2, 3) collided
+    assert set(witness["simplex_a"]) == {0, 1}
+    assert set(witness["simplex_b"]) == {2, 3}
+    assert witness["kind"] == "segment_segment"
+    
+    # Verify coordinate values of simplex A
+    np.testing.assert_allclose(witness["simplex_a_coordinates"], [[0.0, 0.0], [2.0, 0.0]])
+    # Vertex 2 coordinates were shifted to [0.0, -1.0], vertex 3 remained at [2.0, 1.0]
+    np.testing.assert_allclose(witness["simplex_b_coordinates"], [[0.0, -1.0], [2.0, 1.0]])
+

@@ -415,6 +415,7 @@ class PointCloud:
                 axis = args.get("axis", 0)
                 control_axis = args.get("control_axis", 1)
                 resolved_anchor_pt = metadata["resolved_anchor_pt"]
+                theta_seam = metadata.get("theta_seam", np.pi)
 
                 X = inv_points[:, axis] - resolved_anchor_pt[axis]
                 Y = inv_points[:, control_axis] - resolved_anchor_pt[control_axis]
@@ -427,7 +428,8 @@ class PointCloud:
                     sign_c = np.sign(curvature)
                     theta = np.arctan2(X * sign_c, (r - Y) * sign_c)
                     d = np.sqrt(X**2 + (r - Y)**2)
-                    x_unbent = theta / curvature
+                    theta_shifted = (theta - theta_seam) % (2 * np.pi) - np.pi
+                    x_unbent = theta_shifted / curvature
                     y_unbent = r - sign_c * d
 
                     inv_points[:, axis] = resolved_anchor_pt[axis] + x_unbent
@@ -438,6 +440,7 @@ class PointCloud:
                 axis = args["axis"]
                 control_axis = args["control_axis"]
                 resolved_anchor_pt = metadata["resolved_anchor_pt"]
+                theta_seam = metadata.get("theta_seam", np.pi)
 
                 x_unbent = inv_points[:, axis] - resolved_anchor_pt[axis]
                 y_unbent = inv_points[:, control_axis] - resolved_anchor_pt[control_axis]
@@ -447,7 +450,7 @@ class PointCloud:
                     inv_points[:, control_axis] = resolved_anchor_pt[control_axis] + y_unbent + 0.5 * curvature * (x_unbent**2)
                 else:
                     r = 1.0 / curvature
-                    theta = curvature * x_unbent
+                    theta = curvature * x_unbent + theta_seam + np.pi
                     inv_points[:, axis] = resolved_anchor_pt[axis] + (r - y_unbent) * np.sin(theta)
                     inv_points[:, control_axis] = resolved_anchor_pt[control_axis] + r - (r - y_unbent) * np.cos(theta)
 
@@ -1269,6 +1272,7 @@ class PointCloud:
         axis: int = 0,
         control_axis: int = 1,
         anchor: Optional[Union[str, np.ndarray, List[float], Tuple[float, ...]]] = None,
+        open_at: Optional[Union[int, List[int], np.ndarray]] = None,
         movable_blocks: Optional[Any] = None,
         static_blocks: Optional[Any] = None
     ) -> "PointCloud":
@@ -1280,11 +1284,12 @@ class PointCloud:
             1. Non-zero Curvature (|curvature| >= 1e-8):
                The transformation wraps the `axis` coordinate into a circular arc of radius `R = 1 / curvature`.
                - The angle of wrap is theta = curvature * x.
+               - If open_at is provided, a theta_seam shift is applied: theta = curvature * x + theta_seam.
                - The new coordinates relative to the anchor are:
                  p'_{i, axis} = p_{anchor, axis} + (R - y) * sin(theta)
                  p'_{i, control_axis} = p_{anchor, control_axis} + R - (R - y) * cos(theta)
                - The inverse transformation (mathematical unbending) is:
-                 x = theta / curvature
+                 x = (theta - theta_seam) / curvature
                  y = R - sign(curvature) * sqrt(x'^2 + (R - y')^2)
                  where x' = p'_{i, axis} - p_{anchor, axis}, y' = p'_{i, control_axis} - p_{anchor, control_axis},
                  and theta = arctan2(x' * sign_c, (R - y') * sign_c) with sign_c = sign(curvature).
@@ -1309,6 +1314,9 @@ class PointCloud:
                 - "min": Uses the extreme point minimizing the bending axis coordinate.
                 - "max": Uses the extreme point maximizing the bending axis coordinate.
                 - Array-like of shape (D,): A custom coordinate point.
+            open_at (Optional[Union[int, List[int], np.ndarray]]): Optional seam / cut reference to align.
+                In bend(), this must be a coordinate point or direction of shape (D,) representing
+                where the seam meets on the target circle/torus.
             movable_blocks (Optional[Any]): SpaceBlock or sequence of SpaceBlocks. Only points within will bend.
             static_blocks (Optional[Any]): SpaceBlock or sequence of SpaceBlocks. Points within will not bend.
 
@@ -1316,7 +1324,7 @@ class PointCloud:
             PointCloud: A new PointCloud containing the bent coordinates.
 
         Raises:
-            ValueError: If axis indices are invalid or identical, or if the anchor is invalid.
+            ValueError: If axis indices are invalid or identical, or if the anchor or open_at is invalid.
         """
         if axis < 0 or axis >= self.dimension or control_axis < 0 or control_axis >= self.dimension:
             raise ValueError("Axis indices are out of bounds.")
@@ -1341,13 +1349,29 @@ class PointCloud:
         y = self.points[:, control_axis] - anchor_pt[control_axis]
 
         new_points = self.points.copy()
+        theta_seam = np.pi
 
         if np.abs(curvature) < 1e-8:
             new_points[:, axis] = anchor_pt[axis] + x - curvature * x * y
             new_points[:, control_axis] = anchor_pt[control_axis] + y + 0.5 * curvature * (x**2)
         else:
             r = 1.0 / curvature
-            theta = curvature * x
+            if open_at is not None:
+                # In bend, starting coordinates are straight, so we cannot resolve indices.
+                # It must be a coordinate point or direction of shape (D,).
+                if isinstance(open_at, (int, np.integer, list, np.ndarray)) and not isinstance(open_at, np.ndarray) and not (isinstance(open_at, (list, np.ndarray)) and isinstance(open_at[0], (float, np.floating))):
+                    raise ValueError("Indices cannot be used for open_at in bend() directly, as starting coordinates are straight. Use a coordinate point or direction.")
+                else:
+                    pt = np.asarray(open_at, dtype=float)
+                    if pt.ndim == 1 and pt.shape[0] == self.dimension:
+                        X_pt = pt[axis] - anchor_pt[axis]
+                        Y_pt = pt[control_axis] - anchor_pt[control_axis]
+                        sign_c = np.sign(curvature)
+                        theta_seam = np.arctan2(X_pt * sign_c, (r - Y_pt) * sign_c)
+                    else:
+                        raise ValueError("open_at in bend must be a coordinate point of shape (D,).")
+            
+            theta = curvature * x + theta_seam + np.pi
             new_points[:, axis] = anchor_pt[axis] + (r - y) * np.sin(theta)
             new_points[:, control_axis] = anchor_pt[control_axis] + r - (r - y) * np.cos(theta)
 
@@ -1355,8 +1379,8 @@ class PointCloud:
         return self._create_deformed_pc(
             new_points,
             "bend",
-            args={"curvature": curvature, "axis": axis, "control_axis": control_axis, "anchor": anchor, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
-            metadata={"resolved_anchor_pt": anchor_pt, "movable_mask": M}
+            args={"curvature": curvature, "axis": axis, "control_axis": control_axis, "anchor": anchor, "open_at": open_at, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"resolved_anchor_pt": anchor_pt, "theta_seam": theta_seam, "movable_mask": M}
         )
 
     def unbend(
@@ -1365,6 +1389,7 @@ class PointCloud:
         axis: int,
         control_axis: int,
         anchor: Optional[Union[str, np.ndarray, List[float], Tuple[float, ...]]] = None,
+        open_at: Optional[Union[int, List[int], np.ndarray]] = None,
         movable_blocks: Optional[Any] = None,
         static_blocks: Optional[Any] = None
     ) -> "PointCloud":
@@ -1376,13 +1401,15 @@ class PointCloud:
             1. Non-zero Curvature (|curvature| >= 1e-8):
                Straightens points that lie on an arc of radius `R = 1 / curvature` centered at `(0, R)`.
                - The wrap angle is theta = arctan2(X * sign_c, (R - Y) * sign_c), where sign_c = sign(curvature).
+               - If open_at is specified, shift the wrap angle so that the seam maps to +/-pi:
+                 theta_shifted = (theta - theta_seam) % (2 * pi) - pi
                - The distance from the center of curvature is d = sqrt(X^2 + (R - Y)^2).
                - The straightened coordinates are:
-                 p'_{i, axis} = p_{anchor, axis} + theta / curvature
+                 p'_{i, axis} = p_{anchor, axis} + theta_shifted / curvature
                  p'_{i, control_axis} = p_{anchor, control_axis} + R - sign_c * d
                - The inverse transformation (re-bending, used by `revert`) is:
-                 X = (R - y') * sin(k * x')
-                 Y = R - (R - y') * cos(k * x')
+                 X = (R - y') * sin(k * x' + theta_seam)
+                 Y = R - (R - y') * cos(k * x' + theta_seam)
                  where x' = p'_{i, axis} - p_{anchor, axis}, y' = p'_{i, control_axis} - p_{anchor, control_axis}, and k = curvature.
 
             2. Zero or Near-Zero Curvature (|curvature| < 1e-8):
@@ -1404,6 +1431,10 @@ class PointCloud:
                 - "min": Uses the extreme point minimizing the axis coordinate.
                 - "max": Uses the extreme point maximizing the axis coordinate.
                 - Array-like of shape (D,): A custom coordinate point.
+            open_at (Optional[Union[int, List[int], np.ndarray]]): Optional seam / cut reference to align.
+                In unbend(), this can be:
+                - An integer index, or list/array of integer indices of vertices representing the seam.
+                - A coordinate point of shape (D,) representing the seam location.
             movable_blocks (Optional[Any]): SpaceBlock or sequence of SpaceBlocks. Only points within will unbend.
             static_blocks (Optional[Any]): SpaceBlock or sequence of SpaceBlocks. Points within will not unbend.
 
@@ -1411,7 +1442,7 @@ class PointCloud:
             PointCloud: A new PointCloud containing the unbent coordinates.
 
         Raises:
-            ValueError: If axis indices are invalid or identical, or if the anchor is invalid.
+            ValueError: If axis indices are invalid or identical, or if the anchor or open_at is invalid.
         """
         if axis < 0 or axis >= self.dimension or control_axis < 0 or control_axis >= self.dimension:
             raise ValueError("Axis indices are out of bounds.")
@@ -1436,6 +1467,7 @@ class PointCloud:
         Y = self.points[:, control_axis] - anchor_pt[control_axis]
 
         new_points = self.points.copy()
+        theta_seam = np.pi
 
         if np.abs(curvature) < 1e-8:
             new_points[:, axis] = anchor_pt[axis] + X + curvature * X * Y
@@ -1445,7 +1477,36 @@ class PointCloud:
             sign_c = np.sign(curvature)
             theta = np.arctan2(X * sign_c, (r - Y) * sign_c)
             d = np.sqrt(X**2 + (r - Y)**2)
-            x = theta / curvature
+
+            if open_at is not None:
+                # Determine theta_seam
+                if isinstance(open_at, (int, np.integer)):
+                    indices = [int(open_at)]
+                elif isinstance(open_at, (list, np.ndarray)) and len(open_at) > 0 and isinstance(open_at[0], (int, np.integer, int)):
+                    indices = [int(idx) for idx in open_at]
+                elif isinstance(open_at, np.ndarray) and np.issubdtype(open_at.dtype, np.integer):
+                    indices = [int(idx) for idx in open_at]
+                else:
+                    # Treat as coordinate point
+                    pt = np.asarray(open_at, dtype=float)
+                    if pt.ndim == 1 and pt.shape[0] == self.dimension:
+                        indices = None
+                        X_pt = pt[axis] - anchor_pt[axis]
+                        Y_pt = pt[control_axis] - anchor_pt[control_axis]
+                        theta_seam = np.arctan2(X_pt * sign_c, (r - Y_pt) * sign_c)
+                    else:
+                        raise ValueError("open_at must be an index, list of indices, or a coordinate point of shape (D,).")
+                
+                if indices is not None:
+                    X_v = self.points[indices, axis] - anchor_pt[axis]
+                    Y_v = self.points[indices, control_axis] - anchor_pt[control_axis]
+                    theta_v = np.arctan2(X_v * sign_c, (r - Y_v) * sign_c)
+                    mean_cos = np.mean(np.cos(theta_v))
+                    mean_sin = np.mean(np.sin(theta_v))
+                    theta_seam = np.arctan2(mean_sin, mean_cos)
+            
+            theta_shifted = (theta - theta_seam) % (2 * np.pi) - np.pi
+            x = theta_shifted / curvature
             y = r - sign_c * d
 
             new_points[:, axis] = anchor_pt[axis] + x
@@ -1455,8 +1516,8 @@ class PointCloud:
         return self._create_deformed_pc(
             new_points,
             "unbend",
-            args={"curvature": curvature, "axis": axis, "control_axis": control_axis, "anchor": anchor, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
-            metadata={"resolved_anchor_pt": anchor_pt, "movable_mask": M}
+            args={"curvature": curvature, "axis": axis, "control_axis": control_axis, "anchor": anchor, "open_at": open_at, "movable_blocks": movable_blocks, "static_blocks": static_blocks},
+            metadata={"resolved_anchor_pt": anchor_pt, "theta_seam": theta_seam, "movable_mask": M}
         )
 
     def taper(
@@ -1766,3 +1827,170 @@ class PointCloud:
             np.dtype: The coordinate data type.
         """
         return self.points.dtype
+
+    def frames(
+        self,
+        method_name: str,
+        steps: int = 10,
+        **kwargs
+    ) -> Any:
+        """Generates intermediate PointCloud frames representing the deformation homotopy.
+
+        For each step, this method yields the interpolation parameter `t` (from 0.0 to 1.0)
+        and a new, isolated PointCloud representing the state of the deformation at that step.
+
+        Args:
+            method_name (str): The name of the deformation method (e.g. 'rotate', 'unbend').
+            steps (int): The number of intermediate steps. Defaults to 10.
+            **kwargs: Arguments to be passed to the deformation method.
+
+        Yields:
+            Tuple[float, PointCloud]: A tuple of the interpolation parameter t and the PointCloud frame.
+        """
+        # Determine the initial state (t = 0.0)
+        yield 0.0, PointCloud(
+            self.points.copy(),
+            parent=None,
+            history=self._history.copy(),
+            original_points=self._original_points
+        )
+
+        for i in range(1, steps + 1):
+            t = float(i) / steps
+            frame_pc = PointCloud(
+                self.points.copy(),
+                parent=None,
+                history=self._history.copy(),
+                original_points=self._original_points
+            )
+
+            kwargs_t = kwargs.copy()
+            if method_name == "translate":
+                if "translation_vector" in kwargs:
+                    v = np.asarray(kwargs["translation_vector"], dtype=float)
+                    kwargs_t["translation_vector"] = (t * v).tolist()
+            elif method_name == "rotate":
+                if "angle" in kwargs:
+                    kwargs_t["angle"] = t * kwargs["angle"]
+            elif method_name == "shear":
+                if "factor" in kwargs:
+                    kwargs_t["factor"] = t * kwargs["factor"]
+            elif method_name == "twist":
+                if "rate" in kwargs:
+                    kwargs_t["rate"] = t * kwargs["rate"]
+            elif method_name == "bend":
+                if "curvature" in kwargs:
+                    kwargs_t["curvature"] = t * kwargs["curvature"]
+            elif method_name == "unbend":
+                if "curvature" in kwargs:
+                    kwargs_t["curvature"] = t * kwargs["curvature"]
+            elif method_name == "taper":
+                if "factor" in kwargs:
+                    kwargs_t["factor"] = t * kwargs["factor"]
+            elif method_name == "spherize":
+                if "factor" in kwargs:
+                    kwargs_t["factor"] = t * kwargs["factor"]
+            elif method_name == "radial_scale":
+                if "factor" in kwargs:
+                    kwargs_t["factor"] = 1.0 + t * (kwargs["factor"] - 1.0)
+            elif method_name == "scale_to_diameter":
+                if "diameter" in kwargs:
+                    axis_arg = kwargs.get("axis", None)
+                    control_axis = kwargs.get("control_axis", 2)
+                    if axis_arg is None:
+                        axes = [d for d in range(self.dimension) if d != control_axis]
+                    elif isinstance(axis_arg, int):
+                        axes = [axis_arg]
+                    else:
+                        axes = list(axis_arg)
+                    min_coords = np.min(self.points[:, axes], axis=0)
+                    max_coords = np.max(self.points[:, axes], axis=0)
+                    current_diameter = float(np.max(max_coords - min_coords))
+                    target_diameter = float(kwargs["diameter"])
+                    kwargs_t["diameter"] = current_diameter + t * (target_diameter - current_diameter)
+            elif method_name == "apply_mapping":
+                final_pc = PointCloud(
+                    self.points.copy(),
+                    parent=None,
+                    history=self._history.copy(),
+                    original_points=self._original_points
+                )
+                final_pc.apply_mapping(**kwargs)
+                frame_pc.points = (1.0 - t) * self.points + t * final_pc.points
+                yield t, frame_pc
+                continue
+
+            # Run the method with interpolated arguments
+            method = getattr(frame_pc, method_name)
+            method(**kwargs_t)
+            yield t, frame_pc
+
+    def min_distance_to(self, other: Union["PointCloud", np.ndarray]) -> float:
+        """Computes the minimum Euclidean distance between this point cloud and another point cloud.
+
+        This method uses a KD-Tree to efficiently query the minimum pairwise distance between
+        the coordinate points.
+
+        Args:
+            other (Union[PointCloud, np.ndarray]): The other point cloud or array of coordinates.
+
+        Returns:
+            float: The minimum distance between any point in self and any point in other.
+        """
+        from scipy.spatial import cKDTree
+        if isinstance(other, PointCloud):
+            other_pts = other.points
+        else:
+            other_pts = np.asarray(other, dtype=float)
+
+        tree1 = cKDTree(self.points)
+        distances, _ = tree1.query(other_pts, k=1)
+        return float(np.min(distances))
+
+    def verify_isotopy_clearance(
+        self,
+        obstacle: Union["PointCloud", np.ndarray],
+        actions: List[Tuple[str, Dict[str, Any]]],
+        steps_per_action: int = 10,
+        safety_margin: float = 0.0
+    ) -> List[Tuple[float, str, float]]:
+        """Verifies if a composed sequence of actions keeps the point cloud clear of an obstacle.
+
+        This method steps through the frames of each action sequentially. At each frame,
+        it calculates the minimum distance between the current frame's coordinates and the
+        obstacle coordinates.
+
+        Args:
+            obstacle (Union[PointCloud, np.ndarray]): The obstacle point cloud or coordinates.
+            actions (List[Tuple[str, Dict[str, Any]]]): A list of tuples, where each tuple contains
+                the method name (str) and a dictionary of keyword arguments.
+            steps_per_action (int): The number of frames to interpolate for each action.
+            safety_margin (float): The minimum distance that must be maintained.
+
+        Returns:
+            List[Tuple[float, str, float]]: A list of violations, where each violation is a tuple:
+                - time (float): The continuous time parameter (action_index + t).
+                - action_name (str): The name of the action being performed.
+                - min_distance (float): The actual minimum distance.
+        """
+        violations = []
+        current_pc = PointCloud(
+            self.points.copy(),
+            parent=None,
+            history=self._history.copy(),
+            original_points=self._original_points
+        )
+
+        for action_idx, (method_name, kwargs) in enumerate(actions):
+            for t, frame_pc in current_pc.frames(method_name, steps=steps_per_action, **kwargs):
+                if action_idx > 0 and t == 0.0:
+                    continue
+                
+                dist = frame_pc.min_distance_to(obstacle)
+                if dist < safety_margin:
+                    continuous_time = float(action_idx) + t
+                    violations.append((continuous_time, method_name, dist))
+            
+            getattr(current_pc, method_name)(**kwargs)
+
+        return violations

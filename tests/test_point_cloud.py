@@ -632,11 +632,8 @@ def test_point_cloud_space_blocks():
     )
     pc_reverted = pc_revert_test.revert()
     np.testing.assert_allclose(pc_reverted.points, pts_def)
-
-
     pc_undone = pc_trans.undo()
     np.testing.assert_allclose(pc_undone.points, pts_def)
-
 
     # Test static_blocks
     pc_static = pc_def.translate([10.0, 10.0], static_blocks=top_right_block)
@@ -644,5 +641,77 @@ def test_point_cloud_space_blocks():
     np.testing.assert_allclose(pc_static.revert().points, pts_def)
 
 
+def test_point_cloud_seam_alignment():
+    # 8 points on a circle of radius 1 centered at (0, 1)
+    # The center of curvature for curvature=1.0 at anchor=(0, 0) is (0, 1)
+    angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
+    pts = np.column_stack([np.sin(angles), 1.0 - np.cos(angles)])
+    pc = PointCloud(pts)
+
+    # Let's open at index 2 (angle = pi/2, coordinates approx [1.0, 1.0])
+    # The seam is at angle = pi/2
+    unbent = pc.unbend(curvature=1.0, axis=0, control_axis=1, anchor=(0, 0), open_at=2)
+    
+    # After unbending, the seam vertex (index 2) should land at the boundary (-pi or pi)
+    x_seam = unbent.points[2, 0]
+    # Check if x_seam is close to -pi or pi
+    assert np.isclose(np.abs(x_seam), np.pi)
+
+    # Revert should return to the original circle coordinates
+    reverted = unbent.revert()
+    np.testing.assert_allclose(reverted.points, pts, atol=1e-8)
+
+    # Undo should also return to original coordinates
+    unbent2 = pc.unbend(curvature=1.0, axis=0, control_axis=1, anchor=(0, 0), open_at=2)
+    undone = unbent2.undo()
+    np.testing.assert_allclose(undone.points, pts, atol=1e-8)
+
+    # Test open_at with a coordinate point
+    seam_pt = np.array([1.0, 1.0])
+    unbent_pt = pc.unbend(curvature=1.0, axis=0, control_axis=1, anchor=(0, 0), open_at=seam_pt)
+    assert np.isclose(np.abs(unbent_pt.points[2, 0]), np.pi)
+    np.testing.assert_allclose(unbent_pt.revert().points, pts, atol=1e-8)
 
 
+def test_point_cloud_frames():
+    pts = np.array([[1.0, 2.0]])
+    pc = PointCloud(pts)
+
+    # Translate frames
+    frames_list = list(pc.frames("translate", steps=4, translation_vector=[4.0, 8.0]))
+    assert len(frames_list) == 5
+    
+    # Check intermediate steps
+    expected_t = [0.0, 0.25, 0.5, 0.75, 1.0]
+    for idx, (t, frame) in enumerate(frames_list):
+        assert np.isclose(t, expected_t[idx])
+        expected_pts = pts + t * np.array([4.0, 8.0])
+        np.testing.assert_allclose(frame.points, expected_pts)
+
+
+def test_point_cloud_collision_and_clearance():
+    pc1 = PointCloud(np.array([[0.0, 0.0]]))
+    pc2 = PointCloud(np.array([[3.0, 4.0]]))
+
+    # KD-Tree distance check
+    dist = pc1.min_distance_to(pc2)
+    assert np.isclose(dist, 5.0)
+
+    # clearance check with sequence of actions
+    actions = [
+        ("translate", {"translation_vector": [4.0, 0.0]}),
+        ("translate", {"translation_vector": [0.0, 3.0]})
+    ]
+    obstacle = PointCloud(np.array([[2.5, 0.0]]))
+
+    # Under safety margin 1.0, translating from 0.0 to 4.0 along X will cross
+    # the obstacle at X=2.5. Distance to obstacle is |X - 2.5|.
+    # At t=0.0 (X=0.0): dist = 2.5
+    # At t=0.5 (X=2.0): dist = 0.5 < 1.0 -> VIOLATION!
+    # At t=0.75 (X=3.0): dist = 0.5 < 1.0 -> VIOLATION!
+    # At t=1.0 (X=4.0): dist = 1.5
+    violations = pc1.verify_isotopy_clearance(obstacle, actions, steps_per_action=4, safety_margin=1.0)
+    assert len(violations) > 0
+    # The first violation should be during the first translate
+    assert violations[0][1] == "translate"
+    assert violations[0][2] < 1.0
