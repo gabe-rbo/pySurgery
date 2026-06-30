@@ -24,6 +24,40 @@ def __getattr__(name):
             infer_standard_group_descriptor,
         )
         return locals()[name]
+    if name == "Graph":
+        from .graphs import Graph  # noqa: F401
+        return Graph
+    if name in [
+        "FacePairing",
+        "FundamentalPolyhedron",
+        "construct_fundamental_polyhedron",
+        "FiniteGroupOrderResult",
+        "UniversalCoverResult",
+        "FiniteGroupRing",
+        "UniversalCover",
+        "Covering",
+        "DeckTransformationGroup",
+        "GroupAction",
+        "GraphCovering",
+        "cover_graph",
+        "graph_universal_cover",
+    ]:
+        from .coverings import (  # noqa: F401
+            FacePairing,
+            FundamentalPolyhedron,
+            construct_fundamental_polyhedron,
+            FiniteGroupOrderResult,
+            UniversalCoverResult,
+            FiniteGroupRing,
+            UniversalCover,
+            Covering,
+            DeckTransformationGroup,
+            GroupAction,
+            GraphCovering,
+            cover_graph,
+            graph_universal_cover,
+        )
+        return locals()[name]
     if name in [
         "Pi1Evidence",
         "GroupRingContext",
@@ -76,6 +110,20 @@ __all__ = [
     "extract_pi_1_with_traces",
     "simplify_presentation",
     "infer_standard_group_descriptor",
+    "Graph",
+    "FacePairing",
+    "FundamentalPolyhedron",
+    "construct_fundamental_polyhedron",
+    "FiniteGroupOrderResult",
+    "UniversalCoverResult",
+    "FiniteGroupRing",
+    "UniversalCover",
+    "Covering",
+    "DeckTransformationGroup",
+    "GroupAction",
+    "GraphCovering",
+    "cover_graph",
+    "graph_universal_cover",
     "Pi1Evidence",
     "GroupRingContext",
     "Phase2Readiness",

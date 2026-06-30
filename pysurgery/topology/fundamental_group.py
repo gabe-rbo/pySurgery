@@ -9,6 +9,7 @@ from pysurgery.topology.complexes import CWComplex
 from pysurgery.algebra.exact_algebra import normalize_word_token
 from pysurgery.core.exceptions import FundamentalGroupError
 from pysurgery.core.generator_models import Pi1GeneratorTrace, Pi1PresentationWithTraces
+from pysurgery.topology.graphs import bfs_spanning_forest, lca_tree_path
 from ..bridge.julia_bridge import julia_engine
 
 
@@ -672,6 +673,61 @@ class FundamentalGroup(BaseModel):
             "presentations."
         )
 
+    # ── covering spaces ───────────────────────────────────────────────────────
+
+    def universal_cover(self, base: "CWComplex", *, max_index: int = 10_000,
+                        max_order: int | None = None):
+        """Build the universal cover of ``base`` (which must present this group).
+
+        Thin bridge to :class:`pysurgery.topology.coverings.UniversalCover`.
+        Requires finite π₁ and a CW base of dimension ≤ 2 with a single 0-cell.
+
+        Args:
+            base: The ``CWComplex`` whose universal cover is built.
+            max_index: Todd-Coxeter coset-enumeration cap for the finiteness check.
+            max_order: Soft cap on ``|π₁|`` for the cover construction.
+
+        Returns:
+            A :class:`~pysurgery.topology.coverings.UniversalCover`.
+        """
+        from pysurgery.topology.coverings import UniversalCover
+
+        return UniversalCover(
+            base, self, max_index=max_index, max_order=max_order
+        )
+
+    def covering_from_permutation_rep(self, base: "CWComplex", rep: Dict[str, object]):
+        """Build a finite cover of ``base`` from a permutation action of this group.
+
+        Bridge to :meth:`pysurgery.topology.coverings.Covering.from_permutation_rep`.
+        ``rep`` maps each generator name to a permutation of the sheets.
+        """
+        from pysurgery.topology.coverings import Covering
+
+        return Covering.from_permutation_rep(base, rep)
+
+    def covering_from_subgroup(self, subgroup: List[List[str]], *,
+                              base: "CWComplex | None" = None,
+                              max_cosets: int = 1000):
+        """Build the cover for a finite-index subgroup ``H`` (given by generator words).
+
+        Bridge to :meth:`pysurgery.topology.coverings.Covering.from_subgroup`.
+        """
+        from pysurgery.topology.coverings import Covering
+
+        return Covering.from_subgroup(
+            self, subgroup, base=base, max_cosets=max_cosets
+        )
+
+    def as_deck_group(self, base: "CWComplex", *, max_index: int = 10_000):
+        """Deck transformation group of the universal cover of ``base`` (≅ this group).
+
+        Convenience wrapper returning the
+        :class:`~pysurgery.topology.coverings.DeckTransformationGroup` of
+        ``self.universal_cover(base)``.
+        """
+        return self.universal_cover(base, max_index=max_index).deck_group()
+
 
 def _inverse_word_token(tok: str) -> str:
     """Return the formal inverse of a normalized generator token.
@@ -1199,29 +1255,13 @@ class GroupPresentation(BaseModel):
 
 
 def _path_between_tree(u: int, v: int, parent: Dict[int, int], depth: Dict[int, int]) -> List[int]:
-    """Return the vertex path between u and v in a rooted spanning forest using O(depth) LCA."""
-    path_u: List[int] = []
-    path_v: List[int] = []
-    
-    curr_u, curr_v = u, v
-    
-    # Bring both nodes to the same depth
-    while depth[curr_u] > depth[curr_v]:
-        path_u.append(curr_u)
-        curr_u = parent[curr_u]
-    while depth[curr_v] > depth[curr_u]:
-        path_v.append(curr_v)
-        curr_v = parent[curr_v]
-        
-    # Move up until LCA is found
-    while curr_u != curr_v:
-        path_u.append(curr_u)
-        path_v.append(curr_v)
-        curr_u = parent[curr_u]
-        curr_v = parent[curr_v]
-        
-    path_u.append(curr_u) # Add the common ancestor
-    return path_u + list(reversed(path_v))
+    """Return the vertex path between u and v in a rooted spanning forest using O(depth) LCA.
+
+    Thin wrapper kept for backward compatibility; the implementation lives in
+    :func:`pysurgery.topology.graphs.lca_tree_path` so the spanning-tree logic is
+    defined in exactly one place.
+    """
+    return lca_tree_path(u, v, parent, depth)
 
 
 def _reconstruct_cycle_from_edges(
@@ -1357,13 +1397,7 @@ def _pi1_raw_data_python(cw: CWComplex, backend: str = "auto"):
             import warnings
             warnings.warn(f"Julia pi1_raw_data failed ({e!r}). Falling back to optimized Python.")
 
-    visited = [False] * n_vertices
-    tree_edges = set()
-    parent: Dict[int, int] = {}
-    depth: Dict[int, int] = {}
-    component_root: Dict[int, int] = {}
-
-    # Build adjacency
+    # Build adjacency: vertex -> list of (neighbor, edge_index, orientation)
     d1_csc = d1.tocsc()
     edge_list = []
     adj = collections.defaultdict(list)
@@ -1393,27 +1427,11 @@ def _pi1_raw_data_python(cw: CWComplex, backend: str = "auto"):
                 adj[v].append((v, e, 1))
             else:
                 edge_list.append(None)
-    
-    # Python BFS with depth tracking
-    for start in range(n_vertices):
-        if visited[start]:
-            continue
-        queue = collections.deque([(start, 0)])
-        visited[start] = True
-        parent[start] = -1
-        depth[start] = 0
-        component_root[start] = start
-        while queue:
-            curr, d = queue.popleft()
-            for neighbor, edge_idx, _ in adj[curr]:
-                if not visited[neighbor]:
-                    visited[neighbor] = True
-                    if curr != neighbor:
-                        tree_edges.add(edge_idx)
-                        parent[neighbor] = curr
-                        depth[neighbor] = d + 1
-                        component_root[neighbor] = start
-                        queue.append((neighbor, d + 1))
+
+    # Rooted BFS spanning forest (shared graph routine in topology.graphs).
+    tree_edges, parent, depth, component_root = bfs_spanning_forest(
+        range(n_vertices), adj
+    )
 
     raw_gen_map = {i: f"g_{i}" for i in range(n_edges) if i not in tree_edges and edge_list[i] is not None}
     

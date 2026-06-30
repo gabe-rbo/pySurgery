@@ -51,6 +51,22 @@ from .topology.fundamental_group import (
     simplify_presentation,
     infer_standard_group_descriptor,
 )
+from .topology.graphs import Graph
+from .topology.coverings import (
+    FacePairing,
+    FundamentalPolyhedron,
+    construct_fundamental_polyhedron,
+    FiniteGroupOrderResult,
+    UniversalCoverResult,
+    FiniteGroupRing,
+    UniversalCover,
+    Covering,
+    DeckTransformationGroup,
+    GroupAction,
+    GraphCovering,
+    cover_graph,
+    graph_universal_cover,
+)
 from .topology.pi1_group_ring_scaffold import (
     Pi1Evidence,
     GroupRingContext,
@@ -173,15 +189,11 @@ from .homology.homology_generators import (
 )
 from .homology.algebraic_poincare import AlgebraicPoincareComplex
 from .homology.controlled_cohomology import (
-    FiniteGroupOrderResult,
-    UniversalCoverResult,
     TwistedChainResult,
     ControlledCohomologyResult,
     TwistedIntersectionFormResult,
     TwistedObstructionResult,
-    FiniteGroupRing,
     TwistedRepresentation,
-    UniversalCover,
     TwistedChainComplex,
     compute_controlled_cohomology,
     compute_twisted_intersection_form,
@@ -316,7 +328,7 @@ from .auto_surgery import (
 
 from . import integrations
 
-__version__ = "2.2.8"
+__version__ = "2.3.0"
                                 
 def __getattr__(name):
     if name == "JuliaBridge":
@@ -406,6 +418,16 @@ __all__ = [
     "FiniteGroupRing",
     "TwistedRepresentation",
     "UniversalCover",
+    "Covering",
+    "DeckTransformationGroup",
+    "GroupAction",
+    "GraphCovering",
+    "FacePairing",
+    "FundamentalPolyhedron",
+    "construct_fundamental_polyhedron",
+    "cover_graph",
+    "graph_universal_cover",
+    "Graph",
     "TwistedChainComplex",
     "compute_controlled_cohomology",
     "compute_twisted_intersection_form",

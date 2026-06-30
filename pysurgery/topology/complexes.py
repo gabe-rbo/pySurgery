@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast, Lite
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 if TYPE_CHECKING:
-    from pysurgery.topology.fundamental_polyhedron import FundamentalPolyhedron
+    from pysurgery.topology.coverings import FundamentalPolyhedron, UniversalCover
     from pysurgery.manifolds.handle_decompositions import HandleDecomposition
     from pysurgery.algebra.exact_sequences import ExactSequence
     from pysurgery.geometry.point_cloud import PointCloud
@@ -4822,9 +4822,24 @@ class SimplicialComplex(ChainComplex):
         is_manifold, _, _ = self.is_homology_manifold()
         if not is_manifold:
             raise ValueError("Cannot construct fundamental polyhedron: the complex is not a manifold.")
-            
-        from pysurgery.topology.fundamental_polyhedron import construct_fundamental_polyhedron
+
+        from pysurgery.topology.coverings import construct_fundamental_polyhedron
         return construct_fundamental_polyhedron(self)
+
+    def universal_cover(self, *, max_index: int = 10_000,
+                        max_order: int | None = None) -> "UniversalCover":
+        """Build the universal cover of this complex (requires finite π₁, dim ≤ 2).
+
+        Converts to a CW complex and delegates to
+        :class:`pysurgery.topology.coverings.UniversalCover`. For the geometric
+        tiling of a manifold's universal cover (any π₁), use
+        :meth:`fundamental_polyhedron` instead.
+        """
+        from pysurgery.topology.coverings import UniversalCover
+
+        return UniversalCover(
+            self.to_cw_complex(), max_index=max_index, max_order=max_order
+        )
 
     def boundary_matrices(self) -> Dict[int, csr_matrix]:
         """Return all boundary matrices for the complex.
@@ -4833,6 +4848,144 @@ class SimplicialComplex(ChainComplex):
             Dict[int, csr_matrix]: Dictionary mapping dimension to boundary matrix.
         """
         return {d: self.boundary_matrix(d) for d in range(1, self.dimension + 1)}
+
+    def hodge_laplacian(self, k: int, *, sparse: bool = True):
+        """The ``k``-th combinatorial Hodge Laplacian ``L_k`` over ℤ.
+
+        What is Being Computed?:
+            ``L_k = ∂_kᵀ ∂_k + ∂_{k+1} ∂_{k+1}ᵀ`` acting on the ``k``-chains
+            ``C_k``, where ``∂_k = boundary_matrix(k): C_k → C_{k-1}``. The first
+            term is the *down* Laplacian, the second the *up* Laplacian. Its
+            kernel is isomorphic to ``H_k(X; ℝ)`` (discrete Hodge theory), so
+            ``dim ker L_k = β_k``.
+
+        For ``k = 0`` this is the graph Laplacian ``∂_1 ∂_1ᵀ = D − A`` on the
+        simple 1-skeleton; higher ``k`` give the Hodge Laplacians on the
+        simplicial complex (e.g. ``L_1`` is the 1-form Laplacian).
+
+        Args:
+            k: The chain degree.
+            sparse: Return a ``scipy.sparse`` matrix (default) or a dense array.
+
+        Returns:
+            The ``(n_k × n_k)`` Laplacian, where ``n_k`` is the number of
+            ``k``-simplices.
+        """
+        if k < 0:
+            raise ValueError("hodge_laplacian degree must be >= 0.")
+        n_k = self.count_simplices(k)
+        L = csr_matrix((n_k, n_k), dtype=np.int64)
+        if k >= 1 and n_k > 0:
+            bk = self.boundary_matrix(k)  # (n_{k-1}, n_k)
+            if bk.shape[1] == n_k and bk.shape[1] > 0:
+                L = L + (bk.T @ bk)
+        bk1 = self.boundary_matrix(k + 1)  # (n_k, n_{k+1})
+        if bk1.shape[0] == n_k and bk1.shape[1] > 0:
+            L = L + (bk1 @ bk1.T)
+        L = csr_matrix(L)
+        return L if sparse else L.toarray()
+
+    def harmonic_forms(self, k: int, backend: str = "auto") -> np.ndarray:
+        """Compute an orthonormal basis for the space of harmonic k-forms (ker L_k).
+
+        Args:
+            k: The chain degree.
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            A (n_k, b_k) numpy array where each column is a harmonic k-form.
+        """
+        import numpy as np
+        from pysurgery.bridge.julia_bridge import julia_engine
+        
+        # Exact Betti number from topological SNF pipeline
+        b_k = 0
+        if k == 0:
+            b_k, _ = self.reduced_homology(0)
+            b_k += 1 # recover actual b_0 from reduced homology
+        else:
+            b_k, _ = self.homology(k)
+        
+        n_k = self.count_simplices(k)
+        if b_k == 0:
+            return np.zeros((n_k, 0), dtype=float)
+            
+        use_julia = (backend == "julia") or (backend == "auto" and julia_engine.available)
+        L_k = self.hodge_laplacian(k, sparse=True).astype(float)
+        
+        if use_julia:
+            return julia_engine.compute_hodge_harmonics(L_k, b_k)
+            
+        # Python fallback
+        if L_k.shape[0] < 500:
+            from scipy.linalg import svd
+            U, S, Vh = svd(L_k.toarray())
+            basis = Vh[-b_k:].T
+            return basis
+        else:
+            import scipy.sparse.linalg as sla
+            # shift-invert for smallest eigenvalues
+            vals, vecs = sla.eigsh(L_k, k=b_k, sigma=-1e-5, which='LM', tol=1e-10)
+            return vecs
+
+    def hodge_decomposition(self, k: int, chain, backend: str = "auto"):
+        """Compute the Hodge decomposition of a k-chain.
+        
+        Args:
+            k: The chain degree.
+            chain: A 1D array-like of length n_k.
+            backend: 'auto', 'julia', or 'python'.
+            
+        Returns:
+            A tuple (alpha, beta, h) such that chain = d_{k+1} alpha + d_k^T beta + h.
+            - alpha is a (k+1)-chain
+            - beta is a (k-1)-chain
+            - h is a harmonic k-chain
+        """
+        import numpy as np
+        from pysurgery.bridge.julia_bridge import julia_engine
+        
+        chain = np.asarray(chain, dtype=float)
+        n_k = self.count_simplices(k)
+        if len(chain) != n_k:
+            raise ValueError(f"Chain length {len(chain)} does not match number of {k}-simplices {n_k}.")
+            
+        B_k = self.boundary_matrix(k).astype(float) if k > 0 else csr_matrix((0, n_k), dtype=float)
+        B_kp1 = self.boundary_matrix(k + 1).astype(float)
+        L_k = self.hodge_laplacian(k, sparse=True).astype(float)
+        
+        b_k = 0
+        if k == 0:
+            b_k, _ = self.reduced_homology(0)
+            b_k += 1
+        else:
+            b_k, _ = self.homology(k)
+        
+        use_julia = (backend == "julia") or (backend == "auto" and julia_engine.available)
+        
+        if use_julia:
+            return julia_engine.compute_hodge_decomposition(B_k, B_kp1, L_k, chain, b_k)
+            
+        # Python fallback
+        if b_k > 0:
+            H = self.harmonic_forms(k, backend="python")
+            h = H @ (H.T @ chain)
+        else:
+            h = np.zeros(n_k)
+            
+        rhs = chain - h
+        
+        if L_k.shape[0] < 500:
+            from scipy.linalg import pinv
+            x = pinv(L_k.toarray()) @ rhs
+        else:
+            import scipy.sparse.linalg as sla
+            x, _ = sla.cg(L_k, rhs, tol=1e-10)
+            
+        alpha = B_kp1.T @ x
+        beta = B_k @ x
+        
+        return alpha, beta, h
 
     def chain_complex(self, coefficient_ring: str | None = None) -> ChainComplex:
         """Return the chain complex C_*(X) over the specified ring.

@@ -62,6 +62,7 @@ class JuliaBridge:
         "Random",
         "LinearAlgebra",
         "SparseArrays",
+        "KrylovKit",
     )
     # Packages used only by optional geometric kernels (graph paths, Delaunay/
     # alpha/crust). Their absence degrades gracefully rather than failing to load.
@@ -675,6 +676,13 @@ class JuliaBridge:
                     self.alexander_from_seifert(np.array([[-1, 1], [0, -1]], dtype=np.int64)),
                     self.knot_signature(np.array([[-1, 1], [0, -1]], dtype=np.int64)),
                 ),
+            ),
+            (
+                "discrete_hodge",
+                lambda: (
+                    self.compute_hodge_harmonics(sp.csr_matrix(np.eye(2, dtype=np.float64)), 0),
+                    self.compute_hodge_decomposition(sp.csr_matrix(np.zeros((1, 2), dtype=np.float64)), sp.csr_matrix(np.zeros((2, 1), dtype=np.float64)), sp.csr_matrix(np.eye(2, dtype=np.float64)), np.array([1.0, 1.0]), 0)
+                )
             ),
         ]
 
@@ -3145,6 +3153,50 @@ class JuliaBridge:
         )
         return np.array(block, dtype=np.float64)
 
+
+    def compute_hodge_harmonics(self, L: sp.csr_matrix, b_k: int) -> np.ndarray:
+        """Compute the exact harmonic basis of the sparse Hodge Laplacian L."""
+        self.require_julia()
+        coo = sp.coo_matrix(L.astype(np.float64))
+        res = self.backend.compute_hodge_harmonics_jl(
+            coo.row.astype(np.int64),
+            coo.col.astype(np.int64),
+            coo.data,
+            int(coo.shape[0]),
+            int(coo.shape[1]),
+            int(b_k)
+        )
+        return np.array(res, dtype=np.float64)
+
+    def compute_hodge_decomposition(self, B_k: sp.csr_matrix, B_kp1: sp.csr_matrix, L: sp.csr_matrix, chain: np.ndarray, b_k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Decompose chain into exact, coexact, and harmonic parts."""
+        self.require_julia()
+        
+        def _to_coo(mat: sp.csr_matrix):
+            coo = sp.coo_matrix(mat.astype(np.float64))
+            return (
+                coo.row.astype(np.int64),
+                coo.col.astype(np.int64),
+                coo.data,
+                int(coo.shape[0]),
+                int(coo.shape[1])
+            )
+            
+        Bk_I, Bk_J, Bk_V, Bk_nr, Bk_nc = _to_coo(B_k)
+        Bkp1_I, Bkp1_J, Bkp1_V, Bkp1_nr, Bkp1_nc = _to_coo(B_kp1)
+        L_I, L_J, L_V, L_nr, L_nc = _to_coo(L)
+        
+        alpha, beta, h = self.backend.compute_hodge_decomposition_jl(
+            Bk_I, Bk_J, Bk_V, Bk_nr, Bk_nc,
+            Bkp1_I, Bkp1_J, Bkp1_V, Bkp1_nr, Bkp1_nc,
+            L_I, L_J, L_V, L_nr, L_nc,
+            np.asarray(chain, dtype=np.float64), int(b_k)
+        )
+        return (
+            np.array(alpha, dtype=np.float64),
+            np.array(beta, dtype=np.float64),
+            np.array(h, dtype=np.float64),
+        )
 
     # Singleton instance
 julia_engine = JuliaBridge()

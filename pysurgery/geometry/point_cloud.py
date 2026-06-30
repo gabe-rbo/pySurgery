@@ -155,7 +155,7 @@ class PointCloud:
         movable_blocks: Optional[Union[SpaceBlock, List[SpaceBlock], Tuple[SpaceBlock, ...]]] = None,
         static_blocks: Optional[Union[SpaceBlock, List[SpaceBlock], Tuple[SpaceBlock, ...]]] = None
     ) -> np.ndarray:
-        """Computes a boolean mask indicating which points are subject to deformation.
+        r"""Computes a boolean mask indicating which points are subject to deformation.
 
         Mathematical Foundations:
             Let M_mov be the union of regions defined by `movable_blocks`. If `movable_blocks` is None,

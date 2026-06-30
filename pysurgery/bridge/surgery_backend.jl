@@ -3,6 +3,7 @@ module SurgeryBackend
 
 using LinearAlgebra
 using SparseArrays
+using KrylovKit
 using Statistics
 using Combinatorics
 using Combinatorics: combinations
@@ -20,7 +21,8 @@ export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomolo
     surgery_relative_boundary_sparse, linking_seifert_solve_z, linking_intersection_pairing,
     surgery_handle_attach, sphere_recognition_pl,
     linking_intersection_batch, compute_cohomology_basis_jl, linking_intersect_2chains,
-    alexander_from_seifert_jl, knot_signature_jl, linking_gauss_riemann_jl
+    alexander_from_seifert_jl, knot_signature_jl, linking_gauss_riemann_jl,
+    compute_hodge_harmonics_jl, compute_hodge_decomposition_jl
 
 # --- Persistent Homology Types & Exceptions ---
 
@@ -6956,4 +6958,104 @@ function compute_alpha_filtration(points_raw, top_simplices_raw, max_dim_raw, an
     )
 end
 
+"""
+    _compute_hodge_harmonics(L::SparseMatrixCSC, b_k::Int)
+
+Computes the exact harmonic basis of the sparse Hodge Laplacian `L`
+using `KrylovKit.eigsolve` and an exact Betti number `b_k` oracle.
+"""
+function _compute_hodge_harmonics(L::SparseMatrixCSC{Float64, Int}, b_k::Int)
+    if b_k == 0
+        return zeros(Float64, size(L, 1), 0)
+    end
+    
+    # We use the shift-invert behavior or simply the smallest real eigenvalues (:SR).
+    # Since L is symmetric positive semi-definite, the smallest are the kernel.
+    # ishermitian=true uses Lanczos and ensures an orthonormal basis.
+    vals, vecs, info = KrylovKit.eigsolve(L, size(L, 1), b_k, :SR, ishermitian=true, tol=1e-12, maxiter=3000)
+    
+    basis = zeros(Float64, size(L, 1), b_k)
+    for i in 1:b_k
+        basis[:, i] .= real.(vecs[i])
+    end
+    
+    # Ensure orthogonality robustly
+    F = qr(basis)
+    return Matrix(F.Q)
+end
+
+function compute_hodge_harmonics_jl(L_I_raw, L_J_raw, L_V_raw, n_rows_raw, n_cols_raw, b_k_raw)
+    L_I = pyconvert(Vector{Int}, L_I_raw)
+    L_J = pyconvert(Vector{Int}, L_J_raw)
+    L_V = pyconvert(Vector{Float64}, L_V_raw)
+    n_rows = pyconvert(Int, n_rows_raw)
+    n_cols = pyconvert(Int, n_cols_raw)
+    # Python 0-based to Julia 1-based indices
+    L = sparse(L_I .+ 1, L_J .+ 1, L_V, n_rows, n_cols)
+    b_k = pyconvert(Int, b_k_raw)
+    return _compute_hodge_harmonics(L, b_k)
+end
+
+"""
+    _compute_hodge_decomposition(B_k, B_kp1, L, chain, b_k)
+
+Decomposes `chain` = α' + β' + h, where:
+  h is the harmonic component
+  α = B_{k+1}' * x
+  β = B_k * x
+and L * x = chain - h.
+"""
+function _compute_hodge_decomposition(B_k::SparseMatrixCSC{Float64, Int}, B_kp1::SparseMatrixCSC{Float64, Int}, L::SparseMatrixCSC{Float64, Int}, chain::Vector{Float64}, b_k::Int)
+    n = size(L, 1)
+    if b_k > 0
+        H = _compute_hodge_harmonics(L, b_k)
+        h = H * (H' * chain)
+    else
+        h = zeros(Float64, n)
+    end
+    
+    rhs = chain - h
+    
+    # Solve Lx = rhs. Since rhs is in the range of L, CG converges.
+    # KrylovKit.linsolve with isposdef=true will use CG.
+    x, info = KrylovKit.linsolve(L, rhs, ishermitian=true, isposdef=true, tol=1e-12, maxiter=3000)
+    
+    alpha = B_kp1' * x
+    beta = B_k * x
+    
+    return alpha, beta, h
+end
+
+function compute_hodge_decomposition_jl(
+    Bk_I_raw, Bk_J_raw, Bk_V_raw, Bk_nr_raw, Bk_nc_raw,
+    Bkp1_I_raw, Bkp1_J_raw, Bkp1_V_raw, Bkp1_nr_raw, Bkp1_nc_raw,
+    L_I_raw, L_J_raw, L_V_raw, L_nr_raw, L_nc_raw,
+    chain_raw, b_k_raw
+)
+    # Reconstruct B_k
+    Bk_I = pyconvert(Vector{Int}, Bk_I_raw)
+    Bk_J = pyconvert(Vector{Int}, Bk_J_raw)
+    Bk_V = pyconvert(Vector{Float64}, Bk_V_raw)
+    Bk = sparse(Bk_I .+ 1, Bk_J .+ 1, Bk_V, pyconvert(Int, Bk_nr_raw), pyconvert(Int, Bk_nc_raw))
+
+    # Reconstruct B_kp1
+    Bkp1_I = pyconvert(Vector{Int}, Bkp1_I_raw)
+    Bkp1_J = pyconvert(Vector{Int}, Bkp1_J_raw)
+    Bkp1_V = pyconvert(Vector{Float64}, Bkp1_V_raw)
+    Bkp1 = sparse(Bkp1_I .+ 1, Bkp1_J .+ 1, Bkp1_V, pyconvert(Int, Bkp1_nr_raw), pyconvert(Int, Bkp1_nc_raw))
+
+    # Reconstruct L
+    L_I = pyconvert(Vector{Int}, L_I_raw)
+    L_J = pyconvert(Vector{Int}, L_J_raw)
+    L_V = pyconvert(Vector{Float64}, L_V_raw)
+    L = sparse(L_I .+ 1, L_J .+ 1, L_V, pyconvert(Int, L_nr_raw), pyconvert(Int, L_nc_raw))
+    
+    chain = pyconvert(Vector{Float64}, chain_raw)
+    b_k = pyconvert(Int, b_k_raw)
+    
+    alpha, beta, h = _compute_hodge_decomposition(Bk, Bkp1, L, chain, b_k)
+    return alpha, beta, h
+end
+
 end # module
+
