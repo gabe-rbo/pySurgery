@@ -30,15 +30,18 @@ References:
 from __future__ import annotations
 
 import collections
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pysurgery.topology.coverings import GraphCovering
 
 import numpy as np
 from pydantic import ConfigDict, PrivateAttr
 from scipy.sparse import csr_matrix
 
-from pysurgery.topology.complexes import SimplicialComplex
+from pysurgery.topology.complexes import SimplicialComplex, DenseLaplacianWrapper, SparseLaplacianWrapper
 
-__all__ = ["Graph", "bfs_spanning_forest", "lca_tree_path"]
+__all__ = ["Graph", "bfs_spanning_forest", "lca_tree_path", "kruskal_spanning_forest"]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -124,6 +127,94 @@ def lca_tree_path(
         curr_v = parent[curr_v]
     path_u.append(curr_u)  # common ancestor
     return path_u + list(reversed(path_v))
+
+
+def kruskal_spanning_forest(
+    vertices: Iterable[int],
+    edges: List[Tuple[int, int]],
+    weights: Optional[List[float]] = None,
+    maximize: bool = True,
+) -> Tuple[set, Dict[int, int], Dict[int, int], Dict[int, int]]:
+    """Kruskal's algorithm for maximum/minimum spanning forest.
+    
+    Args:
+        vertices: Iterable of vertex ids.
+        edges: List of ``(u, v)`` pairs corresponding to the graph edges.
+        weights: Optional list of weights corresponding to ``edges``. If None, all weights are 1.0.
+        maximize: If True, computes a maximum weight spanning forest.
+        
+    Returns:
+        ``(tree_edge_ids, parent, depth, component_root)`` in the exact same format
+        as :func:`bfs_spanning_forest`.
+    """
+    vertices = list(vertices)
+    if weights is None:
+        weights = [1.0] * len(edges)
+        
+    sorted_edges = sorted(
+        enumerate(zip(edges, weights)),
+        key=lambda x: x[1][1],
+        reverse=maximize,
+    )
+    
+    parent_uf = {v: v for v in vertices}
+    rank_uf = {v: 0 for v in vertices}
+    
+    def find(i):
+        if parent_uf[i] == i:
+            return i
+        parent_uf[i] = find(parent_uf[i])
+        return parent_uf[i]
+        
+    def union(i, j):
+        root_i = find(i)
+        root_j = find(j)
+        if root_i != root_j:
+            if rank_uf[root_i] < rank_uf[root_j]:
+                parent_uf[root_i] = root_j
+            elif rank_uf[root_i] > rank_uf[root_j]:
+                parent_uf[root_j] = root_i
+            else:
+                parent_uf[root_j] = root_i
+                rank_uf[root_i] += 1
+            return True
+        return False
+
+    tree_edge_ids = set()
+    tree_adj: Dict[int, List[int]] = {v: [] for v in vertices}
+    
+    for eid, ((u, v), w) in sorted_edges:
+        if u != v and union(u, v):
+            tree_edge_ids.add(eid)
+            tree_adj[u].append(v)
+            tree_adj[v].append(u)
+            
+    # Compute parent, depth, root for the rooted forest using BFS on tree edges
+    visited: Dict[int, bool] = {}
+    parent: Dict[int, int] = {}
+    depth: Dict[int, int] = {}
+    component_root: Dict[int, int] = {}
+    
+    for start in vertices:
+        if visited.get(start):
+            continue
+        queue = collections.deque([(start, 0)])
+        visited[start] = True
+        parent[start] = -1
+        depth[start] = 0
+        component_root[start] = start
+        
+        while queue:
+            curr, d = queue.popleft()
+            for neighbor in tree_adj[curr]:
+                if not visited.get(neighbor):
+                    visited[neighbor] = True
+                    parent[neighbor] = curr
+                    depth[neighbor] = d + 1
+                    component_root[neighbor] = start
+                    queue.append((neighbor, d + 1))
+                    
+    return tree_edge_ids, parent, depth, component_root
 
 
 def _simple_skeleton_table(
@@ -481,13 +572,26 @@ class Graph(SimplicialComplex):
 
     # ── trees and cycles ─────────────────────────────────────────────────────────
 
-    def spanning_forest(self) -> Tuple[set, Dict[int, int], Dict[int, int], Dict[int, int]]:
-        """Rooted BFS spanning forest. See :func:`bfs_spanning_forest`."""
+    def spanning_forest(self, method: str = "bfs") -> Tuple[set, Dict[int, int], Dict[int, int], Dict[int, int]]:
+        """Rooted spanning forest.
+        
+        Args:
+            method: "bfs" (default) or "kruskal" (maximal weight generator tree).
+        
+        See :func:`bfs_spanning_forest` and :func:`kruskal_spanning_forest`.
+        """
+        if method == "kruskal":
+            return kruskal_spanning_forest(
+                self.vertices,
+                self._edge_list,
+                self._edge_weights,
+                maximize=True,
+            )
         return bfs_spanning_forest(self.vertices, self.adjacency())
 
-    def tree_path(self, u: int, v: int) -> List[int]:
+    def tree_path(self, u: int, v: int, method: str = "bfs") -> List[int]:
         """Vertex path ``u → v`` through the spanning forest (same component)."""
-        _tree, parent, depth, root = self.spanning_forest()
+        _tree, parent, depth, root = self.spanning_forest(method=method)
         if root.get(int(u)) != root.get(int(v)):
             raise ValueError(
                 f"Vertices {u} and {v} are in different connected components."
@@ -514,15 +618,20 @@ class Graph(SimplicialComplex):
         """True iff the graph is a connected forest."""
         return self.is_forest and self.is_connected()
 
-    def fundamental_cycles(self) -> List[List[Tuple[int, int]]]:
+    def fundamental_cycles(self, spanning_tree: str = "bfs") -> List[List[Tuple[int, int]]]:
         """A cycle-space basis: one directed-edge loop per non-tree edge.
+        
+        Args:
+            spanning_tree: "bfs" (default) or "kruskal". If "kruskal" is used, 
+                computes cycles with respect to the maximal spanning forest,
+                thus generating 'lightest' possible fundamental cycles.
 
         Each loop is returned as a list of directed edges ``[(a, b), ...]`` that
         starts and ends at the same vertex. Non-tree edges are the parallel
         edges, self-loops, and the single "extra" edge of every independent
         cycle; together they freely generate π₁ of the graph.
         """
-        tree_ids, parent, depth, root = self.spanning_forest()
+        tree_ids, parent, depth, root = self.spanning_forest(method=spanning_tree)
         cycles: List[List[Tuple[int, int]]] = []
         for eid, (u, v) in enumerate(self._edge_list):
             if eid in tree_ids:
@@ -538,9 +647,9 @@ class Graph(SimplicialComplex):
             cycles.append(directed)
         return cycles
 
-    def cycle_space_basis(self) -> List[List[Tuple[int, int]]]:
+    def cycle_space_basis(self, spanning_tree: str = "bfs") -> List[List[Tuple[int, int]]]:
         """Alias for :meth:`fundamental_cycles`."""
-        return self.fundamental_cycles()
+        return self.fundamental_cycles(spanning_tree=spanning_tree)
 
     # ── structural operations ────────────────────────────────────────────────────
 
@@ -657,7 +766,7 @@ class Graph(SimplicialComplex):
         for a multigraph it uses the full edge multiset.
         """
         L = self.degree_matrix() - self.adjacency_matrix()
-        return csr_matrix(L) if sparse else L
+        return SparseLaplacianWrapper(csr_matrix(L)) if sparse else DenseLaplacianWrapper(L)
 
     def hodge_laplacian(self, k: int, *, sparse: bool = True):
         """The ``k``-th combinatorial Hodge Laplacian for a (multi)graph.
@@ -680,10 +789,10 @@ class Graph(SimplicialComplex):
             else:
                 L = bk.T @ bk
             L = csr_matrix(L)
-            return L if sparse else L.toarray()
+            return SparseLaplacianWrapper(L) if sparse else DenseLaplacianWrapper(L.toarray())
         else:
             L = csr_matrix((0, 0), dtype=np.int64)
-            return L if sparse else L.toarray()
+            return SparseLaplacianWrapper(L) if sparse else DenseLaplacianWrapper(L.toarray())
 
     def harmonic_forms(self, k: int, backend: str = "auto") -> "np.ndarray":
         """Compute an orthonormal basis for the space of harmonic k-forms (ker L_k) for the multigraph."""
@@ -1063,6 +1172,88 @@ class Graph(SimplicialComplex):
         )
         return ax
 
+    def plot_pi1_generators(
+        self,
+        *,
+        ax: Optional["Any"] = None,
+        spanning_tree: str = "bfs",
+        base_edge_color: str = "lightgray",
+        base_node_color: str = "white",
+        with_labels: bool = True,
+        **kwargs,
+    ) -> "Any":
+        """Plot the fundamental cycle space basis (π₁ generators) of the graph.
+        
+        Args:
+            ax: Optional matplotlib axes to draw on. If None, the current axes are used.
+            spanning_tree: Method for the generator tree ('bfs' or 'kruskal').
+            base_edge_color: Color of the background edges.
+            base_node_color: Color of the background nodes.
+            with_labels: Whether to draw node labels.
+            **kwargs: Additional arguments passed to ``networkx.draw_networkx_nodes()``.
+            
+        Returns:
+            The matplotlib axes used for drawing.
+        """
+        try:
+            import matplotlib.pyplot as plt
+            import networkx as nx
+            import numpy as np
+        except ImportError as e:
+            raise ImportError(
+                "The 'plot_pi1_generators' method requires 'networkx' and 'matplotlib'."
+            ) from e
+
+        if self._directed:
+            G = nx.MultiDiGraph()
+        else:
+            G = nx.MultiGraph()
+
+        G.add_nodes_from(self.vertices)
+        for u, v in self._edge_list:
+            G.add_edge(u, v)
+
+        if ax is None:
+            ax = plt.gca()
+
+        pos = nx.spring_layout(G, seed=42)
+
+        nx.draw_networkx_nodes(
+            G, pos, ax=ax, node_color=base_node_color, edgecolors="gray", **kwargs
+        )
+        if with_labels:
+            nx.draw_networkx_labels(G, pos, ax=ax)
+            
+        nx.draw_networkx_edges(
+            G, pos, ax=ax, edge_color=base_edge_color, alpha=0.5
+        )
+
+        cycles = self.fundamental_cycles(spanning_tree=spanning_tree)
+        
+        if not cycles:
+            return ax
+            
+        colors = plt.cm.rainbow(np.linspace(0, 1, len(cycles)))
+        
+        for idx, cycle in enumerate(cycles):
+            edgelist = [(u, v) for u, v in cycle]
+            rad = 0.1 * ((idx % 3) + 1)
+            
+            nx.draw_networkx_edges(
+                G,
+                pos,
+                edgelist=edgelist,
+                ax=ax,
+                edge_color=[colors[idx]],
+                width=2.5,
+                alpha=0.8,
+                arrows=True,
+                arrowsize=15,
+                connectionstyle=f"arc3,rad={rad}",
+            )
+
+        return ax
+
     def to_dot(self, *, name: str = "G") -> str:
         """Graphviz DOT source for the graph (render with ``dot``/``neato``)."""
         directed = self._directed
@@ -1159,7 +1350,7 @@ class Graph(SimplicialComplex):
 
     # ── covers (delegated to pysurgery.topology.coverings) ───────────────────────
 
-    def universal_cover(self, depth: int = 3) -> "Any":
+    def universal_cover(self, depth: int = 3) -> "GraphCovering":
         """The universal cover of the graph: its (truncated) unrolled tree.
 
         A connected graph's universal cover is a tree; for a graph with cycles it
@@ -1175,7 +1366,7 @@ class Graph(SimplicialComplex):
 
         return graph_universal_cover(self, depth=depth)
 
-    def cover(self, voltages: Dict[int, Any]) -> "Any":
+    def cover(self, voltages: Dict[int, Any]) -> "GraphCovering":
         """A finite cover from a voltage assignment on edges.
 
         Returns:

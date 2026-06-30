@@ -98,6 +98,60 @@ def _coerce_csr_matrix(matrix: csr_matrix | np.ndarray | list | tuple) -> csr_ma
     return csr_matrix(np.asarray(matrix, dtype=np.int64), dtype=np.int64)
 
 
+class DenseLaplacianWrapper(np.ndarray):
+    """A dense Laplacian matrix that supports direct eigenvalue computation."""
+    def __new__(cls, input_array):
+        obj = np.asarray(input_array).view(cls)
+        return obj
+
+    def eigenvalues(self, k: Optional[int] = None, which: str = 'SA'):
+        import scipy.linalg as la
+        evals = la.eigvalsh(self)
+        if k is not None:
+            if which == 'SA':
+                return evals[:k]
+            elif which == 'LA':
+                return evals[-k:]
+        return evals
+        
+    def eigenvectors(self, k: Optional[int] = None, which: str = 'SA'):
+        import scipy.linalg as la
+        evals, evecs = la.eigh(self)
+        if k is not None:
+            if which == 'SA':
+                return evals[:k], evecs[:, :k]
+            elif which == 'LA':
+                return evals[-k:], evecs[:, -k:]
+        return evals, evecs
+
+class SparseLaplacianWrapper(csr_matrix):
+    """A sparse Laplacian matrix that supports direct eigenvalue computation."""
+    def eigenvalues(self, k: int = 6, which: str = 'SA'):
+        if k >= self.shape[0] - 1:
+            import scipy.linalg as la
+            evals = la.eigvalsh(self.toarray())
+            if which == 'SA':
+                return evals[:k]
+            elif which == 'LA':
+                return evals[-k:]
+            return evals
+        import scipy.sparse.linalg as sla
+        evals, _ = sla.eigsh(self.astype(float), k=k, which=which)
+        return evals
+        
+    def eigenvectors(self, k: int = 6, which: str = 'SA'):
+        if k >= self.shape[0] - 1:
+            import scipy.linalg as la
+            evals, evecs = la.eigh(self.toarray())
+            if which == 'SA':
+                return evals[:k], evecs[:, :k]
+            elif which == 'LA':
+                return evals[-k:], evecs[:, -k:]
+            return evals, evecs
+        import scipy.sparse.linalg as sla
+        return sla.eigsh(self.astype(float), k=k, which=which)
+
+
 def _normalize_simplex(simplex: Iterable[int]) -> tuple[int, ...]:
     """Return a canonical, sorted simplex tuple with distinct integer vertices.
 
@@ -4883,7 +4937,7 @@ class SimplicialComplex(ChainComplex):
         if bk1.shape[0] == n_k and bk1.shape[1] > 0:
             L = L + (bk1 @ bk1.T)
         L = csr_matrix(L)
-        return L if sparse else L.toarray()
+        return SparseLaplacianWrapper(L) if sparse else DenseLaplacianWrapper(L.toarray())
 
     def harmonic_forms(self, k: int, backend: str = "auto") -> np.ndarray:
         """Compute an orthonormal basis for the space of harmonic k-forms (ker L_k).
