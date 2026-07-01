@@ -286,6 +286,11 @@ class Graph(SimplicialComplex):
         possibly with parallel/loop entries), ``directed`` (bool), ``weights``
         (list aligned with ``edges``) and ``num_vertices`` (to declare isolated
         vertices), in addition to the usual ``SimplicialComplex`` keywords.
+        
+        Weight conventions:
+        - Hop-count / unweighted graph distance ignores weights (all edges are 1 hop).
+        - Shortest path distance interprets weight as lengths (larger = further). If weight is conductance, use ``transform="inverse"``.
+        - Hodge Laplacian ``hodge_laplacian(1)`` interprets weight as conductance, scaling the incidence matrix by ``sqrt(w)``.
         """
         edges = data.pop("edges", None)
         directed = bool(data.pop("directed", False))
@@ -570,6 +575,92 @@ class Graph(SimplicialComplex):
             dtype=np.int64,
         )
 
+    @property
+    def edge_weights(self) -> Optional[np.ndarray]:
+        """Edge weights as a numpy array, if present. Convention depends on the method (e.g., conductance for laplacians, length for distances)."""
+        return np.array(self._edge_weights) if self._edge_weights is not None else None
+
+    def distances(self, weighted: bool = False, transform: Optional[str] = None) -> np.ndarray:
+        """All-pairs shortest path distances.
+
+        Args:
+            weighted: If True, use edge weights. If False, compute hop-counts.
+            transform: If 'inverse', edge lengths are 1/weight (e.g. for conductance). If None, lengths are weights.
+
+        Returns:
+            A (n_vertices, n_vertices) dense array of shortest path distances.
+        """
+        import scipy.sparse.csgraph as csgraph
+        
+        n = self.num_vertices
+        if n == 0:
+            return np.empty((0, 0))
+            
+        verts = self.vertices
+        vidx = {v: i for i, v in enumerate(verts)}
+        
+        if not weighted:
+            A = self.adjacency_matrix(sparse=True)
+            return csgraph.shortest_path(A, directed=self.directed, unweighted=True)
+            
+        if self._edge_weights is None:
+            raise ValueError("Cannot compute weighted distances on an unweighted graph.")
+            
+        # Build adjacency matrix taking min over parallel edges
+        min_w: Dict[Tuple[int, int], float] = {}
+        for (u, v), w in zip(self._edge_list, self._edge_weights):
+            i, j = vidx[u], vidx[v]
+            
+            if transform == "inverse":
+                if w == 0: continue
+                cost = 1.0 / w
+            elif transform is None:
+                cost = w
+            else:
+                raise ValueError(f"Unknown transform '{transform}'")
+                
+            if self.directed:
+                min_w[(i, j)] = min(cost, min_w.get((i, j), float('inf')))
+            else:
+                min_w[(i, j)] = min(cost, min_w.get((i, j), float('inf')))
+                min_w[(j, i)] = min(cost, min_w.get((j, i), float('inf')))
+                
+        rows, cols, data = [], [], []
+        for (i, j), w in min_w.items():
+            rows.append(i)
+            cols.append(j)
+            data.append(w)
+            
+        A = csr_matrix((data, (rows, cols)), shape=(n, n))
+        return csgraph.shortest_path(A, directed=self.directed, unweighted=False)
+
+    def reweight(self, new_weights: Iterable[float]) -> "Graph":
+        """Return a new Graph with identical topology but new edge weights."""
+        new_weights = list(new_weights)
+        if len(new_weights) != len(self._edge_list):
+            raise ValueError(f"new_weights length ({len(new_weights)}) must match edge count ({len(self._edge_list)}).")
+        return Graph.from_edges(
+            self._edge_list,
+            num_vertices=self.num_vertices,
+            directed=self.directed,
+            weights=new_weights,
+            coefficient_ring=self.coefficient_ring,
+        )
+
+    def topological_skeleton(self) -> "Graph":
+        """Return a new Graph with identical topology but all edge weights removed."""
+        return Graph.from_edges(
+            self._edge_list,
+            num_vertices=self.num_vertices,
+            directed=self.directed,
+            weights=None,
+            coefficient_ring=self.coefficient_ring,
+        )
+        
+    def drop_weights(self) -> "Graph":
+        """Alias for topological_skeleton."""
+        return self.topological_skeleton()
+
     # ── trees and cycles ─────────────────────────────────────────────────────────
 
     def spanning_forest(self, method: str = "bfs") -> Tuple[set, Dict[int, int], Dict[int, int], Dict[int, int]]:
@@ -607,6 +698,21 @@ class Graph(SimplicialComplex):
         ``betti_number(1)`` of the inherited complex.
         """
         return self.num_edges - self.num_vertices + self.num_connected_components()
+
+    def betti_number(self, n: int | None = None, backend: str = "auto") -> int | Dict[int, int]:
+        """Return the n-th Betti number of the multigraph."""
+        if n is None:
+            return self.betti_numbers(backend=backend)
+        if n == 0:
+            return self.num_connected_components()
+        elif n == 1:
+            return self.cyclomatic_number
+        else:
+            return 0
+            
+    def betti_numbers(self, backend: str = "auto") -> Dict[int, int]:
+        """Return all Betti numbers of the multigraph."""
+        return {0: self.betti_number(0, backend=backend), 1: self.betti_number(1, backend=backend)}
 
     @property
     def is_forest(self) -> bool:
@@ -779,7 +885,9 @@ class Graph(SimplicialComplex):
         if k < 0:
             raise ValueError("hodge_laplacian degree must be >= 0.")
         if k == 0:
-            return self.laplacian(sparse=sparse)
+            wrapper = self.laplacian(sparse=sparse)
+            wrapper._default_k = max(6, int(self.betti_number(k)) + 1)
+            return wrapper
         elif k == 1:
             bk = self.incidence_matrix(simple=False).astype(float)
             if self._edge_weights is not None:
@@ -789,10 +897,14 @@ class Graph(SimplicialComplex):
             else:
                 L = bk.T @ bk
             L = csr_matrix(L)
-            return SparseLaplacianWrapper(L) if sparse else DenseLaplacianWrapper(L.toarray())
+            wrapper = SparseLaplacianWrapper(L) if sparse else DenseLaplacianWrapper(L.toarray())
+            wrapper._default_k = max(6, int(self.betti_number(k)) + 1)
+            return wrapper
         else:
             L = csr_matrix((0, 0), dtype=np.int64)
-            return SparseLaplacianWrapper(L) if sparse else DenseLaplacianWrapper(L.toarray())
+            wrapper = SparseLaplacianWrapper(L) if sparse else DenseLaplacianWrapper(L.toarray())
+            wrapper._default_k = 6
+            return wrapper
 
     def harmonic_forms(self, k: int, backend: str = "auto") -> "np.ndarray":
         """Compute an orthonormal basis for the space of harmonic k-forms (ker L_k) for the multigraph."""
@@ -975,7 +1087,7 @@ class Graph(SimplicialComplex):
         n = len(verts)
         return np.eye(n) - (dinv[:, None] * A * dinv[None, :])
 
-    def hashimoto_matrix(self):
+    def hashimoto_matrix(self, weighted: bool = False):
         """Non-backtracking (Hashimoto) edge-adjacency matrix ``B``.
 
         ``B`` acts on the ``2·|E|`` oriented edges (darts). ``B[d, d'] = 1`` iff
@@ -988,21 +1100,30 @@ class Graph(SimplicialComplex):
             ``(B, darts)`` where ``darts[k] = (tail, head, edge_id)`` describes
             oriented edge ``k`` (``k`` and ``k^1`` are reverses).
         """
+        if weighted and self._edge_weights is None:
+            raise ValueError("Cannot compute weighted Hashimoto matrix on an unweighted graph.")
+            
         darts: List[Tuple[int, int, int]] = []
         for eid, (u, v) in enumerate(self._edge_list):
             darts.append((u, v, eid))   # dart 2*eid
             darts.append((v, u, eid))   # dart 2*eid + 1 (reverse)
         m2 = len(darts)
-        B = np.zeros((m2, m2), dtype=np.int64)
+        
+        dtype = np.float64 if weighted else np.int64
+        B = np.zeros((m2, m2), dtype=dtype)
         from collections import defaultdict
         out_of: Dict[int, List[int]] = defaultdict(list)
         for k, (t, h, _e) in enumerate(darts):
             out_of[t].append(k)
-        for k, (t, h, _e) in enumerate(darts):
-            for j in out_of.get(h, ()):
-                if j == (k ^ 1):
-                    continue  # backtracking
-                B[k, j] = 1
+        for d, (t_d, h_d, e_d) in enumerate(darts):
+            reverse_of_d = d ^ 1
+            for d_next in out_of[h_d]:
+                if d_next != reverse_of_d:
+                    if weighted:
+                        e_next = darts[d_next][2]
+                        B[d, d_next] = self._edge_weights[e_next]
+                    else:
+                        B[d, d_next] = 1
         return B, darts
 
     # ── zeta functions ───────────────────────────────────────────────────────────

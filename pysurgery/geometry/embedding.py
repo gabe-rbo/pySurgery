@@ -313,6 +313,7 @@ class PLMap:
     projection_matrix: Optional[np.ndarray] = None
     source_name: str = "pl_map"
     _label_to_index: dict[int, int] = field(init=False, repr=False, default_factory=dict)
+    _simplex_cache: dict[tuple[int, ...], np.ndarray] = field(init=False, repr=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         """Initialize label to index mapping and validate labels.
@@ -387,10 +388,10 @@ class PLMap:
             An (n_vertices, ambient_dim) array of coordinates.
         """
         simplex_key = tuple(int(v) for v in simplex)
-        # Use module-level cache to avoid unbounded growth on PLMap instances
-        return _cached_simplex_vertices(
-            id(self.vertex_coordinates), simplex_key, id(self)
-        )
+        if simplex_key not in self._simplex_cache:
+            idx = [self.vertex_label_to_index(int(v)) for v in simplex_key]
+            self._simplex_cache[simplex_key] = self.vertex_coordinates[np.asarray(idx, dtype=np.int64)]
+        return self._simplex_cache[simplex_key]
 
     def vertex_label_to_index(self, label: int) -> int:
         """Get the coordinate index for a given vertex label.
@@ -1722,18 +1723,6 @@ def _segment_segment_intersection_2d(
         return dist <= tol, dist
     return False, float(np.linalg.norm(a0 - b0))
 
-
-@lru_cache(maxsize=10_000)
-def _cached_simplex_vertices(
-    coords_handle: int, simplex_tuple: tuple[int, ...], pl_map_id: int
-) -> np.ndarray:
-    """Bounded cache for simplex vertex coordinates to avoid re-allocation."""
-    # This is a bit of a hack to use lru_cache with non-hashable pl_map.
-    # We assume the caller provides a consistent coords_handle and pl_map_id.
-    import ctypes
-    pl_map = ctypes.cast(pl_map_id, ctypes.py_object).value
-    idx = [pl_map.vertex_label_to_index(int(v)) for v in simplex_tuple]
-    return pl_map.vertex_coordinates[np.asarray(idx, dtype=np.int64)]
 
 
 def _is_interior_vertex(vertex: int, sc: SimplicialComplex) -> bool:

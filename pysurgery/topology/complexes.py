@@ -102,54 +102,101 @@ class DenseLaplacianWrapper(np.ndarray):
     """A dense Laplacian matrix that supports direct eigenvalue computation."""
     def __new__(cls, input_array):
         obj = np.asarray(input_array).view(cls)
+        obj._default_k = None
         return obj
 
-    def eigenvalues(self, k: Optional[int] = None, which: str = 'SA'):
+    def __array_finalize__(self, obj):
+        if obj is None: return
+        self._default_k = getattr(obj, '_default_k', None)
+
+    def eigenvalues(self, k: Optional[int] = None, which: str = 'SA', backend: str = "auto", seed: int = 42):
+        k_val = k if k is not None else getattr(self, '_default_k', None)
         import scipy.linalg as la
         evals = la.eigvalsh(self)
-        if k is not None:
+        if k_val is not None:
             if which == 'SA':
-                return evals[:k]
+                return evals[:k_val]
             elif which == 'LA':
-                return evals[-k:]
+                return evals[-k_val:]
         return evals
         
-    def eigenvectors(self, k: Optional[int] = None, which: str = 'SA'):
+    def eigenvectors(self, k: Optional[int] = None, which: str = 'SA', backend: str = "auto", seed: int = 42):
+        k_val = k if k is not None else getattr(self, '_default_k', None)
         import scipy.linalg as la
         evals, evecs = la.eigh(self)
-        if k is not None:
+        if k_val is not None:
             if which == 'SA':
-                return evals[:k], evecs[:, :k]
+                return evals[:k_val], evecs[:, :k_val]
             elif which == 'LA':
-                return evals[-k:], evecs[:, -k:]
+                return evals[-k_val:], evecs[:, -k_val:]
         return evals, evecs
 
 class SparseLaplacianWrapper(csr_matrix):
     """A sparse Laplacian matrix that supports direct eigenvalue computation."""
-    def eigenvalues(self, k: int = 6, which: str = 'SA'):
-        if k >= self.shape[0] - 1:
+    def eigenvalues(self, k: Optional[int] = None, which: str = 'SA', backend: str = "auto", seed: int = 42):
+        k_val = k if k is not None else getattr(self, '_default_k', 6)
+        if k_val is None:
+            k_val = 6
+            
+        use_dense = (backend == "dense") or (backend == "auto" and (k_val >= self.shape[0] - 1 or self.shape[0] < 500))
+        if use_dense:
             import scipy.linalg as la
             evals = la.eigvalsh(self.toarray())
             if which == 'SA':
-                return evals[:k]
+                return evals[:k_val]
             elif which == 'LA':
-                return evals[-k:]
+                return evals[-k_val:]
             return evals
+            
         import scipy.sparse.linalg as sla
-        evals, _ = sla.eigsh(self.astype(float), k=k, which=which)
+        v0 = np.random.RandomState(seed).randn(self.shape[0])
+        try:
+            evals, _ = sla.eigsh(self.astype(float), k=k_val, which=which, v0=v0)
+        except sla.ArpackNoConvergence:
+            ncv = min(self.shape[0], max(20, 2 * k_val + 1))
+            try:
+                evals, _ = sla.eigsh(self.astype(float), k=k_val, which=which, v0=v0, ncv=ncv, maxiter=5000)
+            except sla.ArpackNoConvergence as e:
+                if self.shape[0] < 2000:
+                    import scipy.linalg as la
+                    eval_all = la.eigvalsh(self.toarray())
+                    if which == 'SA': return eval_all[:k_val]
+                    elif which == 'LA': return eval_all[-k_val:]
+                    return eval_all
+                raise e
         return evals
         
-    def eigenvectors(self, k: int = 6, which: str = 'SA'):
-        if k >= self.shape[0] - 1:
+    def eigenvectors(self, k: Optional[int] = None, which: str = 'SA', backend: str = "auto", seed: int = 42):
+        k_val = k if k is not None else getattr(self, '_default_k', 6)
+        if k_val is None:
+            k_val = 6
+            
+        use_dense = (backend == "dense") or (backend == "auto" and (k_val >= self.shape[0] - 1 or self.shape[0] < 500))
+        if use_dense:
             import scipy.linalg as la
             evals, evecs = la.eigh(self.toarray())
             if which == 'SA':
-                return evals[:k], evecs[:, :k]
+                return evals[:k_val], evecs[:, :k_val]
             elif which == 'LA':
-                return evals[-k:], evecs[:, -k:]
+                return evals[-k_val:], evecs[:, -k_val:]
             return evals, evecs
+            
         import scipy.sparse.linalg as sla
-        return sla.eigsh(self.astype(float), k=k, which=which)
+        v0 = np.random.RandomState(seed).randn(self.shape[0])
+        try:
+            return sla.eigsh(self.astype(float), k=k_val, which=which, v0=v0)
+        except sla.ArpackNoConvergence:
+            ncv = min(self.shape[0], max(20, 2 * k_val + 1))
+            try:
+                return sla.eigsh(self.astype(float), k=k_val, which=which, v0=v0, ncv=ncv, maxiter=5000)
+            except sla.ArpackNoConvergence as e:
+                if self.shape[0] < 2000:
+                    import scipy.linalg as la
+                    evals_all, evecs_all = la.eigh(self.toarray())
+                    if which == 'SA': return evals_all[:k_val], evecs_all[:, :k_val]
+                    elif which == 'LA': return evals_all[-k_val:], evecs_all[:, -k_val:]
+                    return evals_all, evecs_all
+                raise e
 
 
 def _normalize_simplex(simplex: Iterable[int]) -> tuple[int, ...]:
@@ -4937,7 +4984,9 @@ class SimplicialComplex(ChainComplex):
         if bk1.shape[0] == n_k and bk1.shape[1] > 0:
             L = L + (bk1 @ bk1.T)
         L = csr_matrix(L)
-        return SparseLaplacianWrapper(L) if sparse else DenseLaplacianWrapper(L.toarray())
+        wrapper = SparseLaplacianWrapper(L) if sparse else DenseLaplacianWrapper(L.toarray())
+        wrapper._default_k = max(6, int(self.betti_number(k)) + 1)
+        return wrapper
 
     def harmonic_forms(self, k: int, backend: str = "auto") -> np.ndarray:
         """Compute an orthonormal basis for the space of harmonic k-forms (ker L_k).
@@ -5169,26 +5218,19 @@ class SimplicialComplex(ChainComplex):
             
         all_cliques = []
         
-        def bron_kerbosch_pivot(r, p, x):
-            if not p and not x:
-                if r:
-                    all_cliques.append(tuple(sorted(r)))
-                return
-            if not p:
+        def enumerate_cliques(r, candidates):
+            if len(r) == max_dim + 1 or not candidates:
+                all_cliques.append(tuple(sorted(r)))
                 return
             
-            # Choose pivot as vertex in P U X with max degree in P
-            u = max(p | x, key=lambda v: len(adj_dict[v] & p))
-            for v in list(p - adj_dict[u]):
-                if len(r) < max_dim:
-                    bron_kerbosch_pivot(r | {v}, p & adj_dict[v], x & adj_dict[v])
-                else:
-                    # If we reached max_dim, r|{v} is a maximal-allowed clique
-                    all_cliques.append(tuple(sorted(r | {v})))
-                p.remove(v)
-                x.add(v)
+            for i, v in enumerate(candidates):
+                new_candidates = [w for w in candidates[i+1:] if w in adj_dict[v]]
+                enumerate_cliques(r | {v}, new_candidates)
 
-        bron_kerbosch_pivot(set(), set(vertices), set())
+        sorted_vertices = sorted(vertices)
+        for i, v in enumerate(sorted_vertices):
+            new_candidates = [w for w in sorted_vertices[i+1:] if w in adj_dict[v]]
+            enumerate_cliques({v}, new_candidates)
             
         return self.__class__.from_simplices(
             all_cliques,
