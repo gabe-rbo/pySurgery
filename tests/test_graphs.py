@@ -207,6 +207,95 @@ class TestMatricesAndLaplacians:
             assert nullity == g.betti_number(k)
 
 
+class TestWeightKind:
+    """Regression tests for the conductance/distance weight convention.
+
+    Motivated by a real bug: a graph whose stored weight is a *distance* (larger
+    = weaker connection) was silently fed as-is into laplacian()/hodge_laplacian()/
+    hashimoto_matrix(weighted=True), all of which assume weight IS a conductance
+    (larger = stronger connection) -- while distances() already handled both
+    conventions via its transform= argument. weight_kind + conductance close that gap.
+    """
+
+    def _pair(self):
+        # Same topology/values, expressed once as a conductance and once as its
+        # reciprocal distance -- the two must be physically equivalent everywhere
+        # that reads Graph.conductance.
+        raw = [0.5, 1.0, 2.0, 2.0, 10.0]
+        edges = [(1, 2), (1, 3), (2, 3), (3, 4), (1, 4)]
+        g_conductance = Graph.from_edges(edges, weights=raw, weight_kind="conductance")
+        g_distance = Graph.from_edges(edges, weights=[1.0 / w for w in raw], weight_kind="distance")
+        return g_conductance, g_distance
+
+    def test_default_weight_kind_is_conductance(self):
+        g = Graph.from_edges([(0, 1)], weights=[2.0])
+        assert g.weight_kind == "conductance"
+
+    def test_invalid_weight_kind_rejected(self):
+        with pytest.raises(ValueError):
+            Graph.from_edges([(0, 1)], weights=[2.0], weight_kind="bogus")
+
+    def test_unweighted_graph_has_no_conductance(self):
+        g = Graph.from_edges([(0, 1), (1, 2)])
+        assert g.conductance is None
+
+    def test_conductance_property_both_conventions(self):
+        import numpy as np
+        g_conductance, g_distance = self._pair()
+        assert np.allclose(g_conductance.conductance, g_conductance.edge_weights)
+        assert np.allclose(g_distance.conductance, 1.0 / g_distance.edge_weights)
+        assert np.allclose(g_conductance.conductance, g_distance.conductance)
+
+    def test_laplacian_agrees_across_conventions(self):
+        import numpy as np
+        g_conductance, g_distance = self._pair()
+        assert np.allclose(g_conductance.laplacian(), g_distance.laplacian())
+
+    def test_hodge_laplacian_agrees_across_conventions(self):
+        import numpy as np
+        g_conductance, g_distance = self._pair()
+        L1_c = g_conductance.hodge_laplacian(1, sparse=False)
+        L1_d = g_distance.hodge_laplacian(1, sparse=False)
+        assert np.allclose(np.asarray(L1_c), np.asarray(L1_d))
+
+    def test_harmonic_forms_agree_across_conventions(self):
+        import numpy as np
+        g_conductance, g_distance = self._pair()
+        # b1 = E - V + C = 5 - 4 + 1 = 2
+        H_c = g_conductance.harmonic_forms(1, backend="python")
+        H_d = g_distance.harmonic_forms(1, backend="python")
+        # Basis vectors aren't canonical, but the harmonic *projector* is.
+        P_c = H_c @ H_c.T
+        P_d = H_d @ H_d.T
+        assert np.allclose(P_c, P_d, atol=1e-8)
+
+    def test_weighted_hashimoto_matrix_agrees_across_conventions(self):
+        import numpy as np
+        g_conductance, g_distance = self._pair()
+        B_c, _ = g_conductance.hashimoto_matrix(weighted=True)
+        B_d, _ = g_distance.hashimoto_matrix(weighted=True)
+        assert np.allclose(B_c, B_d)
+
+    def test_reweight_preserves_weight_kind_by_default(self):
+        g = Graph.from_edges([(0, 1), (1, 2)], weights=[3.0, 4.0], weight_kind="distance")
+        g2 = g.reweight([1.0, 2.0])
+        assert g2.weight_kind == "distance"
+
+    def test_reweight_can_override_weight_kind(self):
+        g = Graph.from_edges([(0, 1), (1, 2)], weights=[3.0, 4.0], weight_kind="distance")
+        g2 = g.reweight([1.0, 2.0], weight_kind="conductance")
+        assert g2.weight_kind == "conductance"
+
+    def test_drop_weights_preserves_weight_kind_for_later_reweight(self):
+        g = Graph.from_edges([(0, 1), (1, 2)], weights=[3.0, 4.0], weight_kind="distance")
+        skeleton = g.drop_weights()
+        assert skeleton.conductance is None
+        assert skeleton.weight_kind == "distance"
+        reweighted = skeleton.reweight([2.0, 5.0])
+        assert reweighted.weight_kind == "distance"
+        assert reweighted.conductance[0] == pytest.approx(0.5)
+
+
 class TestZetaFunctions:
     def test_ihara_triangle(self):
         import sympy as sp

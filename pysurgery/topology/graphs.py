@@ -245,6 +245,11 @@ def _simple_skeleton_table(
 # Graph type
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Module-level (not a class attribute): pydantic auto-privatizes leading-underscore
+# class attributes, which would make this inaccessible from Graph.__init__ before
+# super().__init__() runs.
+_VALID_WEIGHT_KINDS = ("conductance", "distance")
+
 
 class Graph(SimplicialComplex):
     """A graph, modelled as a 1-dimensional simplicial complex (hybrid type).
@@ -275,6 +280,7 @@ class Graph(SimplicialComplex):
     _directed: bool = PrivateAttr(default=False)
     _edge_list: List[Tuple[int, int]] = PrivateAttr(default_factory=list)
     _edge_weights: Optional[List[float]] = PrivateAttr(default=None)
+    _weight_kind: str = PrivateAttr(default="conductance")
     _adjacency_cache: Optional[Dict[int, List[Tuple[int, int, int]]]] = PrivateAttr(
         default=None
     )
@@ -284,18 +290,35 @@ class Graph(SimplicialComplex):
 
         Accepts the graph-specific keywords ``edges`` (list of ``(u, v)`` or ``(u, v, weight)``,
         possibly with parallel/loop entries), ``directed`` (bool), ``weights``
-        (list aligned with ``edges``) and ``num_vertices`` (to declare isolated
-        vertices), in addition to the usual ``SimplicialComplex`` keywords.
-        
+        (list aligned with ``edges``), ``num_vertices`` (to declare isolated
+        vertices), and ``weight_kind`` (``"conductance"`` or ``"distance"``), in
+        addition to the usual ``SimplicialComplex`` keywords.
+
         Weight conventions:
         - Hop-count / unweighted graph distance ignores weights (all edges are 1 hop).
-        - Shortest path distance interprets weight as lengths (larger = further). If weight is conductance, use ``transform="inverse"``.
-        - Hodge Laplacian ``hodge_laplacian(1)`` interprets weight as conductance, scaling the incidence matrix by ``sqrt(w)``.
+        - ``weight_kind`` declares, once, what a stored weight *means*: ``"conductance"``
+          (default; larger = stronger/faster connection) or ``"distance"`` (larger =
+          further/weaker connection). Every method that needs a conductance-typed
+          quantity (:meth:`laplacian`, :meth:`hodge_laplacian`, :meth:`harmonic_forms`,
+          :meth:`hodge_decomposition`, :meth:`hashimoto_matrix` with ``weighted=True``)
+          reads it through :attr:`conductance`, which applies ``1/weight`` automatically
+          when ``weight_kind="distance"`` — callers no longer need to invert weights
+          by hand or remember a per-call-site flag.
+        - :meth:`distances` is unaffected by ``weight_kind``; it keeps its own explicit
+          ``transform`` argument (``"inverse"`` treats the raw stored weight as a
+          conductance, ``None`` treats it as a length already) since it must be able to
+          report a true length regardless of what the graph's own convention is declared
+          to be.
         """
         edges = data.pop("edges", None)
         directed = bool(data.pop("directed", False))
         weights = data.pop("weights", None)
         num_vertices = data.pop("num_vertices", None)
+        weight_kind = data.pop("weight_kind", "conductance")
+        if weight_kind not in _VALID_WEIGHT_KINDS:
+            raise ValueError(
+                f"weight_kind must be one of {_VALID_WEIGHT_KINDS!r}, got {weight_kind!r}."
+            )
 
         parsed_edges = None
         has_weights = False
@@ -334,13 +357,14 @@ class Graph(SimplicialComplex):
         else:
             el = [(int(e[0]), int(e[1])) for e in self.n_simplices(1)]
         object.__setattr__(self, "_edge_list", el)
-        
+
         if weights is not None:
             if len(weights) != len(el):
                 raise ValueError(
                     f"weights length ({len(weights)}) must match edge count ({len(el)})."
                 )
             object.__setattr__(self, "_edge_weights", weights)
+        object.__setattr__(self, "_weight_kind", weight_kind)
 
     # ── constructors ──────────────────────────────────────────────────────────
 
@@ -352,18 +376,23 @@ class Graph(SimplicialComplex):
         num_vertices: Optional[int] = None,
         directed: bool = False,
         weights: Optional[Iterable[float]] = None,
+        weight_kind: str = "conductance",
         coefficient_ring: str = "Z",
     ) -> "Graph":
         """Build a graph from an explicit edge list.
 
         Parallel edges and self-loops are preserved in the graph layer (and
         collapsed/dropped only in the inherited simple 1-skeleton).
+
+        Args:
+            weight_kind: What ``weights`` means; see :attr:`Graph.weight_kind`.
         """
         return cls(
             edges=[(int(u), int(v)) for (u, v) in edges],
             num_vertices=num_vertices,
             directed=directed,
             weights=list(weights) if weights is not None else None,
+            weight_kind=weight_kind,
             coefficient_ring=coefficient_ring,
         )
 
@@ -577,8 +606,51 @@ class Graph(SimplicialComplex):
 
     @property
     def edge_weights(self) -> Optional[np.ndarray]:
-        """Edge weights as a numpy array, if present. Convention depends on the method (e.g., conductance for laplacians, length for distances)."""
+        """Raw edge weights as a numpy array, if present, exactly as stored.
+
+        This is *not* convention-aware: it returns whatever numbers the graph was
+        built with, regardless of :attr:`weight_kind`. Use :attr:`conductance` for a
+        value that is always safe to feed to :meth:`laplacian`, :meth:`hodge_laplacian`,
+        :meth:`harmonic_forms`, :meth:`hodge_decomposition`, or a weighted
+        :meth:`hashimoto_matrix`.
+        """
         return np.array(self._edge_weights) if self._edge_weights is not None else None
+
+    @property
+    def weight_kind(self) -> str:
+        """What a stored edge weight *means*: ``"conductance"`` (default) or ``"distance"``.
+
+        Declared once at construction (or via :meth:`reweight`) instead of being
+        re-derived at every call site. ``"conductance"``: larger weight = stronger/
+        faster connection, used as-is. ``"distance"``: larger weight = further/weaker
+        connection; :attr:`conductance` and every method built on it transparently
+        use ``1/weight`` instead.
+        """
+        return self._weight_kind
+
+    def _effective_conductance(self) -> Optional[np.ndarray]:
+        """Edge weights normalised to conductance semantics, or ``None`` if unweighted."""
+        if self._edge_weights is None:
+            return None
+        w = np.asarray(self._edge_weights, dtype=float)
+        if self._weight_kind == "distance":
+            return 1.0 / w
+        return w
+
+    @property
+    def conductance(self) -> Optional[np.ndarray]:
+        """Edge weights as a genuine conductance (``None`` if unweighted).
+
+        Equal to :attr:`edge_weights` when ``weight_kind == "conductance"``, and to
+        ``1 / edge_weights`` when ``weight_kind == "distance"``. This is what
+        :meth:`laplacian`, :meth:`hodge_laplacian`, :meth:`harmonic_forms`,
+        :meth:`hodge_decomposition`, and a weighted :meth:`hashimoto_matrix` all read
+        internally, so any caller building dynamics on top of them (e.g. a heat- or
+        SIR-driven reweighting scheme) should read *this*, not :attr:`edge_weights`,
+        when computing a new "weight × dynamical factor" quantity — the result stays
+        conductance-typed regardless of how the graph's own weight was stored.
+        """
+        return self._effective_conductance()
 
     def distances(self, weighted: bool = False, transform: Optional[str] = None) -> np.ndarray:
         """All-pairs shortest path distances.
@@ -634,8 +706,19 @@ class Graph(SimplicialComplex):
         A = csr_matrix((data, (rows, cols)), shape=(n, n))
         return csgraph.shortest_path(A, directed=self.directed, unweighted=False)
 
-    def reweight(self, new_weights: Iterable[float]) -> "Graph":
-        """Return a new Graph with identical topology but new edge weights."""
+    def reweight(self, new_weights: Iterable[float], weight_kind: Optional[str] = None) -> "Graph":
+        """Return a new Graph with identical topology but new edge weights.
+
+        Args:
+            new_weights: New weight values, aligned with :attr:`edges`.
+            weight_kind: What ``new_weights`` means (``"conductance"`` or
+                ``"distance"``). Defaults to ``None``, which *preserves* this
+                graph's own :attr:`weight_kind` — the common case, since a
+                weight derived from a dynamical process (e.g. ``conductance *
+                |gradient|``) is typically still the same *kind* of quantity as
+                the conductance it was built from. Pass this explicitly only when
+                the transformation changes what the weight represents.
+        """
         new_weights = list(new_weights)
         if len(new_weights) != len(self._edge_list):
             raise ValueError(f"new_weights length ({len(new_weights)}) must match edge count ({len(self._edge_list)}).")
@@ -644,6 +727,7 @@ class Graph(SimplicialComplex):
             edges=self._edge_list,
             directed=self.directed,
             weights=new_weights,
+            weight_kind=weight_kind if weight_kind is not None else self._weight_kind,
             coefficient_ring=self.coefficient_ring,
         )
 
@@ -654,9 +738,10 @@ class Graph(SimplicialComplex):
             edges=self._edge_list,
             directed=self.directed,
             weights=None,
+            weight_kind=self._weight_kind,
             coefficient_ring=self.coefficient_ring,
         )
-        
+
     def drop_weights(self) -> "Graph":
         """Alias for topological_skeleton."""
         return self.topological_skeleton()
@@ -675,7 +760,7 @@ class Graph(SimplicialComplex):
             return kruskal_spanning_forest(
                 self.vertices,
                 self._edge_list,
-                self._edge_weights,
+                self._effective_conductance(),
                 maximize=True,
             )
         return bfs_spanning_forest(self.vertices, self.adjacency())
@@ -830,17 +915,18 @@ class Graph(SimplicialComplex):
     def adjacency_matrix(self, *, sparse: bool = False):
         """Vertex adjacency matrix ``A`` (ordered by :attr:`vertices`).
 
-        Entry ``A[i, j]`` sums the weights of edges between vertex ``i`` and ``j``
-        (parallel edges add up); a self-loop contributes ``2 * weight`` on the
-        diagonal so that the row sums equal the degrees and ``L = D − A`` has
-        zero row sums.
+        Entry ``A[i, j]`` sums the *conductance* (:attr:`conductance`, not the raw
+        :attr:`edge_weights`) of edges between vertex ``i`` and ``j`` (parallel
+        edges add up); a self-loop contributes ``2 * conductance`` on the diagonal
+        so that the row sums equal the degrees and ``L = D − A`` has zero row sums.
         """
         verts = self.vertices
         idx = {v: i for i, v in enumerate(verts)}
         n = len(verts)
-        dtype = np.float64 if self._edge_weights is not None else np.int64
+        conductance = self._effective_conductance()
+        dtype = np.float64 if conductance is not None else np.int64
         A = np.zeros((n, n), dtype=dtype)
-        weights = self._edge_weights if self._edge_weights is not None else [1.0] * len(self._edge_list)
+        weights = conductance if conductance is not None else [1.0] * len(self._edge_list)
         for eid, (u, v) in enumerate(self._edge_list):
             i, j = idx[u], idx[v]
             w = weights[eid]
@@ -890,9 +976,10 @@ class Graph(SimplicialComplex):
             return wrapper
         elif k == 1:
             bk = self.incidence_matrix(simple=False).astype(float)
-            if self._edge_weights is not None:
+            conductance = self._effective_conductance()
+            if conductance is not None:
                 from scipy.sparse import diags
-                W_half = diags(np.sqrt(self._edge_weights))
+                W_half = diags(np.sqrt(conductance))
                 L = W_half @ bk.T @ bk @ W_half
             else:
                 L = bk.T @ bk
@@ -941,9 +1028,9 @@ class Graph(SimplicialComplex):
             
         if k == 1 and self._edge_weights is not None:
             # Transform basis back to the true harmonic space from the symmetrized space
-            W_half = np.sqrt(self._edge_weights)
+            W_half = np.sqrt(self._effective_conductance())
             basis = basis * W_half[:, None]
-            
+
         return basis
     def hodge_decomposition(self, k: int, chain, backend: str = "auto"):
         """Decompose a k-chain into exact, coexact, and harmonic components."""
@@ -961,7 +1048,7 @@ class Graph(SimplicialComplex):
             B_kp1 = self.incidence_matrix(simple=False).astype(float)
             if self._edge_weights is not None:
                 from scipy.sparse import diags
-                W = diags(self._edge_weights)
+                W = diags(self._effective_conductance())
                 B_kp1 = B_kp1 @ W
         elif k == 1:
             b_k = self.cyclomatic_number
@@ -970,8 +1057,9 @@ class Graph(SimplicialComplex):
             B_kp1 = csr_matrix((n_k, 0), dtype=float)
             if self._edge_weights is not None:
                 from scipy.sparse import diags
-                W_half = diags(np.sqrt(self._edge_weights))
-                W_inv_half = diags(1.0 / np.sqrt(self._edge_weights))
+                conductance = self._effective_conductance()
+                W_half = diags(np.sqrt(conductance))
+                W_inv_half = diags(1.0 / np.sqrt(conductance))
                 B_k = B_k @ W_half
                 chain = W_inv_half @ chain
         else:
@@ -993,7 +1081,7 @@ class Graph(SimplicialComplex):
                 if k == 1 and self._edge_weights is not None:
                     # In python fallback, harmonic_forms(1) returns the true basis.
                     # But we are solving the transformed system, so we need the symmetric basis.
-                    H_sym = H * (1.0 / np.sqrt(self._edge_weights))[:, None]
+                    H_sym = H * (1.0 / np.sqrt(self._effective_conductance()))[:, None]
                     h = H_sym @ (H_sym.T @ chain)
                 else:
                     h = H @ (H.T @ chain)
@@ -1014,8 +1102,8 @@ class Graph(SimplicialComplex):
 
         if k == 1 and self._edge_weights is not None:
             # Transform h back from the symmetrized space
-            h = np.sqrt(self._edge_weights) * h
-            
+            h = np.sqrt(self._effective_conductance()) * h
+
         return alpha, beta, h
 
     def plot_harmonic(self, k: int, h, ax=None, **kwargs):
@@ -1094,7 +1182,9 @@ class Graph(SimplicialComplex):
         the head of dart ``d`` is the tail of dart ``d'`` and ``d'`` is not the
         reversal of ``d`` (i.e. no backtracking). The non-zero spectrum of ``B``
         governs the Ihara zeta function, and ``tr(Bᵐ)`` counts closed
-        non-backtracking walks of length ``m``.
+        non-backtracking walks of length ``m``. When ``weighted=True``, entries use
+        :attr:`conductance` (so :attr:`weight_kind` is respected automatically), not
+        the raw :attr:`edge_weights`.
 
         Returns:
             ``(B, darts)`` where ``darts[k] = (tail, head, edge_id)`` describes
@@ -1108,9 +1198,10 @@ class Graph(SimplicialComplex):
             darts.append((u, v, eid))   # dart 2*eid
             darts.append((v, u, eid))   # dart 2*eid + 1 (reverse)
         m2 = len(darts)
-        
+
         dtype = np.float64 if weighted else np.int64
         B = np.zeros((m2, m2), dtype=dtype)
+        conductance = self._effective_conductance() if weighted else None
         from collections import defaultdict
         out_of: Dict[int, List[int]] = defaultdict(list)
         for k, (t, h, _e) in enumerate(darts):
@@ -1121,7 +1212,7 @@ class Graph(SimplicialComplex):
                 if d_next != reverse_of_d:
                     if weighted:
                         e_next = darts[d_next][2]
-                        B[d, d_next] = self._edge_weights[e_next]
+                        B[d, d_next] = conductance[e_next]
                     else:
                         B[d, d_next] = 1
         return B, darts
