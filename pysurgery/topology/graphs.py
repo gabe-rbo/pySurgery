@@ -639,9 +639,9 @@ class Graph(SimplicialComplex):
         new_weights = list(new_weights)
         if len(new_weights) != len(self._edge_list):
             raise ValueError(f"new_weights length ({len(new_weights)}) must match edge count ({len(self._edge_list)}).")
-        return Graph.from_edges(
-            self._edge_list,
-            num_vertices=self.num_vertices,
+        return Graph(
+            simplices={d: list(s) for d, s in self.simplices_field.items() if d <= 1},
+            edges=self._edge_list,
             directed=self.directed,
             weights=new_weights,
             coefficient_ring=self.coefficient_ring,
@@ -649,9 +649,9 @@ class Graph(SimplicialComplex):
 
     def topological_skeleton(self) -> "Graph":
         """Return a new Graph with identical topology but all edge weights removed."""
-        return Graph.from_edges(
-            self._edge_list,
-            num_vertices=self.num_vertices,
+        return Graph(
+            simplices={d: list(s) for d, s in self.simplices_field.items() if d <= 1},
+            edges=self._edge_list,
             directed=self.directed,
             weights=None,
             coefficient_ring=self.coefficient_ring,
