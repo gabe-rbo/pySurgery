@@ -385,7 +385,12 @@ class Graph(SimplicialComplex):
         collapsed/dropped only in the inherited simple 1-skeleton).
 
         Args:
+            edges: Iterable of (u, v) edge tuples.
+            num_vertices: Optional number of vertices. If None, derived from edges.
+            directed: Whether the graph is directed.
+            weights: Optional iterable of float weights corresponding to the edges.
             weight_kind: What ``weights`` means; see :attr:`Graph.weight_kind`.
+            coefficient_ring: Ring to use for homology computations (default "Z").
         """
         return cls(
             edges=[(int(u), int(v)) for (u, v) in edges],

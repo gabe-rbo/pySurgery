@@ -98,7 +98,8 @@ class TestMultigraphTolerance:
         g = Graph.from_edges([(0, 1), (0, 1), (0, 1)])
         assert g.cyclomatic_number == 2
         # The *simple* 1-skeleton collapses them, so inherited b1 differs.
-        assert g.betti_number(1) == 0
+        assert g.betti_number(1) == 2
+        assert super(Graph, g).betti_number(1) == 0
         assert g.degree(0) == 3
 
     def test_self_loop_tolerance(self):

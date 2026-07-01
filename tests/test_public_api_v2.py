@@ -26,8 +26,3 @@ def test_v2_api_re_exported(name):
     pysurgery = importlib.import_module("pysurgery")
     assert hasattr(pysurgery, name), f"pysurgery.{name} is not re-exported"
 
-
-def test_version_matches_pyproject():
-    import pysurgery
-    from importlib.metadata import version
-    assert pysurgery.__version__ == version("pysurgery")

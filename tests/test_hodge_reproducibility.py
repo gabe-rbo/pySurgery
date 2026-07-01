@@ -10,8 +10,7 @@ def test_hodge_harmonic_reproducibility():
     """
     # Create a figure-8 graph (two triangles sharing a vertex)
     # Betti numbers: b_0 = 1, b_1 = 2
-    g = Graph()
-    g.add_edges_from([
+    g = Graph.from_edges([
         (0, 1), (1, 2), (2, 0), # Triangle 1
         (0, 3), (3, 4), (4, 0)  # Triangle 2
     ])
