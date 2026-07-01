@@ -2749,17 +2749,46 @@ function optgen_from_simplices(simplices, num_vertices::Int, pts=nothing, max_ro
         edge_weights[(e[2], e[1])] = edge_weights[e]
     end
 
-    # 2. Minimum Spanning Tree
+    # 2. Minimum Spanning Tree (Custom Kruskal)
     g_full = SimpleWeightedGraph(nv)
     for e in edges_list
-        add_edge!(g_full, e[1]+1, e[2]+1, edge_weights[e])
+        SimpleWeightedGraphs.add_edge!(g_full, e[1]+1, e[2]+1, edge_weights[e])
     end
-    mst_edges = kruskal_mst(g_full)
+
+    sorted_edges = sort(edges_list, by = e -> edge_weights[e])
+    parent = collect(1:nv)
+    rank = zeros(Int, nv)
+    function find_root(i)
+        root = i
+        while root != parent[root]
+            root = parent[root]
+        end
+        curr = i
+        while curr != root
+            nxt = parent[curr]
+            parent[curr] = root
+            curr = nxt
+        end
+        return root
+    end
+    
     spanning_set = Set{Tuple{Int64, Int64}}()
-    for e in mst_edges
-        u, v = Int64(src(e)-1), Int64(dst(e)-1)
-        push!(spanning_set, (u, v))
-        push!(spanning_set, (v, u))
+    for e in sorted_edges
+        u, v = e[1] + 1, e[2] + 1
+        root_u = find_root(u)
+        root_v = find_root(v)
+        if root_u != root_v
+            if rank[root_u] < rank[root_v]
+                parent[root_u] = root_v
+            elseif rank[root_u] > rank[root_v]
+                parent[root_v] = root_u
+            else
+                parent[root_v] = root_u
+                rank[root_u] += 1
+            end
+            push!(spanning_set, (e[1], e[2]))
+            push!(spanning_set, (e[2], e[1]))
+        end
     end
 
     non_tree = [e for e in edges_list if !(e in spanning_set)]
@@ -4393,46 +4422,32 @@ points::AbstractMatrix{Float64}, simplices::AbstractMatrix{Int64})
         push!(weights, d)
     end
 
-    if HAS_GRAPHS
-        g = SimpleWeightedGraph(n_pts)
-        for i in 1:length(edges_list)
-            u, v = edges_list[i]
-            add_edge!(g, u+1, v+1, weights[i])
-        end
-        mst = kruskal_mst(g)
-        max_e = 0.0
-        for e in mst
-            max_e = max(max_e, e.weight)
-        end
-        return (max_e / 2.0)^2
-    else
-        parent = collect(1:n_pts)
-        function find(i)
-            root = i
-            while parent[root] != root; root = parent[root]; end
-            while parent[i] != root; next = parent[i]; parent[i] = root; i = next; end
-            return root
-        end
-        function union!(i, j)
-            root_i = find(i)
-            root_j = find(j)
-            if root_i != root_j; parent[root_j] = root_i; return true; end
-            return false
-        end
-
-        perm = sortperm(weights)
-        max_e = 0.0
-        count = 0
-        for idx in perm
-            u, v = edges_list[idx]
-            if union!(u+1, v+1)
-                max_e = max(max_e, weights[idx])
-                count += 1
-                if count == n_pts - 1; break; end
-            end
-        end
-        return (max_e / 2.0)^2
+    parent = collect(1:n_pts)
+    function find(i)
+        root = i
+        while parent[root] != root; root = parent[root]; end
+        while parent[i] != root; next = parent[i]; parent[i] = root; i = next; end
+        return root
     end
+    function union!(i, j)
+        root_i = find(i)
+        root_j = find(j)
+        if root_i != root_j; parent[root_j] = root_i; return true; end
+        return false
+    end
+
+    perm = sortperm(weights)
+    max_e = 0.0
+    count = 0
+    for idx in perm
+        u, v = edges_list[idx]
+        if union!(u+1, v+1)
+            max_e = max(max_e, weights[idx])
+            count += 1
+            if count == n_pts - 1; break; end
+        end
+    end
+    return (max_e / 2.0)^2
 end
 
 function compute_crust_simplices_jl(points::AbstractMatrix{Float64}, combined_simplices::AbstractMatrix{Int64}, n_pts_orig::Int)
@@ -6965,16 +6980,28 @@ Computes the exact harmonic basis of the sparse Hodge Laplacian `L`
 using `KrylovKit.eigsolve` and an exact Betti number `b_k` oracle.
 """
 function _compute_hodge_harmonics(L::SparseMatrixCSC{Float64, Int}, b_k::Int)
+    n = size(L, 1)
     if b_k == 0
-        return zeros(Float64, size(L, 1), 0)
+        return zeros(Float64, n, 0)
     end
     
-    # We use the shift-invert behavior or simply the smallest real eigenvalues (:SR).
-    # Since L is symmetric positive semi-definite, the smallest are the kernel.
-    # ishermitian=true uses Lanczos and ensures an orthonormal basis.
-    vals, vecs, info = KrylovKit.eigsolve(L, size(L, 1), b_k, :SR, ishermitian=true, tol=1e-12, maxiter=3000)
+    # Dense deterministic fallback for small matrices
+    if n < 500
+        L_dense = Matrix(L)
+        F = eigen(Symmetric(L_dense))
+        # eigen of Symmetric returns sorted eigenvalues; grab the first b_k (smallest)
+        basis = F.vectors[:, 1:b_k]
+        return Matrix(qr(basis).Q)
+    end
     
-    basis = zeros(Float64, size(L, 1), b_k)
+    # Local RNG seeding for deterministic Krylov behavior
+    # Use Random.Xoshiro to avoid polluting global state
+    rng = Random.Xoshiro(42)
+    v0 = Random.randn(rng, Float64, n)
+    
+    vals, vecs, info = KrylovKit.eigsolve(L, v0, b_k, :SR, ishermitian=true, tol=1e-12, maxiter=3000)
+    
+    basis = zeros(Float64, n, b_k)
     for i in 1:b_k
         basis[:, i] .= real.(vecs[i])
     end
