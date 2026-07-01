@@ -1173,8 +1173,11 @@ class Graph(SimplicialComplex):
         Isolated vertices (degree 0) contribute a zero row/column.
         """
         verts = self.vertices
-        d = np.array([self.degree(v) for v in verts], dtype=float)
         A = self.adjacency_matrix().astype(float)
+        if self._edge_weights is None:
+            d = np.array([self.degree(v) for v in verts], dtype=float)
+        else:
+            d = np.sum(A, axis=1)
         with np.errstate(divide="ignore"):
             dinv = np.where(d > 0, 1.0 / np.sqrt(d), 0.0)
         n = len(verts)
