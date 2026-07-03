@@ -75,6 +75,11 @@ from pysurgery.core.foundations import CONTRACT_VERSION
 _DEFAULT_CERT_PRIMES: list[int] = [2, 3, 5, 7, 11, 13]
 _DEFAULT_CRT_PRIMES: list[int] = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31]
 
+# Matrices at or below this size in both dimensions skip the p-adic CRT fast
+# path in compute_exact_sparse_snf: direct elimination is already fast there,
+# and the fixed multi-prime CRT overhead is not worth paying.
+_PADIC_FIRST_MIN_DIM: int = 50
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Result types
@@ -400,29 +405,66 @@ def compute_exact_sparse_snf(
 
     if use_julia:
         try:
-            coo = matrix_csr.tocoo()
-            rows = np.asarray(coo.row, dtype=np.int64)
-            cols = np.asarray(coo.col, dtype=np.int64)
-            vals = np.asarray(coo.data, dtype=np.int64)
-            diag_raw = julia_engine.backend.exact_snf_sparse(
-                rows, cols, vals,
-                int(matrix_csr.shape[0]),
-                int(matrix_csr.shape[1]),
-                use_markowitz=use_markowitz,
-            )
-            diag = np.array(diag_raw, dtype=np.int64)
-            algorithm = (
-                "julia_isnf"
-                if (matrix_csr.shape[0] > 100 or matrix_csr.shape[1] > 100)
-                else "julia_aa"
-            )
-            markowitz_applied = use_markowitz
+            cert_raw = None
+
+            # Fast path: p-adic CRT reconstruction (see compute_padic_snf_diagonal)
+            # never performs dense integer elimination, so it does not suffer the
+            # intermediate-coefficient blowup that plain elimination (AbstractAlgebra
+            # .snf / IntegerSmithNormalForm on a weakly-peelable core) can hit on
+            # dense boundary matrices -- e.g. Vietoris-Rips flag complexes, where
+            # leaf-peeling removes only a small fraction of the matrix. It is only
+            # skipped for small matrices, where direct elimination is already fast
+            # and the fixed multi-prime overhead of the CRT path is not worth paying.
+            #
+            # It is exact provided every prime factor of every invariant factor is
+            # covered by the p-adic prime/depth defaults (see compute_padic_snf_diagonal;
+            # sufficient for the entries in {-1,0,1} and torsion typical of simplicial
+            # boundary operators). We do not trust it blindly: the reconstructed rank
+            # is cross-checked against an independent modular rank certificate before
+            # use, and any mismatch (or any exception) falls through to the
+            # unconditionally-exact leaf-peel + Markowitz + elimination path below.
+            diag = None
+            if max(matrix_csr.shape) > _PADIC_FIRST_MIN_DIM:
+                try:
+                    padic_diag = compute_padic_snf_diagonal(matrix_csr)
+                    cert_raw = julia_engine.compute_modular_rank_certificate(
+                        matrix_csr, primes=cert_primes
+                    )
+                    padic_rank = int(np.sum(padic_diag > 0))
+                    if cert_raw["all_agree"] and cert_raw["certified_rank"] == padic_rank:
+                        diag = np.asarray(padic_diag, dtype=np.int64)
+                        algorithm = "julia_padic_crt"
+                        markowitz_applied = False
+                    else:
+                        cert_raw = None  # inconclusive; do not reuse below
+                except Exception:
+                    cert_raw = None
+
+            if diag is None:
+                coo = matrix_csr.tocoo()
+                rows = np.asarray(coo.row, dtype=np.int64)
+                cols = np.asarray(coo.col, dtype=np.int64)
+                vals = np.asarray(coo.data, dtype=np.int64)
+                diag_raw = julia_engine.backend.exact_snf_sparse(
+                    rows, cols, vals,
+                    int(matrix_csr.shape[0]),
+                    int(matrix_csr.shape[1]),
+                    use_markowitz=use_markowitz,
+                )
+                diag = np.array(diag_raw, dtype=np.int64)
+                algorithm = (
+                    "julia_isnf"
+                    if (matrix_csr.shape[0] > 100 or matrix_csr.shape[1] > 100)
+                    else "julia_aa"
+                )
+                markowitz_applied = use_markowitz
 
             # Modular rank certification (optional cross-check).
             if verify_modular:
-                cert_raw = julia_engine.compute_modular_rank_certificate(
-                    matrix_csr, primes=cert_primes
-                )
+                if cert_raw is None:
+                    cert_raw = julia_engine.compute_modular_rank_certificate(
+                        matrix_csr, primes=cert_primes
+                    )
                 cert = ModularRankCertificate(
                     primes=cert_raw["primes"],
                     ranks=cert_raw["ranks"],

@@ -4906,6 +4906,63 @@ class SimplicialComplex(ChainComplex):
             
         return True, d, {}
 
+    def remove_simplices_impeding_manifold(self, backend: str = "auto", remove_vertices: bool = False) -> list[tuple[int, ...]]:
+        """Remove simplices that prevent the complex from being a homology manifold.
+        
+        If there are branching singularities, removes the top-dimensional simplices 
+        incident to the branching faces. If there are vertices with defective links, 
+        removes the top-dimensional simplices in their star (or the vertices themselves 
+        if `remove_vertices=True`).
+        
+        Args:
+            backend: 'auto', 'julia', or 'python'.
+            remove_vertices: If True, removes defective vertices entirely.
+                             If False, only removes the top-dimensional simplices attached to them.
+            
+        Returns:
+            list[tuple[int, ...]]: The list of top-level simplices or vertices that were directly removed.
+        """
+        is_manifold, _, diag = self.is_homology_manifold(backend=backend)
+        if is_manifold:
+            return []
+            
+        removed_simplices = []
+        d = self.dimension
+        
+        # 1. Handle global branching singularities
+        if "global" in diag:
+            if d >= 1:
+                face_counts = Counter()
+                for simplex in self.n_simplices(d):
+                    for face in itertools.combinations(sorted(simplex), d):
+                        face_counts[face] += 1
+                
+                branching_faces = [f for f, count in face_counts.items() if count > 2]
+                for f in branching_faces:
+                    # Find and remove all d-simplices containing this branching face
+                    for c in list(self.n_simplices(d)):
+                        if set(f).issubset(set(c)):
+                            if c in self.n_simplices(d):
+                                self.remove_simplex(c)
+                                removed_simplices.append(c)
+                                
+        # 2. Handle specific defective vertices
+        for v in list(diag.keys()):
+            if v != "global":
+                if remove_vertices:
+                    if (v,) in self.n_simplices(0):
+                        self.remove_simplex((v,))
+                        removed_simplices.append((v,))
+                else:
+                    if d >= 1:
+                        for c in list(self.n_simplices(d)):
+                            if v in set(c):
+                                if c in self.n_simplices(d):
+                                    self.remove_simplex(c)
+                                    removed_simplices.append(c)
+                    
+        return removed_simplices
+
     def fundamental_polyhedron(self) -> "FundamentalPolyhedron":
         """Construct the fundamental polyhedron for this manifold complex.
 

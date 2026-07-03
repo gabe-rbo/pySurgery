@@ -45,6 +45,7 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 
 ### 1. Combinatorial Topology & Complex Generation
 * **Discrete Spaces:** Robust native classes for `SimplicialComplex`, `CWComplex`, and `ChainComplex` with lazy-evaluated, cached topological properties (f-vectors, boundaries).
+* **Covering Spaces:** Native construction of `GraphCovering` and `UniversalCover` (unrolled infinite trees) with built-in `networkx` and `matplotlib` visualization via `.plot(depth=...)`.
 * **Topological Simplification:** Rigorous `.simplify()` method for homotopy-equivalent reduction via Link Condition edge contractions and high-performance `.quick_mapper()` for modularity-based structural summarization.
 * **Homotopy Equivalence:** Systematic reduction via simplicial **Collapses** (free face removal) and **Discrete Morse Theory** (Forman matching), yielding minimal chain complexes while preserving mathematical integrity. Includes rigorous `.is_homology_isomorphic()` checks via SNF.
 * **Massive Point Clouds:** Native construction of memory-efficient **Alpha Complexes** (2D/3D/ND with EMST connectivity heuristics), **Vietoris-Rips** (via sparse clique enumeration), and **Witness Complexes**.
@@ -52,6 +53,8 @@ pySurgery goes beyond standard persistent homology, exposing the deep algebraic 
 * **Exact Persistence:** Native Julia-backed barcode computation over $\mathbb{Z}_2$ and $\mathbb{Q}$ using optimized $R=DV$ matrix reductions with memory-bound guardrails.
 * **Homology & Cohomology:** Exact computation of Betti numbers and torsion coefficients over $\mathbb{Z}$, $\mathbb{Q}$, and $\mathbb{Z}/p\mathbb{Z}$. Includes Universal Coefficient Theorem (UCT) decompositions for composite moduli.
 * **Optimal Generators:** Data-grounded $H_1$ generator extraction, yielding cycle representatives optimized by minimum geometric weight over $\mathbb{F}_2$ annotations.
+* **Spectral Topology & Laplacians:** Direct computation of unweighted and weighted Graph Laplacians, Normalized Laplacians, and $k$-th Hodge Laplacians (natively handling multigraph structures). Features direct `.eigenvalues()` and `.eigenvectors()` property-like access using deterministic high-performance Julia symmetric solvers (via local Xoshiro RNG) or dense fallbacks.
+* **Weighted Hodge Theory:** Extended Discrete Hodge Theorem supporting edge conductances, preserving high-performance symmetry via $W^{1/2} d_1^T d_1 W^{1/2}$ transformations for accurate harmonic form decompositions.
 
 ### 2. Algebraic Topology & Cohomological Operations
 * **Cup Products:** Full simplicial implementation of the Alexander-Whitney diagonal approximation to evaluate $\alpha \smile \beta$, exposing the ring structure of cohomology.

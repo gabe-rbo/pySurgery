@@ -918,10 +918,10 @@ class _BaseFiltrationReport:
         """Render the filtration report as Markdown.
 
         Returns:
-            A Markdown string with the Betti-number table, the most-persistent
-            homologies, the manifold-status table, the integer-torsion table (when
-            ``compute_torsion`` is set), and (when tracked) the connected-components
-            table.
+            A Markdown string with a unified table containing Betti numbers, 
+            manifold-status, integer-torsion (when ``compute_torsion`` is set), 
+            and connected-components (when tracked), plus a list of the most 
+            persistent homologies.
         """
         if not self.results:
             return "No filtration steps recorded."
@@ -949,54 +949,50 @@ class _BaseFiltrationReport:
                 final_rows.append(row)
             return _format_padded_table(final_rows)
 
-        betti_rows_init = [[f"Betti \\ {eps_label}"]]
+        merged_rows = [[f"Property \\ {eps_label}"]]
+        
+        # 1. Betti Numbers
         for d in sorted_betti_dims:
-            betti_rows_init.append([f"b_{d}"] + [str(res["bettis"].get(d, 0)) for res in self.results])
-        betti_report = (f"# Betti Numbers Report (Method: {self.method_name})\n"
-                        + format_table_with_dynamic_eps(betti_rows_init, reported_epsilons))
+            merged_rows.append([f"b_{d}"] + [str(res["bettis"].get(d, 0)) for res in self.results])
+            
+        # 2. Manifold Status
+        merged_rows.append(["Is Homology Manifold"] + [res["is_manifold"] for res in self.results])
+        merged_rows.append(["Is Closed"] + [res["is_closed"] for res in self.results])
+        with_boundary = [("No" if r["is_closed"] == "Yes" else "Yes") if "Yes" in r["is_manifold"] else "N/A"
+                         for r in self.results]
+        merged_rows.append(["With Boundary"] + with_boundary)
+        merged_rows.append(["Dimension"] + [res["dimension"] for res in self.results])
+        
+        # 3. Torsion
+        if self.compute_torsion:
+            tors_dims = sorted({d for res in self.results for d in res.get("torsion", {})})
+            def _fmt_torsion(coeffs):
+                if not coeffs:
+                    return "0"
+                return " + ".join(f"Z/{t}" for t in sorted(coeffs))
+            
+            if tors_dims:
+                for d in tors_dims:
+                    merged_rows.append(
+                        [f"Torsion H_{d}"] + [_fmt_torsion(res.get("torsion", {}).get(d, [])) for res in self.results]
+                    )
+            else:
+                merged_rows.append(["Torsion"] + ["0" for _ in self.results])
+                
+        # 4. Connected Components
+        if self.track_connected_components:
+            for i in range(self.max_comp_rows):
+                merged_rows.append([f"C_{i+1}"] + [res["comp_info_map"].get(i, "-") for res in self.results])
+
+        unified_table = format_table_with_dynamic_eps(merged_rows, reported_epsilons)
+        report = (f"# Unified Filtration Report (Method: {self.method_name})\n\n" + unified_table)
 
         stab_lines = ["\n# Most Persistent Homologies"]
         for i, (dist, b, s, e) in enumerate(self.stability_data[:5]):
             b_str = ", ".join(f"b_{d}={b.get(d, 0)}" for d in sorted_betti_dims if b.get(d, 0) > 0)
             stab_lines.append(f"{i+1}. Range: {dist:.6f} [{s:.6f} -> {e:.6f}] | {b_str}")
 
-        mani_rows_init = [[f"Property \\ {eps_label}"]]
-        mani_rows_init.append(["Is Manifold"] + [res["is_manifold"] for res in self.results])
-        mani_rows_init.append(["Is Closed"] + [res["is_closed"] for res in self.results])
-        with_boundary = [("No" if r["is_closed"] == "Yes" else "Yes") if "Yes" in r["is_manifold"] else "N/A"
-                         for r in self.results]
-        mani_rows_init.append(["With Boundary"] + with_boundary)
-        mani_rows_init.append(["Dimension"] + [res["dimension"] for res in self.results])
-        mani_report = "\n# Manifold Status Report\n" + format_table_with_dynamic_eps(mani_rows_init, reported_epsilons)
-
-        tors_report = ""
-        if self.compute_torsion:
-            tors_dims = sorted({d for res in self.results for d in res.get("torsion", {})})
-
-            def _fmt_torsion(coeffs):
-                if not coeffs:
-                    return "0"
-                return " + ".join(f"Z/{t}" for t in sorted(coeffs))
-
-            tors_rows_init = [[f"Torsion \\ {eps_label}"]]
-            if tors_dims:
-                for d in tors_dims:
-                    tors_rows_init.append(
-                        [f"H_{d}"] + [_fmt_torsion(res.get("torsion", {}).get(d, [])) for res in self.results]
-                    )
-            else:
-                tors_rows_init.append(["(none)"] + ["0" for _ in self.results])
-            tors_report = ("\n\n# Integer Torsion Report (exact H_*(.; Z) per threshold)\n"
-                           + format_table_with_dynamic_eps(tors_rows_init, reported_epsilons))
-
-        comp_report = ""
-        if self.track_connected_components:
-            comp_rows_init = [[f"Component \\ {eps_label}"]]
-            for i in range(self.max_comp_rows):
-                comp_rows_init.append([f"C_{i+1}"] + [res["comp_info_map"].get(i, "-") for res in self.results])
-            comp_report = "\n\n# Connected Components Report\n" + format_table_with_dynamic_eps(comp_rows_init, reported_epsilons)
-
-        return betti_report + "\n" + "\n".join(stab_lines) + "\n" + mani_report + tors_report + comp_report
+        return report + "\n" + "\n".join(stab_lines)
 
     def plot(self, barcode: bool = False) -> Any:
         """Build an interactive Plotly figure of the Betti curves or persistence barcode.
