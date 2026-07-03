@@ -160,6 +160,7 @@ class _BaseFiltrationReport:
         self.max_comp_rows = 0
         self.barcode: List = []
         self._precomputed_manifolds = None
+        self._precomputed_components = None
         self._compute()
 
     # ------------------------------------------------------------------
@@ -941,7 +942,7 @@ class _BaseFiltrationReport:
         # needs the explicit complex (manifold / torsion / component tracking);
         # otherwise Betti numbers come straight off the barcode. ``need_*`` is
         # loop-invariant (``analyze_manifolds`` is finalized by the auto-skip above).
-        need_components = self.track_connected_components or self.compute_torsion
+        need_components = (self.track_connected_components and getattr(self, "_precomputed_components", None) is None) or self.compute_torsion
         need_whole = self.analyze_manifolds and (self._precomputed_manifolds is None)
         need_complex = need_components or need_whole
         slices = (self._incremental_slices(max_sc, filt, need_components, need_whole)
@@ -1026,51 +1027,62 @@ class _BaseFiltrationReport:
 
             comp_info_dict = {}
             if self.track_connected_components:
-                next_active_rows = {}
-                new_merges_this_step = {}
-                for vset_fz, table in comp_tables:
-                    vset = set(vset_fz)
-                    absorbed = [r for r, prev_vset in active_rows.items() if prev_vset.issubset(vset)]
-                    if absorbed:
-                        survivor = min(absorbed)
-                        next_active_rows[survivor] = vset
-                        for r in absorbed:
-                            if r != survivor:
-                                new_merges_this_step[r] = survivor
-                    else:
-                        r_new = next_available_row_idx
-                        next_available_row_idx += 1
-                        next_active_rows[r_new] = vset
-
-                    key = self._component_content_key(table)
-                    info = component_info_cache.get(key)
-                    if info is None:
-                        # Build the component only on a miss — stable components
-                        # reuse the cached info without re-materializing.
-                        sub_sc = self._build_component_complex(SC, table, coords)
-                        c_is_mani, c_dim, c_diag = sub_sc.is_homology_manifold(backend=self.backend)
-                        if c_is_mani:
-                            c_closed = "Closed" if sub_sc.is_closed_manifold else "Bound"
-                            info = f"M(D:{c_dim}, {c_closed})"
+                if self._precomputed_components is not None:
+                    comp_info_dict = self._precomputed_components[idx]
+                else:
+                    next_active_rows = {}
+                    new_merges_this_step = {}
+                    for vset_fz, table in comp_tables:
+                        vset = set(vset_fz)
+                        absorbed = [r for r, prev_vset in active_rows.items() if prev_vset.issubset(vset)]
+                        if absorbed:
+                            survivor = min(absorbed)
+                            next_active_rows[survivor] = vset
+                            for r in absorbed:
+                                if r != survivor:
+                                    new_merges_this_step[r] = survivor
                         else:
-                            info = f"Non-M ({len(c_diag)} dft)"
-                        component_info_cache[key] = info
+                            r_new = next_available_row_idx
+                            next_available_row_idx += 1
+                            next_active_rows[r_new] = vset
+    
+                        key = self._component_content_key(table)
+                        info = component_info_cache.get(key)
+                        if info is None:
+                            # Build the component only on a miss — stable components
+                            # reuse the cached info without re-materializing.
+                            sub_sc = self._build_component_complex(SC, table, coords)
+                            c_is_mani, c_dim, c_diag = sub_sc.is_homology_manifold(backend=self.backend)
+                            if c_is_mani:
+                                c_closed = "Closed" if sub_sc.is_closed_manifold else "Bound"
+                                info = f"M(D:{c_dim}, {c_closed})"
+                            else:
+                                info = f"Non-M ({len(c_diag)} dft)"
+                            component_info_cache[key] = info
+    
+                        for r_idx, vs in next_active_rows.items():
+                            if vs == vset:
+                                comp_info_dict[r_idx] = info
+                                break
+    
+                    for r_idx, target_r in new_merges_this_step.items():
+                        comp_info_dict[r_idx] = f"Merged (C_{target_r + 1})"
+                        merged_rows_history[r_idx] = True
+    
+                    for r_idx in merged_rows_history:
+                        if r_idx not in comp_info_dict:
+                            comp_info_dict[r_idx] = "-"
+    
+                    active_rows = next_active_rows
+                
+                # We need to maintain next_available_row_idx even when using precomputed!
+                # Actually, precomputed already gives us comp_info_dict keyed by row_idx!
+                # The total number of columns is just the maximum key + 1.
+                current_invariants["comp_info"] = comp_info_dict
 
-                    for r_idx, vs in next_active_rows.items():
-                        if vs == vset:
-                            comp_info_dict[r_idx] = info
-                            break
-
-                for r_idx, target_r in new_merges_this_step.items():
-                    comp_info_dict[r_idx] = f"Merged (C_{target_r + 1})"
-                    merged_rows_history[r_idx] = True
-
-                for r_idx in merged_rows_history:
-                    if r_idx not in comp_info_dict:
-                        comp_info_dict[r_idx] = "-"
-
-                active_rows = next_active_rows
-                current_invariants["comp_info"] = [comp_info_dict.get(r, "-") for r in range(next_available_row_idx)]
+                current_invariants["comp_info_map"] = comp_info_dict.copy()
+            else:
+                current_invariants["comp_info_map"] = {}
 
             if self.dynamic_mode and last_invariants is not None and current_invariants == last_invariants:
                 continue
@@ -1084,10 +1096,20 @@ class _BaseFiltrationReport:
                 "is_closed": closed,
                 "dimension": dim_repr,
                 "torsion": torsion,
-                "comp_info_map": comp_info_dict.copy() if self.track_connected_components else {},
+                "comp_info_map": current_invariants["comp_info_map"],
             })
 
-        self.max_comp_rows = next_available_row_idx
+        if self.track_connected_components:
+            if self._precomputed_components is not None:
+                max_r = -1
+                for res in self.results:
+                    for k in res["comp_info_map"].keys():
+                        if k > max_r: max_r = k
+                self.max_comp_rows = max_r + 1
+            else:
+                self.max_comp_rows = next_available_row_idx
+        else:
+            self.max_comp_rows = 0
 
         self.stability_data = []
         for j in range(len(self.results)):
@@ -1542,7 +1564,7 @@ class RipsFiltrationReport(_BaseFiltrationReport):
         the clique homology engine or the implicit-cohomology engine; both return
         the identical barcode.
         """
-        need_explicit = self.track_connected_components or self.compute_torsion
+        need_explicit = self.compute_torsion
         if (need_explicit or self.backend == "python"
                 or len(self.points) < self._RIPS_FUSED_MIN_POINTS):
             return super()._assemble()
@@ -1556,12 +1578,16 @@ class RipsFiltrationReport(_BaseFiltrationReport):
                     self.points, eps_max, self.max_dimension,
                     analyze_manifolds=self.analyze_manifolds,
                     n_samples=self.n_samples,
+                    verify_manifold_only_at_betti_change=self.verify_manifold_only_at_betti_change,
+                    track_connected_components=self.track_connected_components,
                 )
             else:
                 payload = julia_engine.compute_rips_filtration(
                     self.points, eps_max, self.max_dimension,
                     analyze_manifolds=self.analyze_manifolds,
                     n_samples=self.n_samples,
+                    verify_manifold_only_at_betti_change=self.verify_manifold_only_at_betti_change,
+                    track_connected_components=self.track_connected_components,
                 )
         except Exception as exc:  # pragma: no cover - only when Julia errors
             warnings.warn(
@@ -1577,6 +1603,8 @@ class RipsFiltrationReport(_BaseFiltrationReport):
         # Large: keep the complex implicit -- this is the whole point of the fusion.
         if "manifold_data" in payload and payload["manifold_data"] is not None:
             self._precomputed_manifolds = payload["manifold_data"]
+        if "component_data" in payload and payload["component_data"] is not None:
+            self._precomputed_components = payload["component_data"]
 
         return (None, None, payload["barcode"], payload["dim_first_appear"],
                 payload["total"], payload["eps_values"])
@@ -1650,7 +1678,7 @@ class AlphaFiltrationReport(_BaseFiltrationReport):
         staged build and python loops entirely. For small complexes, we defer to the
         staged build.
         """
-        need_explicit = self.track_connected_components or self.compute_torsion
+        need_explicit = self.compute_torsion
         if (need_explicit or self.backend == "python"
                 or len(self.points) < self._ALPHA_FUSED_MIN_POINTS):
             return super()._assemble()
@@ -1671,6 +1699,8 @@ class AlphaFiltrationReport(_BaseFiltrationReport):
                 analyze_manifolds=self.analyze_manifolds,
                 n_samples=self.n_samples,
                 eps_max=self.eps_max,
+                verify_manifold_only_at_betti_change=self.verify_manifold_only_at_betti_change,
+                track_connected_components=self.track_connected_components,
             )
         except Exception as exc:
             warnings.warn(
@@ -1683,6 +1713,8 @@ class AlphaFiltrationReport(_BaseFiltrationReport):
 
         if "manifold_data" in payload and payload["manifold_data"] is not None:
             self._precomputed_manifolds = payload["manifold_data"]
+        if "component_data" in payload and payload["component_data"] is not None:
+            self._precomputed_components = payload["component_data"]
 
         return (None, None, payload["barcode"], payload["dim_first_appear"],
                 payload["total"], payload["eps_values"])

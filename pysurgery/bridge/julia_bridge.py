@@ -2384,6 +2384,7 @@ class JuliaBridge:
         analyze_manifolds: bool = False,
         n_samples: Optional[int] = None,
         verify_manifold_only_at_betti_change: bool = False,
+        track_connected_components: bool = False,
     ) -> dict:
         """Fused Vietoris-Rips build + longest-edge filtration + Z2 persistence in Julia.
 
@@ -2421,6 +2422,7 @@ class JuliaBridge:
                 bool(analyze_manifolds),
                 n_samples,
                 bool(verify_manifold_only_at_betti_change),
+                bool(track_connected_components),
             )
             bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val, _dim_count, total = res[0:8]
             dims = np.asarray(bar_dim, dtype=np.int64).tolist()
@@ -2445,8 +2447,15 @@ class JuliaBridge:
                     "is_closed": np.asarray(res[12], dtype=bool).tolist(),
                     "failures": np.asarray(res[13], dtype=np.int64).tolist(),
                 }
+                if len(res) > 14 and len(res[14]) > 0:
+                    comp_keys = [np.asarray(x, dtype=np.int64).tolist() for x in res[14]]
+                    comp_vals = [list(x) for x in res[15]]
+                    payload["component_data"] = [dict(zip(k, v)) for k, v in zip(comp_keys, comp_vals)]
+                else:
+                    payload["component_data"] = None
             else:
                 payload["manifold_data"] = None
+                payload["component_data"] = None
 
             return payload
         except Exception as e:
@@ -2461,6 +2470,7 @@ class JuliaBridge:
         n_samples: Optional[int] = None,
         eps_max: Optional[float] = None,
         verify_manifold_only_at_betti_change: bool = False,
+        track_connected_components: bool = False,
     ) -> dict:
         """Fused Alpha complex build + Gabriel testing + Z2 persistence in Julia.
 
@@ -2493,6 +2503,7 @@ class JuliaBridge:
                 n_samples,
                 float(eps_max) if eps_max is not None else None,
                 bool(verify_manifold_only_at_betti_change),
+                bool(track_connected_components),
             )
             bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val, _dim_count, total = res[0:8]
             dims = np.asarray(bar_dim, dtype=np.int64).tolist()
@@ -2517,8 +2528,15 @@ class JuliaBridge:
                     "is_closed": np.asarray(res[12], dtype=bool).tolist(),
                     "failures": np.asarray(res[13], dtype=np.int64).tolist(),
                 }
+                if len(res) > 14 and len(res[14]) > 0:
+                    comp_keys = [np.asarray(x, dtype=np.int64).tolist() for x in res[14]]
+                    comp_vals = [list(x) for x in res[15]]
+                    payload["component_data"] = [dict(zip(k, v)) for k, v in zip(comp_keys, comp_vals)]
+                else:
+                    payload["component_data"] = None
             else:
                 payload["manifold_data"] = None
+                payload["component_data"] = None
 
             return payload
         except Exception as e:
@@ -2567,6 +2585,7 @@ class JuliaBridge:
                 bool(analyze_manifolds),
                 n_samples,
                 bool(verify_manifold_only_at_betti_change),
+                bool(track_connected_components),
             )
             bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val, _dim_count, total = res[0:8]
             dims = np.asarray(bar_dim, dtype=np.int64).tolist()
@@ -2591,8 +2610,15 @@ class JuliaBridge:
                     "is_closed": np.asarray(res[12], dtype=bool).tolist(),
                     "failures": np.asarray(res[13], dtype=np.int64).tolist(),
                 }
+                if len(res) > 14 and len(res[14]) > 0:
+                    comp_keys = [np.asarray(x, dtype=np.int64).tolist() for x in res[14]]
+                    comp_vals = [list(x) for x in res[15]]
+                    payload["component_data"] = [dict(zip(k, v)) for k, v in zip(comp_keys, comp_vals)]
+                else:
+                    payload["component_data"] = None
             else:
                 payload["manifold_data"] = None
+                payload["component_data"] = None
 
             return payload
         except Exception as e:

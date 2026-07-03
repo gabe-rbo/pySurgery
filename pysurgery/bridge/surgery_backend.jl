@@ -675,7 +675,7 @@ dim_count, total)`: the barcode (`death == Inf` for essential classes), the sort
 distinct appearance values (filtration grid), and per-dimension first (minimum)
 appearance value / simplex count, plus the total simplex count.
 """
-function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, verify_manifold_only_at_betti_change::Bool=false)
+function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, verify_manifold_only_at_betti_change::Bool=false, track_connected_components::Bool=false)
     n_pts = size(points, 1)
     dim_pts = size(points, 2)
 
@@ -805,13 +805,13 @@ function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max
     dim_first_val = Float64[dim_first[d] for d in dim_ids]
     dim_count = Int[dim_cnt[d] for d in dim_ids]
 
-    if analyze_manifolds
-        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n_pts, verify_manifold_only_at_betti_change, bar_dim, bar_birth, bar_death)
+    if analyze_manifolds || track_connected_components
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures, m_comp_keys, m_comp_vals = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n_pts, verify_manifold_only_at_betti_change, track_connected_components, bar_dim, bar_birth, bar_death)
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
-                dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
+                dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures, m_comp_keys, m_comp_vals)
     else
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
-                dim_count, M, false, Float64[], Bool[], Int[], Bool[], Int[])
+                dim_count, M, false, Float64[], Bool[], Int[], Bool[], Int[], Vector{Int}[], Vector{String}[])
     end
 end
 
@@ -822,14 +822,15 @@ PythonCall entry point for [`_compute_rips_filtration`](@ref); materialises the
 NumPy point buffer as a native `Matrix{Float64}` (the lazy PyArray is not
 thread-safe to read from the `@threads` loops) and runs the fused build+reduce.
 """
-function compute_rips_filtration(points_raw, epsilon_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, verify_manifold_only_at_betti_change_raw=false)
+function compute_rips_filtration(points_raw, epsilon_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, verify_manifold_only_at_betti_change_raw=false, track_connected_components_raw=false)
     return _compute_rips_filtration(
         pyconvert(Matrix{Float64}, points_raw),
         pyconvert(Float64, epsilon_raw),
         pyconvert(Int, max_dim_raw),
         pyconvert(Bool, analyze_manifolds_raw),
         pyconvert(Union{Nothing, Int}, n_samples_raw),
-        pyconvert(Bool, verify_manifold_only_at_betti_change_raw)
+        pyconvert(Bool, verify_manifold_only_at_betti_change_raw),
+        pyconvert(Bool, track_connected_components_raw)
     )
 end
 
@@ -1099,7 +1100,7 @@ Implicit persistent cohomology of the Vietoris–Rips filtration of `points` up 
 [`_compute_rips_filtration`](@ref): `(bar_dim, bar_birth, bar_death, eps_values,
 dim_ids, dim_first_val, dim_count, total)`.
 """
-function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, verify_manifold_only_at_betti_change::Bool=false)
+function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, verify_manifold_only_at_betti_change::Bool=false, track_connected_components::Bool=false)
     n = size(points, 1)
     nbr, nbd = _rips_neighbor_lists(points, epsilon)
     B = _rips_binomial(n, max_dim + 2)
@@ -1215,14 +1216,15 @@ end
 
 PythonCall entry point for [`_compute_rips_cohomology`](@ref).
 """
-function compute_rips_cohomology(points_raw, epsilon_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, verify_manifold_only_at_betti_change_raw=false)
+function compute_rips_cohomology(points_raw, epsilon_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, verify_manifold_only_at_betti_change_raw=false, track_connected_components_raw=false)
     return _compute_rips_cohomology(
         pyconvert(Matrix{Float64}, points_raw),
         pyconvert(Float64, epsilon_raw),
         pyconvert(Int, max_dim_raw),
         pyconvert(Bool, analyze_manifolds_raw),
         pyconvert(Union{Nothing, Int}, n_samples_raw),
-        pyconvert(Bool, verify_manifold_only_at_betti_change_raw)
+        pyconvert(Bool, verify_manifold_only_at_betti_change_raw),
+        pyconvert(Bool, track_connected_components_raw)
     )
 end
 
@@ -6483,7 +6485,7 @@ Instead of re-evaluating the local link-homology for all `V` vertices at every t
 **Betti Skipping:**
 If `verify_manifold_only_at_betti_change=true`, the function additionally bypasses updates entirely for thresholds where the Betti numbers have not changed from the last evaluated threshold. The incremental logic natively catches up on skipped cliques at the next active evaluation.
 """
-function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64, n_samples::Union{Nothing, Int}, n_pts::Int = 0, verify_manifold_only_at_betti_change::Bool = false, bar_dim::Vector{Int} = Int[], bar_birth::Vector{Float64} = Float64[], bar_death::Vector{Float64} = Float64[])
+function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64, n_samples::Union{Nothing, Int}, n_pts::Int = 0, verify_manifold_only_at_betti_change::Bool = false, track_connected_components::Bool = false, bar_dim::Vector{Int} = Int[], bar_birth::Vector{Float64} = Float64[], bar_death::Vector{Float64} = Float64[])
     p = sortperm(vals)
     sorted_cliques = cliques[p]
     sorted_vals = vals[p]
@@ -6555,6 +6557,35 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
     prev_eval_idx = 0
     prev_d_active = -1
     
+    # Component tracking state
+    m_comp_info_keys = Vector{Vector{Int}}()
+    m_comp_info_vals = Vector{Vector{String}}()
+    
+    parent = collect(1:n_pts)
+    row_id = fill(-1, n_pts)
+    next_row_id = 0
+    comp_dim_counts = zeros(Int, max_dim + 2, n_pts)
+    for i in 1:n_pts
+        comp_dim_counts[1, i] = 1 # v_state is 0
+    end
+    comp_n_fail = zeros(Int, n_pts)
+    active_roots = BitSet()
+    merged_rows_history = BitSet()
+    
+    function find_root(i::Int)
+        root = i
+        while parent[root] != root
+            root = parent[root]
+        end
+        curr = i
+        while curr != root
+            nxt = parent[curr]
+            parent[curr] = root
+            curr = nxt
+        end
+        return root
+    end
+    
     for eps in grid_epsilons
         idx = searchsortedlast(sorted_vals, eps)
         
@@ -6573,6 +6604,10 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
             push!(m_dimensions, -1)
             push!(m_is_closed, true)
             push!(m_failures, 0)
+            if track_connected_components
+                push!(m_comp_info_keys, Int[])
+                push!(m_comp_info_vals, String[])
+            end
             last_is_mani = true
             last_detected_dim = -1
             last_is_closed = true
@@ -6586,6 +6621,11 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
             push!(m_dimensions, last_detected_dim)
             push!(m_is_closed, last_is_closed)
             push!(m_failures, last_n_fail)
+            if track_connected_components
+                # Push the last component info to keep lengths synchronized
+                push!(m_comp_info_keys, isempty(m_comp_info_keys) ? Int[] : copy(m_comp_info_keys[end]))
+                push!(m_comp_info_vals, isempty(m_comp_info_vals) ? String[] : copy(m_comp_info_vals[end]))
+            end
             continue
         end
         
@@ -6598,6 +6638,36 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
             push!(m_dimensions, d_active)
             push!(m_is_closed, true)
             push!(m_failures, 0)
+            if track_connected_components
+                # Update components for 0-simplices
+                keys_now = Int[]
+                vals_now = String[]
+                for i in (prev_eval_idx + 1):idx
+                    c = sorted_cliques[i]
+                    if length(c) == 1
+                        v = c[1]
+                        if row_id[v] == -1
+                            row_id[v] = next_row_id
+                            next_row_id += 1
+                            push!(active_roots, v)
+                        end
+                    end
+                end
+                for rt in active_roots
+                    r_idx = row_id[rt]
+                    if !(r_idx in merged_rows_history)
+                        push!(keys_now, r_idx)
+                        push!(vals_now, "M(D:0, Closed)") # 0-dim is closed point
+                    end
+                end
+                for r_idx in merged_rows_history
+                    push!(keys_now, r_idx)
+                    push!(vals_now, "-")
+                end
+                push!(m_comp_info_keys, keys_now)
+                push!(m_comp_info_vals, vals_now)
+            end
+            
             last_is_mani = true
             last_detected_dim = d_active
             last_is_closed = true
@@ -6609,6 +6679,46 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
         
         changed_vertices = Int[]
         changed_mask = zeros(Bool, n_pts)
+        
+        if track_connected_components
+            for i in (prev_eval_idx + 1):idx
+                c = sorted_cliques[i]
+                if length(c) == 1
+                    v = c[1]
+                    if row_id[v] == -1
+                        row_id[v] = next_row_id
+                        next_row_id += 1
+                        push!(active_roots, v)
+                    end
+                elseif length(c) == 2
+                    u, w = c[1], c[2]
+                    ru = find_root(u)
+                    rw = find_root(w)
+                    if ru != rw
+                        if row_id[ru] < row_id[rw]
+                            parent[rw] = ru
+                            comp_n_fail[ru] += comp_n_fail[rw]
+                            comp_n_fail[rw] = 0
+                            for d in 1:(max_dim+2)
+                                comp_dim_counts[d, ru] += comp_dim_counts[d, rw]
+                                comp_dim_counts[d, rw] = 0
+                            end
+                            delete!(active_roots, rw)
+                            # Will record merge event later
+                        else
+                            parent[ru] = rw
+                            comp_n_fail[rw] += comp_n_fail[ru]
+                            comp_n_fail[ru] = 0
+                            for d in 1:(max_dim+2)
+                                comp_dim_counts[d, rw] += comp_dim_counts[d, ru]
+                                comp_dim_counts[d, ru] = 0
+                            end
+                            delete!(active_roots, ru)
+                        end
+                    end
+                end
+            end
+        end
         
         if d_active != prev_d_active
             for v in 1:n_pts
@@ -6748,6 +6858,20 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
                     dim_counts[new_state + 1] += 1
                 end
                 
+                if track_connected_components
+                    rt = find_root(v)
+                    if old_state == -1
+                        comp_n_fail[rt] -= 1
+                    else
+                        comp_dim_counts[old_state + 1, rt] -= 1
+                    end
+                    if new_state == -1
+                        comp_n_fail[rt] += 1
+                    else
+                        comp_dim_counts[new_state + 1, rt] += 1
+                    end
+                end
+                
                 v_state[v] = new_state
             end
         end
@@ -6784,13 +6908,80 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
         push!(m_is_closed, is_closed)
         push!(m_failures, n_fail)
         
+        if track_connected_components
+            keys_now = Int[]
+            vals_now = String[]
+            
+            # Map every vertex to its root to find merges from previous active roots
+            new_merges_this_step = Dict{Int, Int}()
+            
+            # Note: We track components that merged by checking if any row_id is no longer in active_roots but was previously active.
+            # Actually, `active_roots` contains exactly the current roots.
+            # For any row_id that is valid (0 to next_row_id - 1) and not in active_roots, it is merged.
+            for i in 1:n_pts
+                r = row_id[i]
+                if r != -1 && i ∉ active_roots
+                    rt = find_root(i)
+                    target_r = row_id[rt]
+                    if r != target_r
+                        new_merges_this_step[r] = target_r
+                    end
+                end
+            end
+            
+            for rt in active_roots
+                r_idx = row_id[rt]
+                
+                c_fail = comp_n_fail[rt]
+                c_active_dims = Int[]
+                for d in 0:max_dim
+                    if comp_dim_counts[d + 1, rt] > 0
+                        push!(c_active_dims, d)
+                    end
+                end
+                
+                c_is_mani = (c_fail == 0) && (length(c_active_dims) <= 1)
+                
+                if c_is_mani
+                    c_det_dim = isempty(c_active_dims) ? d_active : first(c_active_dims)
+                    # For a component, it's closed if there are no boundary vertices (local dim == c_det_dim - 1)
+                    c_closed = true
+                    if c_det_dim > 0 && comp_dim_counts[c_det_dim, rt] > 0
+                        c_closed = false
+                    end
+                    c_str = c_closed ? "Closed" : "Bound"
+                    push!(keys_now, r_idx)
+                    push!(vals_now, "M(D:$(c_det_dim), $(c_str))")
+                else
+                    push!(keys_now, r_idx)
+                    push!(vals_now, "Non-M ($(c_fail) dft)")
+                end
+            end
+            
+            for (r_idx, target_r) in new_merges_this_step
+                push!(keys_now, r_idx)
+                push!(vals_now, "Merged (C_$(target_r + 1))")
+                push!(merged_rows_history, r_idx)
+            end
+            
+            for r_idx in merged_rows_history
+                if !haskey(new_merges_this_step, r_idx)
+                    push!(keys_now, r_idx)
+                    push!(vals_now, "-")
+                end
+            end
+            
+            push!(m_comp_info_keys, keys_now)
+            push!(m_comp_info_vals, vals_now)
+        end
+        
         last_is_mani = is_mani
         last_detected_dim = detected_dim
         last_is_closed = is_closed
         last_n_fail = n_fail
     end
     
-    return m_epsilons, m_is_manifold, m_dimensions, m_is_closed, m_failures
+    return m_epsilons, m_is_manifold, m_dimensions, m_is_closed, m_failures, m_comp_info_keys, m_comp_info_vals
 end
 
 function _generate_all_cliques_and_values(points::Matrix{Float64}, epsilon::Float64, max_dim::Int)
@@ -6941,7 +7132,7 @@ function _circumsphere_jl(P::Matrix{Float64})
     return center, r2
 end
 
-function _compute_alpha_filtration(points::Matrix{Float64}, top_simplices::Matrix{Int}, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, eps_max::Union{Nothing, Float64}=nothing, verify_manifold_only_at_betti_change::Bool=false)
+function _compute_alpha_filtration(points::Matrix{Float64}, top_simplices::Matrix{Int}, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, eps_max::Union{Nothing, Float64}=nothing, verify_manifold_only_at_betti_change::Bool=false, track_connected_components::Bool=false)
     n_pts = size(points, 1)
     full_dim = size(points, 2)
     
@@ -7079,7 +7270,7 @@ end
 
 PythonCall entry point for [`_compute_alpha_filtration`](@ref).
 """
-function compute_alpha_filtration(points_raw, top_simplices_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, eps_max_raw=nothing, verify_manifold_only_at_betti_change_raw=false)
+function compute_alpha_filtration(points_raw, top_simplices_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, eps_max_raw=nothing, verify_manifold_only_at_betti_change_raw=false, track_connected_components_raw=false)
     return _compute_alpha_filtration(
         pyconvert(Matrix{Float64}, points_raw),
         pyconvert(Matrix{Int}, top_simplices_raw),
@@ -7087,7 +7278,8 @@ function compute_alpha_filtration(points_raw, top_simplices_raw, max_dim_raw, an
         pyconvert(Bool, analyze_manifolds_raw),
         pyconvert(Union{Nothing, Int}, n_samples_raw),
         pyconvert(Union{Nothing, Float64}, eps_max_raw),
-        pyconvert(Bool, verify_manifold_only_at_betti_change_raw)
+        pyconvert(Bool, verify_manifold_only_at_betti_change_raw),
+        pyconvert(Bool, track_connected_components_raw)
     )
 end
 
