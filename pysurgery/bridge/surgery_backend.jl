@@ -1202,12 +1202,12 @@ function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max
     eps_values = sort(collect(gridset))
     if analyze_manifolds
         cliques, vals = _generate_all_cliques_and_values(points, epsilon, max_dim)
-        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n, verify_manifold_only_at_betti_change, bar_dim, bar_birth, bar_death)
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures, m_comp_keys, m_comp_vals = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n, verify_manifold_only_at_betti_change, track_connected_components, bar_dim, bar_birth, bar_death)
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
-                dim_count, total, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
+                dim_count, total, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures, m_comp_keys, m_comp_vals)
     else
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
-                dim_count, total, false, Float64[], Bool[], Int[], Bool[], Int[])
+                dim_count, total, false, Float64[], Bool[], Int[], Bool[], Int[], Vector{Vector{Int}}(), Vector{Vector{String}}())
     end
 end
 
@@ -7256,12 +7256,12 @@ function _compute_alpha_filtration(points::Matrix{Float64}, top_simplices::Matri
     # 6. Manifold analysis
     if analyze_manifolds
         epsilon_val = (eps_max !== nothing) ? eps_max : (isempty(vals) ? 1.0 : maximum(vals))
-        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon_val, n_samples, n_pts, verify_manifold_only_at_betti_change, bar_dim, bar_birth, bar_death)
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures, m_comp_keys, m_comp_vals = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon_val, n_samples, n_pts, verify_manifold_only_at_betti_change, track_connected_components, bar_dim, bar_birth, bar_death)
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
-                dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
+                dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures, m_comp_keys, m_comp_vals)
     else
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
-                dim_count, M, false, Float64[], Bool[], Int[], Bool[], Int[])
+                dim_count, M, false, Float64[], Bool[], Int[], Bool[], Int[], Vector{Vector{Int}}(), Vector{Vector{String}}())
     end
 end
 
