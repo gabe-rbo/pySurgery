@@ -24,7 +24,7 @@ import hashlib
 import warnings
 import numpy as np
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pysurgery.geometry.point_cloud import PointCloud
@@ -1185,6 +1185,93 @@ class _BaseFiltrationReport:
         except Exception as exc:  # pragma: no cover - warmup is best-effort
             warnings.warn(f"{cls.__name__}.warmup failed: {exc!r}", stacklevel=2)
             return False
+
+    def find_thresholds(
+        self,
+        *,
+        bettis: Optional[Dict[int, int]] = None,
+        is_manifold: Optional[bool] = None,
+        is_closed: Optional[bool] = None,
+        dimension: Optional[int] = None,
+        custom_filter: Optional[Callable[[dict], bool]] = None,
+        open_interval: bool = False,
+        closed_interval: bool = False
+    ) -> List[Union[float, Tuple[float, float]]]:
+        """Find filtration thresholds matching specific topological properties.
+
+        Args:
+            bettis: A dictionary of {dimension: betti_number}. Uses subset matching
+                (e.g., ``{0: 1}`` matches any threshold with 1 connected component,
+                regardless of higher homology).
+            is_manifold: If True, matches thresholds where the complex is a homology manifold.
+                If False, matches non-manifolds.
+            is_closed: If True, matches closed manifolds. If False, matches manifolds with boundary.
+            dimension: The exact integer dimension of the complex.
+            custom_filter: A lambda ``f(result_dict) -> bool`` for advanced queries.
+            open_interval: If True, returns matches as ``(start, end)`` tuples. Adjacent
+                matching intervals are merged.
+            closed_interval: If True, returns matches as ``(start, end)`` tuples. Adjacent
+                matching intervals are merged.
+
+        Returns:
+            A list of thresholds (floats) or intervals (tuples of floats) where the
+            conditions are met.
+        """
+        matches = []
+        intervals = []
+        
+        for j, res in enumerate(self.results):
+            # 1. bettis (subset match)
+            if bettis is not None:
+                matched = True
+                for d, val in bettis.items():
+                    if res["bettis"].get(d, 0) != val:
+                        matched = False
+                        break
+                if not matched:
+                    continue
+            
+            # 2. is_manifold
+            if is_manifold is not None:
+                is_m = res["is_manifold"].startswith("Yes")
+                if is_m != is_manifold:
+                    continue
+
+            # 3. is_closed
+            if is_closed is not None:
+                is_c = res["is_closed"] == "Yes"
+                if is_c != is_closed:
+                    continue
+
+            # 4. dimension
+            if dimension is not None:
+                if res["dimension"] == "N/A" or int(res["dimension"]) != dimension:
+                    continue
+
+            # 5. custom_filter
+            if custom_filter is not None:
+                if not custom_filter(res):
+                    continue
+
+            # It's a match!
+            if open_interval or closed_interval:
+                start_eps = res["epsilon"]
+                if j + 1 < len(self.results):
+                    end_eps = self.results[j + 1]["epsilon"]
+                else:
+                    end_eps = self.epsilons[-1] if not self.dynamic_mode else start_eps * 1.1
+                
+                # Merge with previous interval if adjacent
+                if intervals and np.isclose(intervals[-1][1], start_eps, rtol=1e-9, atol=1e-12):
+                    intervals[-1] = (intervals[-1][0], end_eps)
+                else:
+                    intervals.append((start_eps, end_eps))
+            else:
+                matches.append(res["epsilon"])
+                
+        if open_interval or closed_interval:
+            return intervals
+        return matches
 
     def __str__(self) -> str:
         return self.to_markdown()
