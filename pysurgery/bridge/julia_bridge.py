@@ -2383,6 +2383,7 @@ class JuliaBridge:
         max_dim: int,
         analyze_manifolds: bool = False,
         n_samples: Optional[int] = None,
+        verify_manifold_only_at_betti_change: bool = False,
     ) -> dict:
         """Fused Vietoris-Rips build + longest-edge filtration + Z2 persistence in Julia.
 
@@ -2419,6 +2420,7 @@ class JuliaBridge:
                 int(max_dim),
                 bool(analyze_manifolds),
                 n_samples,
+                bool(verify_manifold_only_at_betti_change),
             )
             bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val, _dim_count, total = res[0:8]
             dims = np.asarray(bar_dim, dtype=np.int64).tolist()
@@ -2458,6 +2460,7 @@ class JuliaBridge:
         analyze_manifolds: bool = False,
         n_samples: Optional[int] = None,
         eps_max: Optional[float] = None,
+        verify_manifold_only_at_betti_change: bool = False,
     ) -> dict:
         """Fused Alpha complex build + Gabriel testing + Z2 persistence in Julia.
 
@@ -2489,6 +2492,7 @@ class JuliaBridge:
                 bool(analyze_manifolds),
                 n_samples,
                 float(eps_max) if eps_max is not None else None,
+                bool(verify_manifold_only_at_betti_change),
             )
             bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val, _dim_count, total = res[0:8]
             dims = np.asarray(bar_dim, dtype=np.int64).tolist()
@@ -2527,6 +2531,7 @@ class JuliaBridge:
         max_dim: int,
         analyze_manifolds: bool = False,
         n_samples: Optional[int] = None,
+        verify_manifold_only_at_betti_change: bool = False,
     ) -> dict:
         """Implicit persistent COHOMOLOGY of a Vietoris-Rips filtration in Julia.
 
@@ -2561,6 +2566,7 @@ class JuliaBridge:
                 int(max_dim),
                 bool(analyze_manifolds),
                 n_samples,
+                bool(verify_manifold_only_at_betti_change),
             )
             bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val, _dim_count, total = res[0:8]
             dims = np.asarray(bar_dim, dtype=np.int64).tolist()

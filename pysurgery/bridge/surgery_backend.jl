@@ -675,7 +675,7 @@ dim_count, total)`: the barcode (`death == Inf` for essential classes), the sort
 distinct appearance values (filtration grid), and per-dimension first (minimum)
 appearance value / simplex count, plus the total simplex count.
 """
-function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing)
+function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, verify_manifold_only_at_betti_change::Bool=false)
     n_pts = size(points, 1)
     dim_pts = size(points, 2)
 
@@ -806,7 +806,7 @@ function _compute_rips_filtration(points::Matrix{Float64}, epsilon::Float64, max
     dim_count = Int[dim_cnt[d] for d in dim_ids]
 
     if analyze_manifolds
-        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n_pts)
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n_pts, verify_manifold_only_at_betti_change, bar_dim, bar_birth, bar_death)
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
                 dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
     else
@@ -822,13 +822,14 @@ PythonCall entry point for [`_compute_rips_filtration`](@ref); materialises the
 NumPy point buffer as a native `Matrix{Float64}` (the lazy PyArray is not
 thread-safe to read from the `@threads` loops) and runs the fused build+reduce.
 """
-function compute_rips_filtration(points_raw, epsilon_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing)
+function compute_rips_filtration(points_raw, epsilon_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, verify_manifold_only_at_betti_change_raw=false)
     return _compute_rips_filtration(
         pyconvert(Matrix{Float64}, points_raw),
         pyconvert(Float64, epsilon_raw),
         pyconvert(Int, max_dim_raw),
         pyconvert(Bool, analyze_manifolds_raw),
         pyconvert(Union{Nothing, Int}, n_samples_raw),
+        pyconvert(Bool, verify_manifold_only_at_betti_change_raw)
     )
 end
 
@@ -1098,7 +1099,7 @@ Implicit persistent cohomology of the Vietoris–Rips filtration of `points` up 
 [`_compute_rips_filtration`](@ref): `(bar_dim, bar_birth, bar_death, eps_values,
 dim_ids, dim_first_val, dim_count, total)`.
 """
-function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing)
+function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, verify_manifold_only_at_betti_change::Bool=false)
     n = size(points, 1)
     nbr, nbd = _rips_neighbor_lists(points, epsilon)
     B = _rips_binomial(n, max_dim + 2)
@@ -1200,7 +1201,7 @@ function _compute_rips_cohomology(points::Matrix{Float64}, epsilon::Float64, max
     eps_values = sort(collect(gridset))
     if analyze_manifolds
         cliques, vals = _generate_all_cliques_and_values(points, epsilon, max_dim)
-        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n)
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n, verify_manifold_only_at_betti_change, bar_dim, bar_birth, bar_death)
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
                 dim_count, total, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
     else
@@ -1214,13 +1215,14 @@ end
 
 PythonCall entry point for [`_compute_rips_cohomology`](@ref).
 """
-function compute_rips_cohomology(points_raw, epsilon_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing)
+function compute_rips_cohomology(points_raw, epsilon_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, verify_manifold_only_at_betti_change_raw=false)
     return _compute_rips_cohomology(
         pyconvert(Matrix{Float64}, points_raw),
         pyconvert(Float64, epsilon_raw),
         pyconvert(Int, max_dim_raw),
         pyconvert(Bool, analyze_manifolds_raw),
         pyconvert(Union{Nothing, Int}, n_samples_raw),
+        pyconvert(Bool, verify_manifold_only_at_betti_change_raw)
     )
 end
 
@@ -6446,7 +6448,42 @@ function check_closed_manifold_jl(active_cliques, dim::Int)
     return all(count == 2 for count in values(face_counts))
 end
 
-function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64, n_samples::Union{Nothing, Int}, n_pts::Int = 0)
+"""
+    _get_bettis_at_jl(bar_dim, bar_birth, bar_death, eps)
+
+Helper to slice a persistence barcode and extract the active Betti numbers at a threshold `eps`.
+"""
+function _get_bettis_at_jl(bar_dim::Vector{Int}, bar_birth::Vector{Float64}, bar_death::Vector{Float64}, eps::Float64)
+    bettis = Dict{Int, Int}()
+    e_tol = eps + abs(eps) * 1e-9 + 1e-12
+    for i in 1:length(bar_dim)
+        b = bar_birth[i]
+        dth = bar_death[i]
+        if b <= e_tol && e_tol < dth
+            d = bar_dim[i]
+            bettis[d] = get(bettis, d, 0) + 1
+        end
+    end
+    return bettis
+end
+
+"""
+    _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n_pts, verify_manifold_only_at_betti_change, bar_dim, bar_birth, bar_death)
+
+Performs high-performance manifold verification over a sequence of filtration thresholds.
+
+**Incremental Update Algorithm:**
+Instead of re-evaluating the local link-homology for all `V` vertices at every threshold (an `O(V)` operation per step), this function uses an **incremental tracking strategy**:
+1. It maintains a global `v_state` array representing the local manifold dimension of each vertex, alongside global aggregation counters (`dim_counts` and `n_fail`).
+2. At each threshold `eps`, it only identifies the newly added cliques (simplices).
+3. A vertex is marked as "changed" if and only if it belongs to one of these newly active cliques.
+4. Local link-homology is evaluated **strictly for the changed vertices**, making the update step proportional only to the number of local structural changes `O(k)`.
+5. The `v_state` and global counters are updated incrementally, allowing instantaneous `O(1)` validation of the global manifold condition.
+
+**Betti Skipping:**
+If `verify_manifold_only_at_betti_change=true`, the function additionally bypasses updates entirely for thresholds where the Betti numbers have not changed from the last evaluated threshold. The incremental logic natively catches up on skipped cliques at the next active evaluation.
+"""
+function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64, n_samples::Union{Nothing, Int}, n_pts::Int = 0, verify_manifold_only_at_betti_change::Bool = false, bar_dim::Vector{Int} = Int[], bar_birth::Vector{Float64} = Float64[], bar_death::Vector{Float64} = Float64[])
     p = sortperm(vals)
     sorted_cliques = cliques[p]
     sorted_vals = vals[p]
@@ -6504,14 +6541,51 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
     # Pre-allocate v_map_arr to avoid vertex Dict allocations inside the loop
     v_map_arr = zeros(Int, n_pts)
     
+    prev_bettis = nothing
+    last_is_mani = false
+    last_detected_dim = -1
+    last_is_closed = false
+    last_n_fail = 0
+
+    # Incremental update state
+    v_state = fill(0, n_pts)  # 0-dim initially
+    dim_counts = zeros(Int, max_dim + 2)
+    dim_counts[1] = n_pts
+    n_fail = 0
+    prev_eval_idx = 0
+    prev_d_active = -1
+    
     for eps in grid_epsilons
         idx = searchsortedlast(sorted_vals, eps)
+        
+        betti_changed = true
+        if verify_manifold_only_at_betti_change
+            curr_bettis = _get_bettis_at_jl(bar_dim, bar_birth, bar_death, eps)
+            if prev_bettis !== nothing && curr_bettis == prev_bettis
+                betti_changed = false
+            end
+            prev_bettis = curr_bettis
+        end
+        
         if idx == 0
             push!(m_epsilons, eps)
             push!(m_is_manifold, true)
             push!(m_dimensions, -1)
             push!(m_is_closed, true)
             push!(m_failures, 0)
+            last_is_mani = true
+            last_detected_dim = -1
+            last_is_closed = true
+            last_n_fail = 0
+            continue
+        end
+        
+        if !betti_changed
+            push!(m_epsilons, eps)
+            push!(m_is_manifold, last_is_mani)
+            push!(m_dimensions, last_detected_dim)
+            push!(m_is_closed, last_is_closed)
+            push!(m_failures, last_n_fail)
             continue
         end
         
@@ -6524,142 +6598,180 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
             push!(m_dimensions, d_active)
             push!(m_is_closed, true)
             push!(m_failures, 0)
+            last_is_mani = true
+            last_detected_dim = d_active
+            last_is_closed = true
+            last_n_fail = 0
+            prev_eval_idx = idx
+            prev_d_active = d_active
             continue
         end
         
-        n_fail = 0
-        local_dims = Int[]
+        changed_vertices = Int[]
+        changed_mask = zeros(Bool, n_pts)
         
-        for v in 1:n_pts
-            idx_lk = searchsortedlast(link_simplices_vals[v], eps)
-            if idx_lk == 0
-                push!(local_dims, 0)
-                continue
+        if d_active != prev_d_active
+            for v in 1:n_pts
+                changed_mask[v] = true
+                push!(changed_vertices, v)
             end
-            lk = view(link_simplices_faces[v], 1:idx_lk)
-            
-            c_dims = zeros(Int, max_dim + 1)
-            for face in lk
-                fd = length(face) - 1
-                if 0 <= fd <= max_dim
-                    @inbounds c_dims[fd + 1] += 1
-                end
-            end
-            
-            chi = 0
-            for fd in 0:max_dim
-                @inbounds chi += (-1)^fd * c_dims[fd + 1]
-            end
-            
-            exp_sph = 1 + (-1)^(d_active - 1)
-            exp_dsk = 1
-            
-            if chi != exp_sph && chi != exp_dsk
-                n_fail += 1
-                continue
-            end
-            
-            if d_active == 1
-                n_v = c_dims[1]
-                if n_v != 1 && n_v != 2
-                    n_fail += 1
-                else
-                    push!(local_dims, n_v == 2 ? 1 : 0)
-                end
-            elseif d_active == 2
-                n_v = c_dims[1]
-                n_e = c_dims[2]
-                
-                v_set = BitSet()
-                for face in lk
-                    if length(face) == 1
-                        push!(v_set, face[1])
+        else
+            for i in (prev_eval_idx + 1):idx
+                for v in sorted_cliques[i]
+                    if !changed_mask[v]
+                        changed_mask[v] = true
+                        push!(changed_vertices, v)
                     end
-                end
-                v_list = collect(v_set)
-                curr_nv = length(v_list)
-                
-                for i in 1:curr_nv
-                    @inbounds v_map_arr[v_list[i]] = i
-                end
-                
-                adj = [Vector{Int}() for _ in 1:curr_nv]
-                for face in lk
-                    if length(face) == 2
-                        u = @inbounds v_map_arr[face[1]]
-                        w = @inbounds v_map_arr[face[2]]
-                        if u > 0 && w > 0
-                            push!(adj[u], w)
-                            push!(adj[w], u)
-                        end
-                    end
-                end
-                
-                for i in 1:curr_nv
-                    @inbounds v_map_arr[v_list[i]] = 0
-                end
-                
-                is_connected = true
-                if curr_nv > 0
-                    q = Vector{Int}(undef, curr_nv)
-                    q[1] = 1
-                    visited = zeros(Bool, curr_nv)
-                    visited[1] = true
-                    head = 1
-                    tail = 1
-                    while head <= tail
-                        curr = q[head]
-                        head += 1
-                        for neighbor in adj[curr]
-                            if !visited[neighbor]
-                                visited[neighbor] = true
-                                tail += 1
-                                q[tail] = neighbor
-                            end
-                        end
-                    end
-                    is_connected = (tail == curr_nv)
-                end
-                
-                if !is_connected
-                    n_fail += 1
-                else
-                    if n_v - n_e == 0
-                        push!(local_dims, 2)
-                    elseif n_v - n_e == 1
-                        push!(local_dims, 1)
-                    else
-                        n_fail += 1
-                    end
-                end
-            else
-                rh, lk_d_max = _get_reduced_homology_jl(lk, d_active - 1)
-                if isempty(rh)
-                    push!(local_dims, d_active - 1)
-                elseif length(rh) == 1
-                    deg = first(keys(rh))
-                    betti, torsion = rh[deg]
-                    if betti == 1 && isempty(torsion) && deg == d_active - 1
-                        push!(local_dims, d_active)
-                    else
-                        n_fail += 1
-                    end
-                else
-                    n_fail += 1
                 end
             end
         end
         
-        is_mani = (n_fail == 0) && (length(unique(local_dims)) <= 1)
+        for v in changed_vertices
+            old_state = v_state[v]
+            new_state = -1
+            
+            idx_lk = searchsortedlast(link_simplices_vals[v], eps)
+            if idx_lk == 0
+                new_state = 0
+            else
+                lk = view(link_simplices_faces[v], 1:idx_lk)
+                
+                c_dims = zeros(Int, max_dim + 1)
+                for face in lk
+                    fd = length(face) - 1
+                    if 0 <= fd <= max_dim
+                        @inbounds c_dims[fd + 1] += 1
+                    end
+                end
+                
+                chi = 0
+                for fd in 0:max_dim
+                    @inbounds chi += (-1)^fd * c_dims[fd + 1]
+                end
+                
+                exp_sph = 1 + (-1)^(d_active - 1)
+                exp_dsk = 1
+                
+                if chi == exp_sph || chi == exp_dsk
+                    if d_active == 1
+                        n_v = c_dims[1]
+                        if n_v == 1 || n_v == 2
+                            new_state = n_v == 2 ? 1 : 0
+                        end
+                    elseif d_active == 2
+                        n_v = c_dims[1]
+                        n_e = c_dims[2]
+                        
+                        v_set = BitSet()
+                        for face in lk
+                            if length(face) == 1
+                                push!(v_set, face[1])
+                            end
+                        end
+                        v_list = collect(v_set)
+                        curr_nv = length(v_list)
+                        
+                        for i in 1:curr_nv
+                            @inbounds v_map_arr[v_list[i]] = i
+                        end
+                        
+                        adj = [Vector{Int}() for _ in 1:curr_nv]
+                        for face in lk
+                            if length(face) == 2
+                                u = @inbounds v_map_arr[face[1]]
+                                w = @inbounds v_map_arr[face[2]]
+                                if u > 0 && w > 0
+                                    push!(adj[u], w)
+                                    push!(adj[w], u)
+                                end
+                            end
+                        end
+                        
+                        for i in 1:curr_nv
+                            @inbounds v_map_arr[v_list[i]] = 0
+                        end
+                        
+                        is_connected = true
+                        if curr_nv > 0
+                            q = Vector{Int}(undef, curr_nv)
+                            q[1] = 1
+                            visited = zeros(Bool, curr_nv)
+                            visited[1] = true
+                            head = 1
+                            tail = 1
+                            while head <= tail
+                                curr = q[head]
+                                head += 1
+                                for neighbor in adj[curr]
+                                    if !visited[neighbor]
+                                        visited[neighbor] = true
+                                        tail += 1
+                                        q[tail] = neighbor
+                                    end
+                                end
+                            end
+                            is_connected = (tail == curr_nv)
+                        end
+                        
+                        if is_connected
+                            if n_v - n_e == 0
+                                new_state = 2
+                            elseif n_v - n_e == 1
+                                new_state = 1
+                            end
+                        end
+                    else
+                        rh, lk_d_max = _get_reduced_homology_jl(lk, d_active - 1)
+                        if isempty(rh)
+                            new_state = d_active - 1
+                        elseif length(rh) == 1
+                            deg = first(keys(rh))
+                            betti, torsion = rh[deg]
+                            if betti == 1 && isempty(torsion) && deg == d_active - 1
+                                new_state = d_active
+                            end
+                        end
+                    end
+                end
+            end
+            
+            if old_state != new_state
+                if old_state == -1
+                    n_fail -= 1
+                else
+                    dim_counts[old_state + 1] -= 1
+                end
+                
+                if new_state == -1
+                    n_fail += 1
+                else
+                    dim_counts[new_state + 1] += 1
+                end
+                
+                v_state[v] = new_state
+            end
+        end
+        
+        active_dims = Int[]
+        for d in 0:max_dim
+            if dim_counts[d + 1] > 0
+                push!(active_dims, d)
+            end
+        end
+        
+        is_mani = (n_fail == 0) && (length(active_dims) <= 1)
         if !is_mani && n_fail == 0
             n_fail = n_pts
         end
         
         detected_dim = if is_mani
-            isempty(local_dims) ? d_active : first(local_dims)
+            isempty(active_dims) ? d_active : first(active_dims)
         else
             d_active
         end
+        
+        prev_eval_idx = idx
+        prev_d_active = d_active
         
         is_closed = false
         if is_mani
@@ -6671,6 +6783,11 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
         push!(m_dimensions, detected_dim)
         push!(m_is_closed, is_closed)
         push!(m_failures, n_fail)
+        
+        last_is_mani = is_mani
+        last_detected_dim = detected_dim
+        last_is_closed = is_closed
+        last_n_fail = n_fail
     end
     
     return m_epsilons, m_is_manifold, m_dimensions, m_is_closed, m_failures
@@ -6824,7 +6941,7 @@ function _circumsphere_jl(P::Matrix{Float64})
     return center, r2
 end
 
-function _compute_alpha_filtration(points::Matrix{Float64}, top_simplices::Matrix{Int}, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, eps_max::Union{Nothing, Float64}=nothing)
+function _compute_alpha_filtration(points::Matrix{Float64}, top_simplices::Matrix{Int}, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, eps_max::Union{Nothing, Float64}=nothing, verify_manifold_only_at_betti_change::Bool=false)
     n_pts = size(points, 1)
     full_dim = size(points, 2)
     
@@ -6948,7 +7065,7 @@ function _compute_alpha_filtration(points::Matrix{Float64}, top_simplices::Matri
     # 6. Manifold analysis
     if analyze_manifolds
         epsilon_val = (eps_max !== nothing) ? eps_max : (isempty(vals) ? 1.0 : maximum(vals))
-        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon_val, n_samples, n_pts)
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon_val, n_samples, n_pts, verify_manifold_only_at_betti_change, bar_dim, bar_birth, bar_death)
         return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
                 dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures)
     else
@@ -6962,7 +7079,7 @@ end
 
 PythonCall entry point for [`_compute_alpha_filtration`](@ref).
 """
-function compute_alpha_filtration(points_raw, top_simplices_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, eps_max_raw=nothing)
+function compute_alpha_filtration(points_raw, top_simplices_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, eps_max_raw=nothing, verify_manifold_only_at_betti_change_raw=false)
     return _compute_alpha_filtration(
         pyconvert(Matrix{Float64}, points_raw),
         pyconvert(Matrix{Int}, top_simplices_raw),
@@ -6970,6 +7087,7 @@ function compute_alpha_filtration(points_raw, top_simplices_raw, max_dim_raw, an
         pyconvert(Bool, analyze_manifolds_raw),
         pyconvert(Union{Nothing, Int}, n_samples_raw),
         pyconvert(Union{Nothing, Float64}, eps_max_raw),
+        pyconvert(Bool, verify_manifold_only_at_betti_change_raw)
     )
 end
 
