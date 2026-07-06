@@ -29,18 +29,90 @@ def __getattr__(name):
     if name in [
         "IntrinsicDimensionMethodResult",
         "IntrinsicDimensionResult",
+        "TangentBasisResult",
         "estimate_intrinsic_dimension",
         "levina_bickel_mle",
         "local_pca_tangent_space_dimension",
+        "local_pca_tangent_basis",
         "twonn",
     ]:
         from .intrinsic_dimension import (  # noqa: F401
             IntrinsicDimensionMethodResult,
             IntrinsicDimensionResult,
+            TangentBasisResult,
             estimate_intrinsic_dimension,
             levina_bickel_mle,
             local_pca_tangent_space_dimension,
+            local_pca_tangent_basis,
             twonn,
+        )
+        return locals()[name]
+    if name in [
+        "exact_sign_of_determinant",
+        "exact_signs_of_determinants_batch",
+        "exact_sign_of_sum",
+        "orientation2d",
+        "orientation3d",
+        "incircle2d",
+        "insphere3d",
+    ]:
+        from .predicates import (  # noqa: F401
+            exact_sign_of_determinant,
+            exact_signs_of_determinants_batch,
+            exact_sign_of_sum,
+            orientation2d,
+            orientation3d,
+            incircle2d,
+            insphere3d,
+        )
+        return locals()[name]
+    if name in [
+        "is_single_cycle",
+        "is_single_path_or_cycle",
+        "intersect_local_stars",
+        "PerturbationRepairResult",
+        "moser_tardos_repair",
+    ]:
+        from .perturbation import (  # noqa: F401
+            is_single_cycle,
+            is_single_path_or_cycle,
+            intersect_local_stars,
+            PerturbationRepairResult,
+            moser_tardos_repair,
+        )
+        return locals()[name]
+    if name in [
+        "PoleEstimationResult",
+        "estimate_voronoi_poles",
+        "CoconeFilterResult",
+        "cocone_filter",
+        "PruneWalkResult",
+        "prune_and_walk",
+        "TightCoconeResult",
+        "tight_cocone_close",
+        "CoconeReconstructionResult",
+        "cocone_reconstruction",
+    ]:
+        from .reconstruction import (  # noqa: F401
+            PoleEstimationResult,
+            estimate_voronoi_poles,
+            CoconeFilterResult,
+            cocone_filter,
+            PruneWalkResult,
+            prune_and_walk,
+            TightCoconeResult,
+            tight_cocone_close,
+            CoconeReconstructionResult,
+            cocone_reconstruction,
+        )
+        return locals()[name]
+    if name in [
+        "TangentialComplexResult",
+        "tangential_complex_reconstruction",
+    ]:
+        from .tangential_complex import (  # noqa: F401
+            TangentialComplexResult,
+            tangential_complex_reconstruction,
         )
         return locals()[name]
     if name in [
@@ -151,10 +223,36 @@ __all__ = [
     "project_coordinates",
     "IntrinsicDimensionMethodResult",
     "IntrinsicDimensionResult",
+    "TangentBasisResult",
     "estimate_intrinsic_dimension",
     "levina_bickel_mle",
     "local_pca_tangent_space_dimension",
+    "local_pca_tangent_basis",
     "twonn",
+    "exact_sign_of_determinant",
+    "exact_signs_of_determinants_batch",
+    "exact_sign_of_sum",
+    "orientation2d",
+    "orientation3d",
+    "incircle2d",
+    "insphere3d",
+    "is_single_cycle",
+    "is_single_path_or_cycle",
+    "intersect_local_stars",
+    "PerturbationRepairResult",
+    "moser_tardos_repair",
+    "PoleEstimationResult",
+    "estimate_voronoi_poles",
+    "CoconeFilterResult",
+    "cocone_filter",
+    "PruneWalkResult",
+    "prune_and_walk",
+    "TightCoconeResult",
+    "tight_cocone_close",
+    "CoconeReconstructionResult",
+    "cocone_reconstruction",
+    "TangentialComplexResult",
+    "tangential_complex_reconstruction",
     "GeometrizationResult",
     "NormalSurfaceCandidate",
     "PieceDecomposition",

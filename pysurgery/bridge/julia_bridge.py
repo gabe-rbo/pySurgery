@@ -638,6 +638,11 @@ class JuliaBridge:
                     self.enumerate_cliques_sparse(np.array([1, 2, 3], dtype=np.int64), np.array([1, 0], dtype=np.int64), 2, 2),
                     self.compute_circumradius_sq_2d(np.array([[0,0], [1,0], [0,1]], dtype=float), np.array([[0, 1, 2]], dtype=np.int64)),
                     self.compute_circumradius_sq_3d(np.array([[0,0,0], [1,0,0], [0,1,0], [0,0,1]], dtype=float), np.array([[0, 1, 2, 3]], dtype=np.int64)),
+                    # Includes an exactly-singular matrix (duplicate row) so the Rational{BigInt}
+                    # exact-fallback tier is compiled here too, not only the float64 filter.
+                    self.exact_signs_of_determinants_batch(
+                        np.array([[[1.0, 0.0], [0.0, 1.0]], [[1.0, 2.0], [1.0, 2.0]]], dtype=float)
+                    ),
                     self.compute_cknn_graph_accelerated(np.array([[0,0], [1,1]], dtype=float), np.array([1.0, 1.0]), 1.0),
                     # Vietoris-Rips builder: the dominant kernel in FiltrationReport's
                     # hot path; compile it here so the first filtration report does
@@ -2170,6 +2175,33 @@ class JuliaBridge:
             return np.array(res, dtype=np.float64)
         except Exception as e:
             raise RuntimeError(f"compute_circumradius_sq_2d failed: {e!r}")
+
+    def exact_signs_of_determinants_batch(self, matrices: np.ndarray) -> np.ndarray:
+        """Computes exact determinant signs for a batch of small square matrices using Julia.
+
+        Mirrors ``pysurgery.geometry.predicates.exact_signs_of_determinants_batch``'s
+        two-tier algorithm (float64 Leibniz formula, Higham ``gamma_k`` error bound, exact
+        fallback -- here ``Rational{BigInt}`` rather than ``fractions.Fraction``) so the two
+        backends are expected to agree exactly, not merely approximately.
+
+        Args:
+            matrices: An (M, n, n) array of small square matrices, 1 <= n <= 6.
+
+        Returns:
+            An (M,) int64 array of signs in {-1, 0, 1}.
+
+        Raises:
+            RuntimeError: If the Julia backend is unavailable or the call fails.
+        """
+        if not self.available:
+            raise RuntimeError("Julia backend unavailable.")
+        try:
+            res = self.backend.exact_signs_of_determinants_batch_jl(
+                np.asarray(matrices, dtype=np.float64),
+            )
+            return np.array(res, dtype=np.int64)
+        except Exception as e:
+            raise RuntimeError(f"exact_signs_of_determinants_batch failed: {e!r}")
 
     def compute_alpha_complex_simplices(
         self,

@@ -179,5 +179,39 @@ class TestBackendConsistency:
         
         res_py = compute_optimal_h1_basis_from_simplices(simplices, 6, backend="python")
         res_jl = compute_optimal_h1_basis_from_simplices(simplices, 6, backend="julia")
-        
+
         assert res_py.rank == res_jl.rank == 2
+
+    def test_exact_signs_of_determinants_batch_consistency(self):
+        """Verify exact determinant-sign predicates agree across backends.
+
+        What is Being Computed?:
+            ``sign(det(matrices[i]))`` for a batch of small square matrices, for every
+            supported size 1 <= n <= 6.
+
+        Algorithm:
+            1. Draw random matrices of each size, plus a deliberately exactly-singular
+               (duplicate-row) matrix per size to force both backends' exact fallback tier
+               (rather than only ever agreeing trivially on the float64 filter).
+            2. Compare ``exact_signs_of_determinants_batch(..., backend="python")`` against
+               ``backend="julia")``.
+
+        Preserved Invariants:
+            Both backends implement the identical two-tier algorithm (float64 Leibniz
+            formula, Higham gamma_k bound, exact fallback), so results must match exactly,
+            not merely approximately.
+        """
+        from pysurgery.geometry.predicates import exact_signs_of_determinants_batch
+
+        rng = np.random.default_rng(42)
+        for n in range(1, 7):
+            mats = list(rng.normal(size=(20, n, n)))
+            if n >= 2:
+                singular = rng.normal(size=(n, n))
+                singular[1] = singular[0]
+                mats.append(singular)
+            mats = np.array(mats)
+
+            signs_py = exact_signs_of_determinants_batch(mats, backend="python")
+            signs_jl = exact_signs_of_determinants_batch(mats, backend="julia")
+            np.testing.assert_array_equal(signs_py, signs_jl)

@@ -601,4 +601,57 @@ class BettiTrackingError(SurgeryError):
     pass
 
 
+class ReconstructionRepairError(SurgeryError):
+    """Raised when Moser-Tardos-style local perturbation repair fails to converge.
+
+    Overview:
+        Manifold-reconstruction methods (Cocone, tangential Delaunay complexes) resolve
+        local geometric inconsistencies (prune-and-walk dead ends, cross-vertex star
+        disagreements, zero-candidate vertices) by perturbing only the specific points
+        implicated in a detected conflict and re-checking, bounded by a round limit. This
+        error is raised instead of looping forever or silently returning an inconsistent
+        result when that repair does not converge within the round budget. A single class
+        covers every non-convergent repair case (distinguished by ``stage``) rather than
+        proliferating exception types.
+
+    Key Concepts:
+        - **Targeted resampling**: only points named in a live conflict are perturbed each
+          round, in the spirit of the Moser-Tardos algorithmic Lovász Local Lemma (not a
+          full reproduction of its formal certified-protection-radius proof).
+
+    Common Workflows:
+        1. Raised from ``pysurgery.geometry.perturbation.moser_tardos_repair`` and
+           propagated up through ``SimplicialComplex.from_cocone`` /
+           ``from_tangential_complex``.
+        2. Non-convergence is itself a diagnostic: it signals the sampling density
+           assumption is violated somewhere, not merely a tuning failure.
+
+    Attributes:
+        stage (str): Which repair loop failed (e.g. "prune_and_walk", "star_consistency").
+        rounds_attempted (int): Number of perturbation rounds actually run.
+        max_rounds (int): The configured round budget.
+        residual_conflicts (list): The conflicts still present at the final round.
+        offending_indices (list[int]): Point indices implicated in the residual conflicts.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        stage: str = "",
+        rounds_attempted: int = 0,
+        max_rounds: int = 0,
+        residual_conflicts: list | None = None,
+        offending_indices: list | None = None,
+    ):
+        super().__init__(
+            message or f"Reconstruction repair failed to converge at stage {stage!r} "
+            f"after {rounds_attempted}/{max_rounds} round(s)."
+        )
+        self.stage = stage
+        self.rounds_attempted = rounds_attempted
+        self.max_rounds = max_rounds
+        self.residual_conflicts = residual_conflicts or []
+        self.offending_indices = offending_indices or []
+
+
 

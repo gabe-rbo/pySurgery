@@ -1,10 +1,11 @@
 def __getattr__(name):
-    if name in ["ChainComplex", "CWComplex", "SimplicialComplex", "DynamicComplex"]:
+    if name in ["ChainComplex", "CWComplex", "SimplicialComplex", "DynamicComplex", "PLManifoldCertificate"]:
         from .complexes import (  # noqa: F401
             ChainComplex,
             CWComplex,
             SimplicialComplex,
             DynamicComplex,
+            PLManifoldCertificate,
         )
         return locals()[name]
     if name in [
@@ -104,6 +105,7 @@ __all__ = [
     "CWComplex",
     "SimplicialComplex",
     "DynamicComplex",
+    "PLManifoldCertificate",
     "FundamentalGroup",
     "GroupPresentation",
     "extract_pi_1",

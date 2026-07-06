@@ -42,6 +42,7 @@ from .topology.complexes import (
     CWComplex,
     SimplicialComplex,
     DynamicComplex,
+    PLManifoldCertificate,
 )
 from .topology.fundamental_group import (
     FundamentalGroup,
@@ -123,10 +124,44 @@ from .geometry.embedding import (
 from .geometry.intrinsic_dimension import (
     IntrinsicDimensionMethodResult,
     IntrinsicDimensionResult,
+    TangentBasisResult,
     estimate_intrinsic_dimension,
     levina_bickel_mle,
     local_pca_tangent_space_dimension,
+    local_pca_tangent_basis,
     twonn,
+)
+from .geometry.predicates import (
+    exact_sign_of_determinant,
+    exact_signs_of_determinants_batch,
+    exact_sign_of_sum,
+    orientation2d,
+    orientation3d,
+    incircle2d,
+    insphere3d,
+)
+from .geometry.perturbation import (
+    is_single_cycle,
+    is_single_path_or_cycle,
+    intersect_local_stars,
+    PerturbationRepairResult,
+    moser_tardos_repair,
+)
+from .geometry.reconstruction import (
+    PoleEstimationResult,
+    estimate_voronoi_poles,
+    CoconeFilterResult,
+    cocone_filter,
+    PruneWalkResult,
+    prune_and_walk,
+    TightCoconeResult,
+    tight_cocone_close,
+    CoconeReconstructionResult,
+    cocone_reconstruction,
+)
+from .geometry.tangential_complex import (
+    TangentialComplexResult,
+    tangential_complex_reconstruction,
 )
 from .geometry.geometrization_3d import (
     GeometrizationResult,
@@ -328,7 +363,7 @@ from .auto_surgery import (
 
 from . import integrations
 
-__version__ = "2.3.12"
+__version__ = "2.4.0"
                                 
 def __getattr__(name):
     if name == "JuliaBridge":
@@ -341,6 +376,7 @@ __all__ = [
     "CWComplex",
     "SimplicialComplex",
     "DynamicComplex",
+    "PLManifoldCertificate",
     "EmbeddingResult",
     "ImmersionResult",
     "PLMap",
@@ -355,10 +391,36 @@ __all__ = [
     "project_coordinates",
     "IntrinsicDimensionMethodResult",
     "IntrinsicDimensionResult",
+    "TangentBasisResult",
     "estimate_intrinsic_dimension",
     "levina_bickel_mle",
     "local_pca_tangent_space_dimension",
+    "local_pca_tangent_basis",
     "twonn",
+    "exact_sign_of_determinant",
+    "exact_signs_of_determinants_batch",
+    "exact_sign_of_sum",
+    "orientation2d",
+    "orientation3d",
+    "incircle2d",
+    "insphere3d",
+    "is_single_cycle",
+    "is_single_path_or_cycle",
+    "intersect_local_stars",
+    "PerturbationRepairResult",
+    "moser_tardos_repair",
+    "PoleEstimationResult",
+    "estimate_voronoi_poles",
+    "CoconeFilterResult",
+    "cocone_filter",
+    "PruneWalkResult",
+    "prune_and_walk",
+    "TightCoconeResult",
+    "tight_cocone_close",
+    "CoconeReconstructionResult",
+    "cocone_reconstruction",
+    "TangentialComplexResult",
+    "tangential_complex_reconstruction",
     "GeometrizationResult",
     "NormalSurfaceCandidate",
     "PieceDecomposition",

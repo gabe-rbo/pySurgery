@@ -527,6 +527,96 @@ def twonn(
     )
 
 
+def _local_pca_spectrum(
+    pts: np.ndarray,
+    cache: _NeighborhoodCache,
+    *,
+    k_out: Optional[int] = None,
+) -> tuple[list[np.ndarray], list[np.ndarray], list[str]]:
+    """Shared per-point local-neighborhood covariance eigendecomposition.
+
+    What is Being Computed?:
+        For every point, the eigenvalues and eigenvectors of the covariance matrix of its
+        own neighborhood (the point itself plus its ``k`` nearest neighbors, centered) --
+        the common numerical core behind both ``local_pca_tangent_space_dimension`` (which
+        thresholds the *full* eigenvalue spectrum's cumulative-variance curve to get a
+        per-point-varying integer dimension) and ``local_pca_tangent_basis`` (which keeps
+        only the leading ``k_out`` eigenvectors as a forced, uniform-across-points
+        projection basis).
+
+    Algorithm:
+        JAX path (available and neighbor indices present): batched SVD of each point's
+        centered neighborhood (``jax_local_pca_basis``) -- eigenvalues from the singular
+        values squared, eigenvectors from the right singular vectors. Python fallback: a
+        per-point ``numpy.linalg.eigh`` on the explicit ``(D, D)`` covariance matrix. Either
+        way, eigenvalues are always returned in full (needed for a true explained-variance
+        ratio and for cumulative-variance dimension counting), while eigenvectors are
+        truncated to the first ``k_out`` columns (or kept in full if ``k_out`` is None) --
+        slicing is free once the decomposition is already computed.
+
+    Args:
+        pts: (N, D) point coordinates.
+        cache: Precomputed neighborhood cache (see ``_compute_knn_cache``).
+        k_out: Number of leading eigenvectors to keep per point. ``None`` keeps the full
+            available spectrum (``min(k_neighbors + 1, D)``).
+
+    Returns:
+        tuple[list[np.ndarray], list[np.ndarray], list[str]]: ``(eigvals_per_point,
+        eigvecs_per_point, diagnostics)`` -- ``eigvals_per_point[i]`` is always the *full*
+        descending eigenvalue spectrum, ``eigvecs_per_point[i]`` is the matching ``(D,
+        n_kept)`` array of eigenvectors truncated to ``k_out`` columns.
+    """
+    diagnostics: list[str] = []
+    ambient_dim = pts.shape[1]
+
+    from ..integrations.jax_bridge import HAS_JAX
+    if HAS_JAX and cache.indices is not None:
+        from ..integrations.jax_bridge import jax_local_pca_basis
+        nbr_idx = np.hstack([np.arange(pts.shape[0])[:, None], cache.indices])
+        r_available = min(nbr_idx.shape[1], ambient_dim)
+        k_request = r_available if k_out is None else min(int(k_out), r_available)
+        bases, eigvals = jax_local_pca_basis(pts, nbr_idx, k_request)
+        bases = np.asarray(bases)
+        eigvals = np.asarray(eigvals)
+        if k_out is not None and k_request < k_out:
+            diagnostics.append(
+                f"Requested basis dimension {k_out} exceeds the available local rank "
+                f"({r_available}); truncated to {r_available} for every point."
+            )
+        return (
+            [eigvals[i] for i in range(eigvals.shape[0])],
+            [bases[i] for i in range(bases.shape[0])],
+            diagnostics,
+        )
+
+    eigvals_list: list[np.ndarray] = []
+    eigvecs_list: list[np.ndarray] = []
+    for i in range(pts.shape[0]):
+        if cache.indices is None:
+            diagnostics.append(f"Missing neighbor indices for local PCA; skipped point {i}.")
+            eigvals_list.append(np.zeros(0))
+            eigvecs_list.append(np.zeros((ambient_dim, 0)))
+            continue
+        neighborhood = pts[cache.indices[i]]
+        cloud = np.vstack([pts[i], neighborhood])
+        cloud = cloud - np.mean(cloud, axis=0, keepdims=True)
+        cov = np.atleast_2d(np.cov(cloud, rowvar=False))
+        w, v = np.linalg.eigh(np.asarray(cov, dtype=np.float64))
+        order = np.argsort(w)[::-1]
+        eigvals = np.maximum(w[order], 0.0)
+        eigvecs = v[:, order]
+        k_request = eigvals.shape[0] if k_out is None else min(int(k_out), eigvals.shape[0])
+        if k_out is not None and k_request < k_out:
+            diagnostics.append(
+                f"Point {i}: local rank ({eigvals.shape[0]}) is smaller than the requested "
+                f"basis dimension ({k_out}); truncated."
+            )
+        eigvals_list.append(eigvals)
+        eigvecs_list.append(eigvecs[:, :k_request])
+
+    return eigvals_list, eigvecs_list, diagnostics
+
+
 def local_pca_tangent_space_dimension(
     data: np.ndarray | PointCloud | SimplicialComplex | object,
     k: int = 12,
@@ -582,44 +672,22 @@ def local_pca_tangent_space_dimension(
     if k_eff < 2:
         raise ValueError("Local PCA requires at least two neighbors.")
 
-    local_dims: list[float] = []
-    diagnostics: list[str] = []
     max_dim = max_dimension if max_dimension is not None else pts.shape[1]
     max_dim = max(1, int(max_dim))
 
-    from ..integrations.jax_bridge import HAS_JAX
-    if HAS_JAX and cache.indices is not None:
-        from ..integrations.jax_bridge import jax_local_pca_dimensions
-        # neighborhood including point itself
-        nbr_idx = np.hstack([np.arange(pts.shape[0])[:, None], cache.indices])
-        jax_dims = jax_local_pca_dimensions(pts, nbr_idx, variance_threshold)
-        local_dims = np.minimum(jax_dims.astype(float), float(max_dim)).tolist()
-    else:
-        for i in range(pts.shape[0]):
-            if cache.indices is not None:
-                nbr_idx = cache.indices[i]
-                neighborhood = pts[nbr_idx]
-            else:
-                # Reconstruct from distances is impossible; skip.
-                diagnostics.append("Missing neighbor indices for local PCA; skipped point {}.".format(i))
-                continue
-            cloud = np.vstack([pts[i], neighborhood])
-            cloud = cloud - np.mean(cloud, axis=0, keepdims=True)
-            if cloud.shape[0] <= 2:
-                continue
-            cov = np.cov(cloud, rowvar=False)
-            if np.ndim(cov) == 0:
-                eigvals = np.array([float(cov)], dtype=np.float64)
-            else:
-                eigvals = np.linalg.eigvalsh(np.asarray(cov, dtype=np.float64))[::-1]
-            eigvals = np.maximum(eigvals, 0.0)
-            total = float(np.sum(eigvals))
-            if total <= _EPS:
-                continue
-            explained = np.cumsum(eigvals) / total
-            dim = int(np.searchsorted(explained, float(variance_threshold), side="left") + 1)
-            dim = min(max(dim, 1), max_dim)
-            local_dims.append(float(dim))
+    eigvals_list, _eigvecs_list, diagnostics = _local_pca_spectrum(pts, cache)
+
+    local_dims: list[float] = []
+    for eigvals in eigvals_list:
+        if eigvals.size == 0:
+            continue
+        total = float(np.sum(eigvals))
+        if total <= _EPS:
+            continue
+        explained = np.cumsum(eigvals) / total
+        dim = int(np.searchsorted(explained, float(variance_threshold), side="left") + 1)
+        dim = min(max(dim, 1), max_dim)
+        local_dims.append(float(dim))
 
     if not local_dims:
         return IntrinsicDimensionMethodResult(
@@ -639,6 +707,133 @@ def local_pca_tangent_space_dimension(
         local_dims,
         k=k_eff,
         ambient_dim=cache.ambient_dim,
+        diagnostics=diagnostics,
+    )
+
+
+class TangentBasisResult(BaseModel):
+    """Per-point, fixed-dimension local tangent-space basis from local PCA.
+
+    Overview:
+        Bundles the per-point orthonormal tangent-frame basis vectors (the leading
+        eigenvectors of each point's local neighborhood covariance) that
+        ``pysurgery.geometry.tangential_complex`` projects each point's neighborhood onto
+        before running a local, lower-dimensional Delaunay triangulation.
+
+    Attributes:
+        bases (np.ndarray): ``(N, D, k)`` array; ``bases[i]`` is an orthonormal ``(D, k)``
+            matrix whose columns span point i's estimated k-dimensional tangent space,
+            ordered by descending explained variance.
+        explained_variance_ratio (np.ndarray): ``(N,)`` array; the fraction of point i's
+            local neighborhood variance captured by its k-dimensional basis (1.0 if k spans
+            the full local rank).
+        neighborhood_size (int): Number of neighbors actually used per point.
+        k (int): The forced, uniform basis dimension.
+        ambient_dim (int): Dimension of the ambient space.
+        diagnostics (list[str]): Human-readable notes (e.g. near-rank-deficient neighborhoods).
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    bases: np.ndarray
+    explained_variance_ratio: np.ndarray
+    neighborhood_size: int
+    k: int
+    ambient_dim: int
+    diagnostics: list[str] = Field(default_factory=list)
+
+
+def local_pca_tangent_basis(
+    data: np.ndarray | PointCloud | SimplicialComplex | object,
+    k: int,
+    *,
+    neighborhood_size: int = 12,
+    coordinates: Optional[np.ndarray | PointCloud] = None,
+    distance_matrix: Optional[np.ndarray] = None,
+) -> TangentBasisResult:
+    """Estimate a per-point, fixed-dimension local tangent-space basis via local PCA.
+
+    What is Being Computed?:
+        For every point, the top-``k`` eigenvectors of its local neighborhood's covariance
+        matrix -- an orthonormal basis for the ``k``-dimensional linear subspace that best
+        approximates the manifold near that point. Unlike
+        ``local_pca_tangent_space_dimension`` (which estimates a *per-point-varying* integer
+        dimension from a variance threshold), ``k`` here is a single, caller-fixed value
+        applied uniformly to every point -- exactly what the tangential Delaunay complex
+        needs (one consistent projection dimension to triangulate in), and what
+        ``jax.vmap``'s batched SVD needs for a uniform output shape.
+
+    Algorithm:
+        1. Gather each point's ``neighborhood_size`` nearest neighbors
+           (``_compute_knn_cache``).
+        2. Shared with ``local_pca_tangent_space_dimension`` (``_local_pca_spectrum``):
+           center each neighborhood (including the point itself), eigendecompose its
+           covariance (JAX batched SVD when available, else a per-point
+           ``numpy.linalg.eigh`` loop), sort descending by eigenvalue.
+        3. Keep the first ``k`` eigenvectors per point, and record what fraction of that
+           point's local variance they explain.
+
+    Preserved Invariants:
+        Every point's basis has exactly ``k`` orthonormal columns -- guaranteed by requiring
+        ``neighborhood_size + 1 >= k`` and ``ambient_dim >= k`` upfront (a structural,
+        data-independent check), rather than silently truncating or zero-padding a
+        rank-deficient point's basis, which would silently corrupt downstream triangulation.
+
+    Args:
+        data: Point cloud data or object with coordinates.
+        k: The fixed tangent-space dimension to estimate for every point.
+        neighborhood_size: Number of nearest neighbors per point (excluding the point
+            itself); must satisfy ``neighborhood_size + 1 >= k``.
+        coordinates: Optional explicit coordinates.
+        distance_matrix: Optional precomputed distance matrix.
+
+    Returns:
+        TangentBasisResult: The per-point bases and explained-variance diagnostics.
+
+    Raises:
+        ValueError: If ``k`` is not in ``[1, ambient_dim]``, or ``neighborhood_size + 1 <
+            k``.
+
+    Use When:
+        - Building a tangential Delaunay complex (``pysurgery.geometry.tangential_complex``),
+          where every point must project onto a basis of the *same* dimension.
+
+    Example:
+        result = local_pca_tangent_basis(points, k=2, neighborhood_size=15)
+        tangent_coords_i = (points - points[i]) @ result.bases[i]
+    """
+    points = _coerce_point_cloud(data, coordinates=coordinates)
+    cache = _compute_knn_cache(points, k=neighborhood_size, distance_matrix=distance_matrix)
+    pts = cache.points if cache.points is not None else points
+    assert pts is not None
+    ambient_dim = pts.shape[1]
+    k = int(k)
+    if k < 1 or k > ambient_dim:
+        raise ValueError(f"k must be in [1, {ambient_dim}] (ambient dimension), got {k}.")
+    k_eff = cache.distances.shape[1]
+    if k_eff + 1 < k:
+        raise ValueError(
+            f"neighborhood_size ({k_eff}) + 1 must be >= k ({k}); increase "
+            "neighborhood_size to estimate a rank-k tangent basis."
+        )
+
+    eigvals_list, eigvecs_list, diagnostics = _local_pca_spectrum(pts, cache, k_out=k)
+
+    bases = np.stack(eigvecs_list, axis=0)
+    explained_variance_ratio = np.array(
+        [
+            float(np.sum(ev[:k]) / total) if (total := float(np.sum(ev))) > _EPS else 0.0
+            for ev in eigvals_list
+        ],
+        dtype=np.float64,
+    )
+
+    return TangentBasisResult(
+        bases=bases,
+        explained_variance_ratio=explained_variance_ratio,
+        neighborhood_size=int(k_eff),
+        k=k,
+        ambient_dim=int(ambient_dim),
         diagnostics=diagnostics,
     )
 
@@ -856,9 +1051,11 @@ def estimate_intrinsic_dimension(
 __all__ = [
     "IntrinsicDimensionMethodResult",
     "IntrinsicDimensionResult",
+    "TangentBasisResult",
     "estimate_intrinsic_dimension",
     "levina_bickel_mle",
     "local_pca_tangent_space_dimension",
+    "local_pca_tangent_basis",
     "twonn",
     "exact_intrinsic_dimension",
 ]

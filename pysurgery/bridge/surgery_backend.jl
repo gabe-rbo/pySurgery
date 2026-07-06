@@ -13,7 +13,7 @@ using IntegerSmithNormalForm
 using AbstractAlgebra
 import PrecompileTools
 
-export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_vietoris_rips, compute_circumradius_sq_3d, compute_circumradius_sq_2d, quick_mapper_jl, cknn_graph_jl, cknn_graph_accelerated_jl, is_homology_manifold_jl, compute_alpha_complex_simplices_jl, compute_alpha_threshold_emst_jl, compute_crust_simplices_jl, compute_witness_complex_simplices_jl, compute_discrete_morse_gradient_jl,
+export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomology_basis, rank_q_sparse, rank_mod_p_sparse, sparse_cohomology_basis_mod_p, normal_surface_residual_norms, embedding_broad_phase_pairs, group_ring_multiply, multisignature, abelianize_group, integral_lattice_isometry, optgen_from_simplices, homology_generators_from_simplices, compute_boundary_data_from_simplices, compute_boundary_payload_from_simplices, compute_boundary_payload_from_flat_simplices, compute_boundary_mod2_matrix, compute_alexander_whitney_cup, compute_trimesh_boundary_data, compute_trimesh_boundary_data_flat, triangulate_surface_delaunay, orthogonal_procrustes, pairwise_distance_matrix, frechet_distance, gromov_wasserstein_distance, enumerate_cliques_sparse, compute_vietoris_rips, compute_circumradius_sq_3d, compute_circumradius_sq_2d, exact_signs_of_determinants_batch_jl, quick_mapper_jl, cknn_graph_jl, cknn_graph_accelerated_jl, is_homology_manifold_jl, compute_alpha_complex_simplices_jl, compute_alpha_threshold_emst_jl, compute_crust_simplices_jl, compute_witness_complex_simplices_jl, compute_discrete_morse_gradient_jl,
     snf_markowitz_column_order, modular_rank_certification_jl, padic_snf_diagonal_jl, batch_exact_snf_sparse,
     todd_coxeter_index_jl, cayley_table_jl, cayley_convolve_jl, lift_boundary_to_cover_jl,
     fox_derivative_block_real_jl, fox_derivative_block_complex_jl, twisted_alexander_whitney_jl,
@@ -3521,6 +3521,89 @@ function compute_circumradius_sq_2d(points::AbstractMatrix{Float64}, simplices::
         end
     end
     return radii_sq
+end
+
+function _signed_permutations_jl(n::Int)
+    perms = collect(permutations(1:n))
+    result = Vector{Tuple{Vector{Int},Int}}(undef, length(perms))
+    for (idx, p) in enumerate(perms)
+        inversions = 0
+        for i in 1:n, j in (i+1):n
+            if p[i] > p[j]
+                inversions += 1
+            end
+        end
+        result[idx] = (p, isodd(inversions) ? -1 : 1)
+    end
+    return result
+end
+
+function _leibniz_det_jl(mat::AbstractMatrix{T}, signed_perms) where {T}
+    n = size(mat, 1)
+    total = zero(T)
+    for (perm, s) in signed_perms
+        term = s >= 0 ? one(T) : -one(T)
+        for i in 1:n
+            term *= mat[i, perm[i]]
+        end
+        total += term
+    end
+    return total
+end
+
+function _leibniz_abs_sum_jl(abs_mat::AbstractMatrix{Float64}, signed_perms)
+    n = size(abs_mat, 1)
+    total = 0.0
+    for (perm, _s) in signed_perms
+        term = 1.0
+        for i in 1:n
+            term *= abs_mat[i, perm[i]]
+        end
+        total += term
+    end
+    return total
+end
+
+"""
+    exact_signs_of_determinants_batch_jl(matrices)
+
+Exact signs of `det(matrices[i, :, :])` for a batch of small (`n <= 6`) square matrices.
+Mirrors `pysurgery.geometry.predicates`'s two-tier algorithm exactly: the Leibniz
+(permutation-sum) formula evaluated in `Float64`, bounded by Higham's standard running-error
+growth factor `gamma_k = k*u / (1 - k*u)` (`u` the double unit roundoff, `k = n! * n` a
+conservative operation count); only matrices whose float result cannot clear that bound fall
+back to the identical formula recomputed over `Rational{BigInt}` -- exact, since every
+`Float64` converts to its exact dyadic rational with no rounding, and Julia's arithmetic over
+`Rational{BigInt}` is itself exact. Called from Python only for the (expected rare) batch of
+matrices the float64 filter there already flagged as uncertain; kept self-contained (its own
+float tier, not just the exact fallback) so it is independently correct if ever called
+directly.
+"""
+function exact_signs_of_determinants_batch_jl(matrices::AbstractArray{Float64,3})
+    matrices = matrices isa Array{Float64,3} ? matrices : Array{Float64,3}(matrices)
+    m_count, n, n2 = size(matrices)
+    @assert n == n2 "matrices must be (M, n, n)"
+    signs = zeros(Int64, m_count)
+    u = 2.0^-53
+    signed_perms = _signed_permutations_jl(n)
+    k = length(signed_perms) * n
+    gamma_k = (k * u) / (1.0 - k * u)
+
+    Threads.@threads for i in 1:m_count
+        # Materialize a native copy per item: callers pass zero-copy PyArrays over NumPy
+        # buffers, which are NOT thread-safe to read from the @threads loop.
+        mat = Matrix{Float64}(@view(matrices[i, :, :]))
+        d = _leibniz_det_jl(mat, signed_perms)
+        bound = gamma_k * _leibniz_abs_sum_jl(abs.(mat), signed_perms)
+        if abs(d) > bound
+            signs[i] = d > 0 ? 1 : (d < 0 ? -1 : 0)
+        else
+            exact_mat = Rational{BigInt}.(mat)
+            exact_d = _leibniz_det_jl(exact_mat, signed_perms)
+            signs[i] = exact_d > 0 ? 1 : (exact_d < 0 ? -1 : 0)
+        end
+    end
+    return signs
 end
 
 

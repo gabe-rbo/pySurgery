@@ -1,4 +1,5 @@
 from __future__ import annotations
+from functools import partial
 import numpy as np
 
 try:
@@ -270,6 +271,34 @@ if HAS_JAX:
             return dim
 
         return vmap(single_point_pca)(neighbor_indices)
+
+    @partial(jit, static_argnames="k")
+    def jax_local_pca_basis(
+        points: jnp.ndarray,
+        neighbor_indices: jnp.ndarray,
+        k: int,
+    ):
+        """Vectorized local PCA returning a fixed-dimension tangent-frame basis per point.
+
+        Unlike ``jax_local_pca_dimensions`` (which derives a per-point-*varying* integer
+        dimension from a variance threshold), ``k`` here is a single value forced uniformly
+        onto every point -- what ``jax.vmap`` needs for a uniform output shape, and what the
+        tangential Delaunay complex needs (one consistent projection dimension to
+        triangulate in). Returns the *full* eigenvalue spectrum (length
+        ``min(neighbor_indices.shape[1], points.shape[1])``, uniform across points since the
+        neighborhood size and ambient dimension are themselves uniform) alongside only the
+        top-``k`` eigenvectors, since a true explained-variance ratio needs the full
+        spectrum's total, while the basis itself only ever needs the leading ``k`` columns.
+        """
+        def single_point_basis(indices):
+            neighborhood = points[indices]
+            centered = neighborhood - jnp.mean(neighborhood, axis=0)
+            _, s, vh = jnp.linalg.svd(centered, full_matrices=False)
+            eigvals = s**2 / (neighborhood.shape[0] - 1)
+            basis = jnp.transpose(vh)[:, :k]
+            return basis, eigvals
+
+        return vmap(single_point_basis)(neighbor_indices)
 
     # Batch support for signatures
     jax_batch_soft_signature = vmap(_approximate_signature, in_axes=(0, None))

@@ -7,7 +7,7 @@ import numba
 import warnings
 import sympy as sp
 from scipy.sparse import csr_matrix
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast, Literal, Set, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Tuple, Union, cast, Literal, Set, TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 if TYPE_CHECKING:
@@ -2408,6 +2408,24 @@ class CWComplex(BaseModel):
         return _build_handle_decomposition_from_cw(self)
 
 
+class PLManifoldCertificate(NamedTuple):
+    """Result of ``SimplicialComplex.certify_pl_manifold``.
+
+    Attributes:
+        is_pl_manifold (bool): True if certified a genuine PL (combinatorial) manifold.
+        dimension (int | None): The complex's own top-level dimension.
+        diagnostics (dict): Mapping vertex ID to failure reason (empty if certified).
+        exact (bool): True if the certificate is a proof, not merely evidence -- always
+            True at dimension <= 3; False at dimension >= 4, where ruling out exotic
+            homology spheres among vertex links is undecidable in general.
+    """
+
+    is_pl_manifold: bool
+    dimension: Optional[int]
+    diagnostics: dict
+    exact: bool
+
+
 class SimplicialComplex(ChainComplex):
     """A finite simplicial complex ..."""
 
@@ -3025,6 +3043,228 @@ class SimplicialComplex(ChainComplex):
         sc._coordinates = pts
         sc._generate_point_cloud_mappings(pts)
         sc._link_point_cloud(points)
+        return sc
+
+    @classmethod
+    def from_cocone(
+        cls,
+        points: Union[np.ndarray, "PointCloud"],
+        *,
+        theta: Optional[float] = None,
+        reach_fraction: Optional[float] = None,
+        tight: bool = False,
+        bounding_radius_factor: float = 20.0,
+        n_sentinels: Optional[int] = None,
+        repair: bool = True,
+        max_repair_rounds: int = 250,
+        perturbation_scale: Optional[float] = None,
+        seed: int = 0,
+        coefficient_ring: str = "Z",
+    ) -> "SimplicialComplex":
+        r"""Reconstruct a manifold-certified surface from a 3D point cloud (Cocone algorithm).
+
+        Unlike ``from_alpha_complex`` or ``from_crust_algorithm`` (whose restricted-Delaunay
+        construction is only correct for the 2D-curve case it is tested against), this
+        builds a genuine combinatorial 2-manifold by construction: pole/normal estimation
+        (``estimate_voronoi_poles``), a Cocone angle + pole-reach filter (``cocone_filter``),
+        and a prune-and-walk pass (``prune_and_walk``) that forces a single consistent
+        triangle umbrella at every vertex -- the step that actually guarantees
+        manifold-ness, not merely filters towards it. Independent per-vertex decisions
+        routinely disagree at a handful of vertices even on clean data; with
+        ``repair=True`` (the default) these are resolved via a bounded Moser-Tardos-style
+        perturbation loop (``pysurgery.geometry.perturbation.moser_tardos_repair``) rather
+        than left as defects, which is normally enough on its own to reach a fully closed
+        surface without needing ``tight=True`` at all. Set ``tight=True`` to additionally
+        run the Tight Cocone closing pass (``tight_cocone_close``) as a best-effort
+        watertight closer for whatever gap remains (it has a known limitation on point
+        clouds sampled only on a surface with no interior points -- see its docstring).
+
+        This produces one certified reconstruction at a single scale (derived from the local
+        pole radii), not a family over a distance-threshold parameter the way an alpha/Rips
+        filtration does -- manifold-ness is not preserved across such a sweep. The result
+        should satisfy ``is_homology_manifold()`` (and, since the result is 2-dimensional,
+        that check is already a genuine PL-manifold certificate -- see
+        ``is_homology_manifold``'s docstring); any residual defect shows up in
+        ``diagnostics`` rather than being silently dropped.
+
+        Args:
+            points: (N, 3) array of point coordinates.
+            theta: Cocone half-angle. ``None`` defers to
+                ``pysurgery.geometry.reconstruction``'s tuned default.
+            reach_fraction: Passed through to ``cocone_filter``. ``None`` defers to
+                ``pysurgery.geometry.reconstruction``'s tuned default, which was chosen to
+                reliably close genus-0 (sphere-like) surfaces; a surface with a persistent
+                concave region relative to its own sampling density (a torus's inner,
+                hole-facing side is the motivating example) was measured to need a
+                noticeably higher value instead -- see ``cocone_reconstruction``'s docstring
+                for what was measured and why.
+            tight: If True, run the Tight Cocone closing pass for a watertight surface.
+            bounding_radius_factor: Passed through to ``estimate_voronoi_poles``.
+            n_sentinels: Passed through to ``estimate_voronoi_poles``.
+            repair: If True, resolve residual prune-and-walk conflicts via perturbation
+                repair rather than returning them as diagnostics only.
+            max_repair_rounds: Passed through to ``moser_tardos_repair``.
+            perturbation_scale: Passed through to ``moser_tardos_repair``; ``None`` scales
+                with the data (see ``cocone_reconstruction``'s docstring).
+            seed: Passed through to ``moser_tardos_repair``.
+            coefficient_ring: Coefficient ring label.
+
+        Returns:
+            A SimplicialComplex representing the reconstructed surface, over the (possibly
+            minutely repair-perturbed -- see ``cocone_reconstruction``) input coordinates.
+            For the full diagnostics (per-stage candidate/survivor counts, unresolved
+            vertices, pole estimates), call
+            ``pysurgery.geometry.reconstruction.cocone_reconstruction`` directly instead of
+            this convenience wrapper.
+
+        Raises:
+            ValueError: If ``points`` is not an (N, 3) array.
+            ReconstructionRepairError: If ``repair=True`` and the conflicts do not resolve
+                within ``max_repair_rounds``.
+        """
+        from pysurgery.geometry.reconstruction import (
+            _DEFAULT_REACH_FRACTION,
+            _DEFAULT_THETA,
+            cocone_reconstruction,
+        )
+
+        pts = np.asarray(points, dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError("from_cocone currently supports (N, 3) point clouds only.")
+        n_pts = pts.shape[0]
+        if n_pts < 4:
+            sc = cls.from_simplices([[i] for i in range(n_pts)], coefficient_ring=coefficient_ring)
+            sc._coordinates = pts
+            sc._generate_point_cloud_mappings(pts)
+            sc._link_point_cloud(points)
+            return sc
+
+        result = cocone_reconstruction(
+            pts, theta=_DEFAULT_THETA if theta is None else theta,
+            reach_fraction=_DEFAULT_REACH_FRACTION if reach_fraction is None else reach_fraction,
+            tight=tight,
+            bounding_radius_factor=bounding_radius_factor, n_sentinels=n_sentinels,
+            repair=repair, max_repair_rounds=max_repair_rounds,
+            perturbation_scale=perturbation_scale, seed=seed,
+        )
+        if result.unresolved_vertices:
+            import warnings
+            warnings.warn(
+                f"[Cocone] {len(result.unresolved_vertices)} vertex/vertices had no clean "
+                "prune-and-walk umbrella; see the returned diagnostics for detail."
+            )
+        if result.tight is not None and result.tight.n_wall_mismatch:
+            import warnings
+            warnings.warn(
+                f"[Cocone] Tight Cocone found {result.tight.n_wall_mismatch} facet mismatch(es) "
+                "between prune-and-walk's walls and the flood-fill boundary."
+            )
+
+        all_simplices = set()
+        for i in range(n_pts):
+            all_simplices.add((i,))
+        for tri in result.triangles:
+            all_simplices.add(tuple(sorted(tri)))
+
+        sc = cls.from_simplices(all_simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
+        sc._coordinates = result.points
+        sc._generate_point_cloud_mappings(result.points)
+        sc._link_point_cloud(result.points)
+        return sc
+
+    @classmethod
+    def from_tangential_complex(
+        cls,
+        points: Union[np.ndarray, "PointCloud"],
+        *,
+        k: Optional[int] = None,
+        neighborhood_size: Optional[int] = None,
+        variance_threshold: float = 0.9,
+        repair: bool = True,
+        max_repair_rounds: int = 250,
+        perturbation_scale: Optional[float] = None,
+        seed: int = 0,
+        coefficient_ring: str = "Z",
+    ) -> "SimplicialComplex":
+        r"""Reconstruct a ``k``-manifold-certified complex from a point cloud (Boissonnat-
+        Ghosh tangential Delaunay complex).
+
+        Unlike ``from_cocone`` (specialized to codimension-1 surfaces in R^3 via per-point
+        pole/normal estimation), this handles the general case of a ``k``-dimensional
+        manifold sampled in an ambient space of any dimension ``d``, including ``k << d``
+        (e.g. a curved data manifold inside a high-dimensional activation space). Per point,
+        its own neighborhood is projected onto its own PCA-estimated local tangent basis
+        (``pysurgery.geometry.intrinsic_dimension.local_pca_tangent_basis``) and
+        Delaunay-triangulated in that ``k``-dimensional projection; a simplex survives
+        globally only if kept by every one of its own vertices' independent local
+        computations (``pysurgery.geometry.perturbation.intersect_local_stars``).
+        Independent per-point decisions routinely disagree at a handful of points even on
+        clean data -- with ``repair=True`` (the default) these are resolved via the same
+        bounded Moser-Tardos-style perturbation loop Cocone uses
+        (``pysurgery.geometry.perturbation.moser_tardos_repair``).
+
+        Args:
+            points: (N, D) array of point coordinates.
+            k: Fixed tangent-space dimension for every point. ``None`` auto-estimates it
+                from the data's own local-PCA consensus dimension.
+            neighborhood_size: Number of nearest neighbors used in each point's local
+                triangulation. ``None`` picks a value scaled to ``k``.
+            variance_threshold: Passed to the auto-``k`` estimator when ``k`` is None.
+            repair: If True, resolve residual star-consistency conflicts via perturbation
+                repair rather than returning them as diagnostics only.
+            max_repair_rounds: Passed through to ``moser_tardos_repair``.
+            perturbation_scale: Passed through to ``moser_tardos_repair``; ``None`` scales
+                with the data.
+            seed: Passed through to ``moser_tardos_repair``.
+            coefficient_ring: Coefficient ring label.
+
+        Returns:
+            A SimplicialComplex representing the reconstructed complex, over the (possibly
+            minutely repair-perturbed) input coordinates. For the full diagnostics (local
+            star sizes, per-round convergence), call
+            ``pysurgery.geometry.tangential_complex.tangential_complex_reconstruction``
+            directly instead of this convenience wrapper.
+
+        Raises:
+            ValueError: If ``points`` is not a 2D array.
+            ReconstructionRepairError: If ``repair=True`` and the conflicts do not resolve
+                within ``max_repair_rounds``.
+        """
+        from pysurgery.geometry.tangential_complex import tangential_complex_reconstruction
+
+        pts = np.asarray(points, dtype=np.float64)
+        if pts.ndim != 2:
+            raise ValueError("from_tangential_complex requires a 2D (N, D) array.")
+        n_pts = pts.shape[0]
+        if n_pts < 4:
+            sc = cls.from_simplices([[i] for i in range(n_pts)], coefficient_ring=coefficient_ring)
+            sc._coordinates = pts
+            sc._generate_point_cloud_mappings(pts)
+            sc._link_point_cloud(points)
+            return sc
+
+        result = tangential_complex_reconstruction(
+            pts, k=k, neighborhood_size=neighborhood_size, variance_threshold=variance_threshold,
+            repair=repair, max_repair_rounds=max_repair_rounds,
+            perturbation_scale=perturbation_scale, seed=seed,
+        )
+        if result.unresolved_points:
+            import warnings
+            warnings.warn(
+                f"[TangentialComplex] {len(result.unresolved_points)} point(s) had a "
+                "degenerate local Delaunay call; see the returned diagnostics for detail."
+            )
+
+        all_simplices = set()
+        for i in range(n_pts):
+            all_simplices.add((i,))
+        for simplex in result.simplices:
+            all_simplices.add(tuple(sorted(simplex)))
+
+        sc = cls.from_simplices(all_simplices, coefficient_ring=coefficient_ring, close_under_faces=True)
+        sc._coordinates = result.points
+        sc._generate_point_cloud_mappings(result.points)
+        sc._link_point_cloud(result.points)
         return sc
 
     @classmethod
@@ -4803,6 +5043,23 @@ class SimplicialComplex(ChainComplex):
         This method performs a fast combinatorial incidence check (Step 1) to rule
         out branched complexes before running expensive vertex-link homology checks (Step 2).
 
+        Exactness by dimension: at ``dimension <= 2`` this check is already a genuine PL-
+        manifold certificate, not merely a homology-manifold one -- no gap, no extra work
+        needed. Step 1, at d=2, is exactly "every edge lies in <= 2 triangles," which is the
+        same statement as "every link-graph vertex has degree <= 2"; combined with Step 2
+        requiring the link to have rank-1, torsion-free H_1 at one degree (or be acyclic, for
+        a boundary vertex), a connected, degree-<=2 graph is forced to be a literal simple
+        cycle (or path) -- a path has trivial H_1, so a nonzero rank-1 result can only come
+        from an actual cycle. Starting at dimension 3, a link can have "the right homology"
+        (e.g. genuine S^2 homology) while still not be a genuine 2-manifold combinatorially --
+        two disjoint 2-spheres wedged at a single point, deeper inside a link, are homotopy-
+        equivalent to a single S^2 (trivial reduced homology otherwise) but are not one. Use
+        ``certify_pl_manifold`` at dimension 3 (recursing one level into each vertex's own
+        link, since the classification of closed surfaces makes the d<=2 case above apply
+        there too) for a certificate that closes this gap; dimension >= 4 remains
+        fundamentally undecidable in general (ruling out exotic homology spheres such as the
+        Poincare sphere needs more than homology, matching Novikov/Adian-Rabin).
+
         Args:
             backend: 'auto', 'julia', or 'python'.
 
@@ -4903,8 +5160,84 @@ class SimplicialComplex(ChainComplex):
         # (Actually, a d-manifold vertex link can be acyclic if it's on the boundary)
         if diagnostics:
             return False, d, diagnostics
-            
+
         return True, d, {}
+
+    def certify_pl_manifold(self, backend: str = "auto") -> PLManifoldCertificate:
+        r"""Certify whether the complex is a genuine PL (combinatorial) manifold.
+
+        What is Being Computed?:
+            A strictly stronger certificate than ``is_homology_manifold`` wherever that
+            strengthening is actually decidable. At ``dimension <= 2`` the two checks
+            coincide exactly (see ``is_homology_manifold``'s docstring for why -- no
+            code path here does anything beyond deferring to it, since there is nothing to
+            add). At ``dimension == 3``, ``is_homology_manifold`` alone can be fooled: a
+            vertex's link can have the right *aggregate* homology (e.g. genuine S^2
+            homology) while not actually being a topological S^2 -- two 2-spheres wedged at
+            a single point inside the link, for instance, are homotopy-equivalent to one
+            S^2 (so ``is_homology_manifold`` sees nothing wrong) but are not one. Recursing
+            one level in -- checking that every vertex's *own* link is itself a genuine
+            homology 2-manifold, not just homology-S^2-equivalent -- closes this gap
+            completely, because the classification of closed surfaces makes
+            ``is_homology_manifold`` exact at dimension <= 2 (connected + trivial or
+            rank-1-torsion-free H_1 forces an actual sphere or disk, no surface analogue of
+            a homology sphere exists). At ``dimension >= 4`` no such recursive trick
+            terminates the problem: ruling out exotic homology spheres (the Poincare
+            homology sphere and its kin) among vertex links needs more than homology, and is
+            undecidable in general (Novikov/Adian-Rabin) -- this method returns the
+            underlying ``is_homology_manifold`` verdict there, marked ``exact=False``.
+
+        Algorithm:
+            1. ``dimension <= 2``: return ``is_homology_manifold``'s own result, ``exact=True``.
+            2. ``dimension == 3``: if ``is_homology_manifold`` already fails, return that
+               (``exact=True`` -- a link that fails even aggregate homology certainly is not
+               a genuine sphere either). Otherwise, call
+               ``self.link((v,)).is_homology_manifold(backend=backend)`` for every vertex
+               ``v``; any vertex whose own link is not itself a genuine homology 2-manifold
+               is a certified defect, even though the top-level check passed. ``exact=True``
+               either way.
+            3. ``dimension >= 4``: warn and return the underlying ``is_homology_manifold``
+               verdict with ``exact=False``.
+
+        Args:
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            PLManifoldCertificate: ``(is_pl_manifold, dimension, diagnostics, exact)``.
+
+        Use When:
+            - Certifying a reconstructed or hand-built complex is a genuine combinatorial
+              manifold at dimension 3, where ``is_homology_manifold`` alone is not enough.
+            - Dimension <= 2, where this is equivalent to (and no more expensive than)
+              calling ``is_homology_manifold`` directly.
+        """
+        d = self.dimension
+        is_mani, detected_dim, diag = self.is_homology_manifold(backend=backend)
+
+        if d <= 2:
+            return PLManifoldCertificate(is_mani, detected_dim, diag, True)
+
+        if d == 3:
+            if not is_mani:
+                return PLManifoldCertificate(False, detected_dim, diag, True)
+            combined_diag: dict = {}
+            for simplex in self.n_simplices(0):
+                v = simplex[0]
+                lk_is_mani, _lk_dim, lk_diag = self.link((v,)).is_homology_manifold(backend=backend)
+                if not lk_is_mani:
+                    combined_diag[v] = f"Vertex link is not a genuine 2-manifold: {lk_diag}"
+            if combined_diag:
+                return PLManifoldCertificate(False, d, combined_diag, True)
+            return PLManifoldCertificate(True, d, {}, True)
+
+        import warnings
+        warnings.warn(
+            f"certify_pl_manifold cannot exactly certify dimension {d}: ruling out exotic "
+            "homology spheres (e.g. the Poincare homology sphere) among vertex links needs "
+            "more than homology, and is undecidable in general (Novikov/Adian-Rabin). "
+            "Returning the underlying is_homology_manifold verdict with exact=False."
+        )
+        return PLManifoldCertificate(is_mani, detected_dim, diag, False)
 
     def remove_simplices_impeding_manifold(self, backend: str = "auto", remove_vertices: bool = False) -> list[tuple[int, ...]]:
         """Remove simplices that prevent the complex from being a homology manifold.
