@@ -2881,7 +2881,13 @@ function optgen_from_simplices(simplices, num_vertices::Int, pts=nothing, max_ro
                 end
 
                 if lca != -1
-                    push!(local_cycles, vcat(reverse(path_u[1:idx_u+1]), path_v[1:idx_v+1]))
+                    # path_u[1:idx_u+1] already ends at the LCA; including it again from
+                    # path_v's side (path_v[1:idx_v+1]) duplicates the LCA vertex in the
+                    # resulting cyclic vertex list, which later manifests as a spurious
+                    # zero-length self-loop edge (LCA, LCA) when the closing edge between
+                    # the last and first element is materialized. Drop the LCA from the
+                    # path_v side so it appears exactly once.
+                    push!(local_cycles, vcat(reverse(path_u[1:idx_u+1]), path_v[1:idx_v]))
                 end
             end
         end

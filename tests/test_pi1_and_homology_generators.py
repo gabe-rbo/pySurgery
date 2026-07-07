@@ -18,6 +18,8 @@ Common Workflows:
     3. Validate H_n generators for higher-dimensional complexes.
 """
 
+import collections
+
 import numpy as np
 import scipy.sparse as sp
 
@@ -229,6 +231,57 @@ def test_compute_optimal_h1_basis_from_simplices_julia_path_handles_square_cycle
     assert res.rank == 1
     assert len(res.generators) == 1
     assert "Julia backend" in res.message
+
+
+def test_compute_optimal_h1_basis_large_cycle_generator_is_simple():
+    """Regression test: an H1 generator must be a simple cycle, not just a Z/2 cycle.
+
+    What is Being Computed?:
+        The optimal H1 basis of a bare N-vertex ring graph (no triangles), checking
+        that the single generator's support_edges forms a genuine simple cycle:
+        every vertex has degree exactly 2, and no self-loop edges appear.
+
+    Why This Matters:
+        The Dijkstra-tree fundamental-cycle construction (optgen_from_simplices,
+        Julia backend) builds each candidate cycle as
+        reverse(path_u to LCA) ++ (path_v to LCA). Both segments include the LCA
+        vertex at their shared boundary, so naively concatenating them duplicates
+        the LCA in the resulting cyclic vertex list. Once the closing edge between
+        the last and first vertex is materialized, that duplication becomes a
+        spurious zero-length self-loop edge (LCA, LCA). A self-loop contributes
+        nothing to the boundary map, so it is invisible to the Z/2
+        boundary/independence checks and silently survives into the returned
+        generator -- the cycle is still a valid Z/2 boundary-null chain, just not
+        an embedded simple curve. Callers that assume a generator's support_edges
+        traces a single simple loop (e.g. cutting a surface along a meridian) see
+        a vertex of degree 4 instead of 2.
+
+        A plain N-cycle graph has no 2-simplices to reduce against, so whatever
+        the shortest-path construction produces is returned as-is, with nothing
+        laundering the defect away -- this isolates the bug directly.
+
+    Algorithm:
+        1. Build a 25-vertex ring graph (rank-1 H1).
+        2. Compute the optimal H1 basis.
+        3. Assert the generator has no self-loops, every vertex has degree exactly
+           2, and it recovers the full 25-edge cycle.
+    """
+    n = 25
+    simplices = [(i, (i + 1) % n) for i in range(n)]
+
+    res = compute_optimal_h1_basis_from_simplices(simplices, num_vertices=n)
+
+    assert res.rank == 1
+    assert len(res.generators) == 1
+    gen = res.generators[0]
+
+    self_loops = [e for e in gen.support_edges if e[0] == e[1]]
+    assert not self_loops, f"self-loop edge(s) in support_edges: {self_loops}"
+
+    deg = collections.Counter(v for e in gen.support_edges for v in e)
+    bad = {v: d for v, d in deg.items() if d != 2}
+    assert not bad, f"non-simple cycle, vertices with degree != 2: {bad}"
+    assert len(gen.support_edges) == n
 
 
 def test_compute_optimal_h1_basis_python_fallback_when_julia_unavailable(monkeypatch):
