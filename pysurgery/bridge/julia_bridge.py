@@ -2582,6 +2582,7 @@ class JuliaBridge:
         analyze_manifolds: bool = False,
         n_samples: Optional[int] = None,
         verify_manifold_only_at_betti_change: bool = False,
+        track_connected_components: bool = False,
     ) -> dict:
         """Implicit persistent COHOMOLOGY of a Vietoris-Rips filtration in Julia.
 
