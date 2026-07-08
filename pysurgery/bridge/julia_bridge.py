@@ -306,8 +306,34 @@ class JuliaBridge:
             self.jl, required_packages + optional_packages, verbose=verbose
         )
 
+        # Ensure the local SurgeryBackend package is developed in the Julia environment
+        developed_backend = False
+        backend_dir = os.path.join(
+            os.path.dirname(__file__),
+            "SurgeryBackend",
+        )
+        if os.path.isdir(backend_dir):
+            try:
+                is_backend_missing = bool(self.jl.eval('Base.find_package("SurgeryBackend") === nothing'))
+            except Exception:
+                is_backend_missing = True
+            
+            if is_backend_missing:
+                if verbose:
+                    print(f"[pySurgery] Developing local SurgeryBackend package from {backend_dir}...")
+                try:
+                    self.jl.eval("import Pkg")
+                    escaped_path = backend_dir.replace("\\", "\\\\")
+                    self.jl.eval(f'Pkg.develop(path="{escaped_path}")')
+                    developed_backend = True
+                    if verbose:
+                        print("[pySurgery] Successfully developed SurgeryBackend package")
+                except Exception as e:
+                    if verbose:
+                        print(f"[pySurgery] Failed to develop SurgeryBackend: {e!r}")
+
         # Precompile (best-effort, improves startup time)
-        if missing_required or missing_optional or version_report["upgraded"]:
+        if missing_required or missing_optional or version_report["upgraded"] or developed_backend:
             try:
                 if verbose:
                     print("[pySurgery] Precompiling Julia packages (may take a minute)...")
@@ -489,6 +515,21 @@ class JuliaBridge:
             report["upgraded"] = version_report["upgraded"]
             if version_report["failed"]:
                 report["failed"].update(version_report["failed"])
+
+            # Explicitly develop local SurgeryBackend package if it exists
+            backend_dir = os.path.join(
+                os.path.dirname(__file__),
+                "SurgeryBackend",
+            )
+            if os.path.isdir(backend_dir):
+                if verbose:
+                    print(f"[pySurgery] Developing local SurgeryBackend package from {backend_dir} ...")
+                try:
+                    escaped_path = backend_dir.replace("\\", "\\\\")
+                    jl.seval(f'Pkg.develop(path="{escaped_path}")')
+                    report["installed"].append("SurgeryBackend")
+                except Exception as dev_err:
+                    report["failed"]["SurgeryBackend"] = repr(dev_err)
 
             if precompile and not report["failed"]:
                 try:

@@ -8,6 +8,9 @@ include LICENSE
 include README.md
 include CITATION.cff
 
+# Ensure the precompiled Julia package is included in the source distribution
+graft pysurgery/bridge/SurgeryBackend
+
 prune tests
 prune scripts
 prune docs
