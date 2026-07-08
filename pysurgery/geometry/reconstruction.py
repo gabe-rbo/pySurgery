@@ -47,6 +47,7 @@ Common Workflows:
 from __future__ import annotations
 
 import itertools
+import warnings
 from collections import defaultdict, deque
 from typing import Optional
 
@@ -54,6 +55,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 from scipy.spatial import Delaunay, Voronoi
 
+from ..bridge.julia_bridge import julia_engine
 from .perturbation import (
     intersect_local_stars,
     is_single_cycle,
@@ -184,6 +186,7 @@ def estimate_voronoi_poles(
     *,
     bounding_radius_factor: float = 20.0,
     n_sentinels: Optional[int] = None,
+    backend: str = "auto",
 ) -> PoleEstimationResult:
     """Estimate per-point surface normals via Voronoi poles (Amenta-Bern).
 
@@ -205,7 +208,10 @@ def estimate_voronoi_poles(
            original range" idiom.
         3. Per point, the positive pole is the farthest cell vertex; the normal is the unit
            vector towards it. The negative pole is the farthest cell vertex on the opposite
-           side of the tangent plane through the point, orthogonal to that normal.
+           side of the tangent plane through the point, orthogonal to that normal. Given the
+           Voronoi diagram from step 2, this step is Julia-accelerated when available (the
+           Voronoi diagram itself always stays in SciPy -- no Julia Voronoi implementation
+           exists here).
 
     Args:
         points: (N, 3) array of point coordinates. Only 3D point clouds are supported (the
@@ -213,6 +219,8 @@ def estimate_voronoi_poles(
         bounding_radius_factor: Sentinel sphere radius, as a multiple of the data's spread
             (max distance from centroid) about its centroid.
         n_sentinels: Number of bounding sentinels; defaults to ``max(16, 24)`` for 3D data.
+        backend: ``"auto"`` (default; use Julia when available), ``"julia"`` (require it), or
+            ``"python"`` (force the pure-NumPy path).
 
     Returns:
         PoleEstimationResult: Per-point poles, normals, and diagnostics.
@@ -246,39 +254,72 @@ def estimate_voronoi_poles(
     combined = _sentinel_padded_points(pts, bounding_radius_factor, n_sentinels)
     vor = Voronoi(combined, qhull_options="QJ")
 
+    # Per-point (-1)-filtered cell vertex indices -- cheap ragged-list bookkeeping that stays
+    # in Python; only the argmax-distance/opposite-side numeric loop below is Julia-eligible.
+    cell_vertex_lists: list[list[int]] = []
+    unbounded = np.zeros(n, dtype=bool)
     for i in range(n):
         region = vor.regions[vor.point_region[i]]
         vertex_ids = [v for v in region if v != -1]
         if region and -1 in region:
+            unbounded[i] = True
+        cell_vertex_lists.append(vertex_ids)
+
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+    status = None
+    if use_julia:
+        try:
+            positive_pole, negative_pole, has_negative_pole, normal, pole_radius, status = (
+                julia_engine.compute_voronoi_poles(pts, vor.vertices, cell_vertex_lists)
+            )
+        except Exception as e:
+            if backend_norm == "julia":
+                raise
+            warnings.warn(f"Julia backend failed for estimate_voronoi_poles, falling back to Python: {e!r}")
+
+    if status is None:
+        status = np.zeros(n, dtype=np.int8)
+        for i in range(n):
+            vertex_ids = cell_vertex_lists[i]
+            if not vertex_ids:
+                status[i] = 1
+                continue
+
+            cell_vertices = vor.vertices[vertex_ids]
+            diffs = cell_vertices - pts[i]
+            dists = np.linalg.norm(diffs, axis=1)
+            pos_idx = int(np.argmax(dists))
+            r_plus = float(dists[pos_idx])
+            if r_plus < 1e-12:
+                status[i] = 2
+                continue
+
+            p_plus = cell_vertices[pos_idx]
+            n_hat = (p_plus - pts[i]) / r_plus
+            positive_pole[i] = p_plus
+            normal[i] = n_hat
+            pole_radius[i] = r_plus
+
+            side = diffs @ n_hat
+            opposite_mask = side < -1e-9 * r_plus
+            if np.any(opposite_mask):
+                opp_dists = dists[opposite_mask]
+                opp_vertices = cell_vertices[opposite_mask]
+                neg_idx = int(np.argmax(opp_dists))
+                negative_pole[i] = opp_vertices[neg_idx]
+                has_negative_pole[i] = True
+            else:
+                status[i] = 3
+
+    for i in range(n):
+        if unbounded[i]:
             diagnostics.append(f"Point {i}: Voronoi cell still unbounded after sentinel padding.")
-        if not vertex_ids:
+        if status[i] == 1:
             diagnostics.append(f"Point {i}: no finite Voronoi vertices found; pole undefined.")
-            continue
-
-        cell_vertices = vor.vertices[vertex_ids]
-        diffs = cell_vertices - pts[i]
-        dists = np.linalg.norm(diffs, axis=1)
-        pos_idx = int(np.argmax(dists))
-        r_plus = float(dists[pos_idx])
-        if r_plus < 1e-12:
+        elif status[i] == 2:
             diagnostics.append(f"Point {i}: degenerate Voronoi cell (zero radius); pole undefined.")
-            continue
-
-        p_plus = cell_vertices[pos_idx]
-        n_hat = (p_plus - pts[i]) / r_plus
-        positive_pole[i] = p_plus
-        normal[i] = n_hat
-        pole_radius[i] = r_plus
-
-        side = diffs @ n_hat
-        opposite_mask = side < -1e-9 * r_plus
-        if np.any(opposite_mask):
-            opp_dists = dists[opposite_mask]
-            opp_vertices = cell_vertices[opposite_mask]
-            neg_idx = int(np.argmax(opp_dists))
-            negative_pole[i] = opp_vertices[neg_idx]
-            has_negative_pole[i] = True
-        else:
+        elif status[i] == 3:
             diagnostics.append(f"Point {i}: no negative pole found on the opposite side.")
 
     return PoleEstimationResult(
@@ -289,9 +330,11 @@ def estimate_voronoi_poles(
 
 
 def _tetrahedron_circumcenter(p0, p1, p2, p3) -> np.ndarray:
-    """Circumcenter of a tetrahedron, via the linear system of 3 perpendicular-bisector
-    equations relative to ``p0`` (solved by least squares; exact for a non-degenerate
-    tetrahedron)."""
+    """Circumcenter of a tetrahedron.
+
+    Via the linear system of 3 perpendicular-bisector equations relative to
+    ``p0`` (solved by least squares; exact for a non-degenerate tetrahedron).
+    """
     pts4 = np.array([p0, p1, p2, p3])
     a = 2.0 * (pts4[1:] - pts4[0])
     b = np.sum(pts4[1:] ** 2, axis=1) - np.sum(pts4[0] ** 2)
@@ -345,6 +388,7 @@ def cocone_filter(
     *,
     theta: float = _DEFAULT_THETA,
     reach_fraction: float = _DEFAULT_REACH_FRACTION,
+    backend: str = "auto",
 ) -> CoconeFilterResult:
     """Keep only Delaunay facets whose dual Voronoi edge reaches towards a real pole.
 
@@ -399,6 +443,8 @@ def cocone_filter(
         theta: Cocone half-angle, in ``(0, pi/8]`` by convention.
         reach_fraction: Minimum fraction of a vertex's own pole radius its facet's dual edge
             must reach for the facet to be considered part of the true surface layer there.
+        backend: ``"auto"`` (default; use Julia when available), ``"julia"`` (require it), or
+            ``"python"`` (force the pure-NumPy path). Julia fuses steps 1-4 into one call.
 
     Returns:
         CoconeFilterResult: The surviving candidate triangles.
@@ -408,6 +454,20 @@ def cocone_filter(
     n_original = len(normals)
     if tets.size == 0:
         return CoconeFilterResult(surviving_triangles=[], n_candidates=0)
+
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+    if use_julia:
+        try:
+            surviving, n_candidates = julia_engine.compute_cocone_filter(
+                pts, tets, np.asarray(normals, dtype=np.float64), np.asarray(pole_radius, dtype=np.float64),
+                float(theta), float(reach_fraction),
+            )
+            return CoconeFilterResult(surviving_triangles=surviving, n_candidates=n_candidates)
+        except Exception as e:
+            if backend_norm == "julia":
+                raise
+            warnings.warn(f"Julia backend failed for cocone_filter, falling back to Python: {e!r}")
 
     facet_to_tets: dict = defaultdict(list)
     for ti in range(tets.shape[0]):
@@ -494,6 +554,8 @@ def prune_and_walk(
     points: np.ndarray,
     candidate_triangles,
     normals: np.ndarray,
+    *,
+    backend: str = "auto",
 ) -> PruneWalkResult:
     """Force a single consistent 2-manifold umbrella at every vertex.
 
@@ -547,11 +609,66 @@ def prune_and_walk(
         candidate_triangles: Iterable of length-3 index tuples (typically
             ``cocone_filter``'s surviving triangles).
         normals: (N, 3) array of per-point pole normal estimates.
+        backend: ``"auto"`` (default; use Julia when available), ``"julia"`` (require it), or
+            ``"python"`` (force the pure-NumPy path). Julia parallelizes the per-vertex work
+            (``intersect_local_stars`` always stays a single shared Python implementation,
+            also used by ``moser_tardos_repair``).
 
     Returns:
         PruneWalkResult: The globally-consistent surviving triangles plus diagnostics.
     """
     pts = np.asarray(points, dtype=np.float64)
+
+    backend_norm = str(backend).lower().strip()
+    use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+    if use_julia:
+        try:
+            tris_list = []
+            for tri in candidate_triangles:
+                t = tuple(int(x) for x in tri)
+                if len(set(t)) != 3:
+                    continue
+                tris_list.append(t)
+            tris_arr = np.array(tris_list, dtype=np.int64) if tris_list else np.zeros((0, 3), dtype=np.int64)
+
+            vertex_ids, status, n_kept_edges, kept_flat, kept_offsets = julia_engine.compute_prune_and_walk(
+                pts, tris_arr, np.asarray(normals, dtype=np.float64)
+            )
+
+            per_vertex_local: dict = {}
+            unresolved: list[int] = []
+            diagnostics: list[str] = []
+            for idx in range(len(vertex_ids)):
+                v = int(vertex_ids[idx])
+                lo, hi = int(kept_offsets[idx]), int(kept_offsets[idx + 1])
+                tris = set()
+                for k in range(lo, hi):
+                    a, b, c = (int(kept_flat[3 * k]), int(kept_flat[3 * k + 1]), int(kept_flat[3 * k + 2]))
+                    tris.add(frozenset((a, b, c)))
+                per_vertex_local[v] = tris
+                st = int(status[idx])
+                if st == 1:
+                    unresolved.append(v)
+                    diagnostics.append(f"Vertex {v}: no normal estimate available; cannot walk.")
+                elif st == 3:
+                    unresolved.append(v)
+                    diagnostics.append(
+                        f"Vertex {v}: prune-and-walk dead end after {int(n_kept_edges[idx])} step(s)."
+                    )
+
+            surviving, _stats = intersect_local_stars(per_vertex_local)
+            final_triangles = [tuple(sorted(int(x) for x in t)) for t in surviving]
+            return PruneWalkResult(
+                final_triangles=final_triangles,
+                per_vertex_local_simplices=per_vertex_local,
+                unresolved_vertices=unresolved,
+                diagnostics=diagnostics,
+            )
+        except Exception as e:
+            if backend_norm == "julia":
+                raise
+            warnings.warn(f"Julia backend failed for prune_and_walk, falling back to Python: {e!r}")
+
     vertex_triangles: dict = defaultdict(set)
     for tri in candidate_triangles:
         t = frozenset(int(x) for x in tri)
@@ -831,11 +948,15 @@ class CoconeReconstructionResult(BaseModel):
 def _cocone_pipeline_round(
     pts: np.ndarray, *, theta: float, reach_fraction: float,
     bounding_radius_factor: float, n_sentinels: Optional[int],
+    backend: str = "auto",
 ):
-    """Run poles -> cocone filter -> prune-and-walk once; used both for a plain
-    (no-repair) reconstruction and as the per-round computation inside the repair loop."""
+    """Run poles -> cocone filter -> prune-and-walk once.
+
+    Used both for a plain (no-repair) reconstruction and as the per-round
+    computation inside the repair loop.
+    """
     poles = estimate_voronoi_poles(
-        pts, bounding_radius_factor=bounding_radius_factor, n_sentinels=n_sentinels
+        pts, bounding_radius_factor=bounding_radius_factor, n_sentinels=n_sentinels, backend=backend
     )
     # Same sentinel-padded point set poles were computed from (see cocone_filter's docstring
     # note on why this consistency matters): a tetrahedron's circumcenter is only comparable
@@ -843,30 +964,36 @@ def _cocone_pipeline_round(
     combined = _sentinel_padded_points(pts, bounding_radius_factor, n_sentinels)
     dt = Delaunay(combined, qhull_options="QJ")
     filt = cocone_filter(
-        combined, dt.simplices, poles.normal, poles.pole_radius, theta=theta, reach_fraction=reach_fraction
+        combined, dt.simplices, poles.normal, poles.pole_radius,
+        theta=theta, reach_fraction=reach_fraction, backend=backend,
     )
-    walk = prune_and_walk(pts, filt.surviving_triangles, poles.normal)
+    walk = prune_and_walk(pts, filt.surviving_triangles, poles.normal, backend=backend)
     return poles, filt, walk
 
 
 def _cocone_conflict_vertices(walk: PruneWalkResult) -> list:
-    """Vertices ``cocone_reconstruction``'s repair loop should still perturb: prune-and-walk
-    dead ends, plus any vertex whose final (post ``intersect_local_stars``) link is not a
-    single closed cycle -- deliberately *stricter* than ``prune_and_walk``'s own
-    ``unresolved_vertices`` (which also accepts a clean open path -- a legitimate boundary
-    vertex, not a defect -- via ``is_single_path_or_cycle``). That leniency is the right
-    general-purpose criterion for prune-and-walk in isolation, but reconstruction's whole
-    purpose (per this module's docstring) is reaching a *closed* surface whenever the sample
-    supports one; a vertex left on the boundary is exactly the thing repair should keep
-    trying to resolve, not wave through as already-fine (measured: accepting boundary here
-    made repair converge faster but silently settle for an open result on several genus-0
-    fixtures that reach full closure just fine with a little more perturbation).
+    """Identify vertices that cocone_reconstruction's repair loop should perturb.
+
+    Specifically, prune-and-walk dead ends, plus any vertex whose final
+    (post ``intersect_local_stars``) link is not a single closed cycle --
+    deliberately *stricter* than ``prune_and_walk``'s own ``unresolved_vertices``
+    (which also accepts a clean open path -- a legitimate boundary vertex, not a
+    defect -- via ``is_single_path_or_cycle``). That leniency is the right
+    general-purpose criterion for prune-and-walk in isolation, but reconstruction's
+    whole purpose (per this module's docstring) is reaching a *closed* surface
+    whenever the sample supports one; a vertex left on the boundary is exactly the
+    thing repair should keep trying to resolve, not wave through as already-fine
+    (measured: accepting boundary here made repair converge faster but silently
+    settle for an open result on several genus-0 fixtures that reach full closure
+    just fine with a little more perturbation).
 
     Losing a candidate to cross-vertex disagreement is *not*, by itself, a conflict:
-    ``intersect_local_stars`` dropping a triangle some but not all of its vertices wanted is
-    the expected, harmless way most disagreements resolve (see ``prune_and_walk``'s
-    docstring); only checking the vertex's own actual final link -- rather than "was anything
-    dropped near it" -- avoids flagging that harmless case."""
+    ``intersect_local_stars`` dropping a triangle some but not all of its vertices
+    wanted is the expected, harmless way most disagreements resolve (see
+    ``prune_and_walk``'s docstring); only checking the vertex's own actual final link
+    -- rather than "was anything dropped near it" -- avoids flagging that harmless
+    case.
+    """
     final_set = {frozenset(t) for t in walk.final_triangles}
     final_by_vertex: dict = defaultdict(set)
     for t in final_set:
@@ -894,6 +1021,7 @@ def cocone_reconstruction(
     max_repair_rounds: int = 250,
     perturbation_scale: Optional[float] = None,
     seed: int = 0,
+    backend: str = "auto",
 ) -> CoconeReconstructionResult:
     """Reconstruct a manifold-certified triangulated surface from a 3D point cloud.
 
@@ -955,6 +1083,10 @@ def cocone_reconstruction(
             appropriate for unit-scale data would be meaninglessly tiny on, e.g., data with
             coordinates in the thousands, and vice versa.
         seed: Passed through to ``moser_tardos_repair``.
+        backend: ``"auto"`` (default; use Julia when available), ``"julia"`` (require it), or
+            ``"python"`` (force the pure-NumPy path), passed through to every stage of
+            ``_cocone_pipeline_round`` (``estimate_voronoi_poles``, ``cocone_filter``,
+            ``prune_and_walk``) on every round, including inside the repair loop.
 
     Returns:
         CoconeReconstructionResult: The reconstructed triangles and full diagnostics.
@@ -980,6 +1112,7 @@ def cocone_reconstruction(
         poles, filt, walk = _cocone_pipeline_round(
             pts_current, theta=theta, reach_fraction=reach_fraction,
             bounding_radius_factor=bounding_radius_factor, n_sentinels=n_sentinels,
+            backend=backend,
         )
         state["poles"], state["filt"], state["walk"] = poles, filt, walk
         conflict_vertices = _cocone_conflict_vertices(walk)

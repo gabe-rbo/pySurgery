@@ -3266,6 +3266,103 @@ function triangulate_surface_delaunay(points::AbstractMatrix{Float64}, tolerance
     return faces
 end
 
+"""
+    compute_tangential_local_stars_2d_jl(flat_global_idx, flat_coords, offsets)
+
+Per-point-parallel local-star construction for `tangential_complex.py`'s
+`tangential_complex_reconstruction`, restricted to `k == 2` (the only case
+DelaunayTriangulation.jl -- a 2D-only triangulator -- can serve; `k > 2`
+always keeps the existing SciPy/`ThreadPoolExecutor` path unconditionally,
+see that module for the dispatch). Consumes each point's ALREADY
+tangent-projected local 2D neighborhood (`local_pca_tangent_basis`'s
+projection stays in Python -- cheap, and not what this kernel accelerates);
+only the N independent Delaunay-triangulate-and-extract-star calls -- one
+Qhull-class call per point -- run here, in parallel, using the same
+`triangulate`/`each_solid_triangle` calls as
+[`triangulate_surface_delaunay`](@ref).
+
+Each point's own neighborhood has the point itself at local (1-based) index 1
+(`flat_coords[offsets[i]+1, :]`), matching `_local_star`'s "row 0 is the
+center point" convention; `flat_global_idx` gives that neighbor's index in
+the ORIGINAL (unprojected) point cloud, for translating a local star back to
+global vertex ids.
+
+NOTE: a differently-chosen diagonal on a near-cocircular local neighborhood
+between this triangulator and SciPy/Qhull is EXPECTED, not a bug --
+`tangential_complex_reconstruction`'s own docstring documents this as a
+routine source of cross-vertex disagreement that `intersect_local_stars` +
+`moser_tardos_repair` are specifically designed to reconcile; exact
+star-for-star parity with the Python/SciPy path is not the correctness bar
+for this kernel, unlike the other Cocone/tangential kernels in this file
+(which port the identical arithmetic rather than swap the underlying
+triangulation library).
+
+Returns `(star_flat, star_offsets, ok)`: `ok[i]` is `false` iff point `i`'s
+own local triangulation failed outright (degenerate/too-few-point
+neighborhood, matching `_local_star`'s `(set(), False)` return), in which
+case its star is empty; `star_flat`/`star_offsets` are CSR-style (offsets in
+units of triangles) 0-based global-index triples, analogous to
+`compute_prune_and_walk_jl`'s `kept_flat`/`kept_offsets`.
+"""
+function compute_tangential_local_stars_2d_jl(flat_global_idx_raw, flat_coords_raw, offsets_raw)
+    if !HAS_DELAUNAY
+        error("DelaunayTriangulation.jl is not available. Please install it to use Julia-accelerated triangulation.")
+    end
+    flat_global_idx = pyconvert(Vector{Int64}, flat_global_idx_raw)
+    flat_coords = pyconvert(Matrix{Float64}, flat_coords_raw)
+    offsets = pyconvert(Vector{Int64}, offsets_raw)
+    n = length(offsets) - 1
+
+    ok = trues(n)
+    star_per_point = Vector{Vector{NTuple{3,Int64}}}(undef, n)
+
+    Threads.@threads for i in 1:n
+        lo, hi = offsets[i] + 1, offsets[i + 1]
+        m = hi - lo + 1
+        if hi < lo || m < 3
+            star_per_point[i] = NTuple{3,Int64}[]
+            ok[i] = false
+            continue
+        end
+
+        local_star = NTuple{3,Int64}[]
+        try
+            pts_tuples = [(flat_coords[lo + j, 1], flat_coords[lo + j, 2]) for j in 0:(m - 1)]
+            triangulation = triangulate(pts_tuples)
+            for tri in each_solid_triangle(triangulation)
+                u, v, w = tri
+                if u == 1 || v == 1 || w == 1
+                    gu = flat_global_idx[lo + u - 1]
+                    gv = flat_global_idx[lo + v - 1]
+                    gw = flat_global_idx[lo + w - 1]
+                    push!(local_star, (gu, gv, gw))
+                end
+            end
+        catch
+            ok[i] = false
+            local_star = NTuple{3,Int64}[]
+        end
+        star_per_point[i] = local_star
+    end
+
+    star_offsets = Vector{Int64}(undef, n + 1)
+    star_offsets[1] = 0
+    for i in 1:n
+        star_offsets[i + 1] = star_offsets[i] + length(star_per_point[i])
+    end
+    star_flat = Vector{Int64}(undef, 3 * star_offsets[end])
+    for i in 1:n
+        base = star_offsets[i]
+        for (j, t) in enumerate(star_per_point[i])
+            star_flat[3 * (base + j - 1) + 1] = t[1]
+            star_flat[3 * (base + j - 1) + 2] = t[2]
+            star_flat[3 * (base + j - 1) + 3] = t[3]
+        end
+    end
+
+    return star_flat, star_offsets, ok
+end
+
 # --- Native Complex Construction Kernels ---
 
 """
@@ -3391,6 +3488,115 @@ function compute_vietoris_rips(points_raw, epsilon_raw, max_dim_raw)
     colval = adj.rowval
 
     # Per-thread clique buffers — same pattern as 1-skeleton above.
+    cliques_threads = [Vector{Vector{Int64}}() for _ in 1:Threads.maxthreadid()]
+
+    # Optimized adjacency check for sorted neighbor lists (read-only, thread-safe).
+    function is_adj(u::Int, v::Int)
+        start_idx = rowptr[u]
+        end_idx = rowptr[u+1] - 1
+        while start_idx <= end_idx
+            mid = (start_idx + end_idx) >> 1
+            if colval[mid] == v
+                return true
+            elseif colval[mid] < v
+                start_idx = mid + 1
+            else
+                end_idx = mid - 1
+            end
+        end
+        return false
+    end
+
+    # Bounded DFS — writes only to local_cliques, so callers from different
+    # threads never touch the same buffer.
+    function backtrack(local_cliques::Vector{Vector{Int64}}, current_clique::Vector{Int64}, candidates::Vector{Int64})
+        push!(local_cliques, copy(current_clique))
+
+        if length(current_clique) == max_dim + 1
+            return
+        end
+
+        for (i, v) in enumerate(candidates)
+            new_candidates = Int64[]
+            for j in (i+1):length(candidates)
+                w = candidates[j]
+                if is_adj(v, w)
+                    push!(new_candidates, w)
+                end
+            end
+            push!(current_clique, v)
+            backtrack(local_cliques, current_clique, new_candidates)
+            pop!(current_clique)
+        end
+    end
+
+    # 3. Clique enumeration - Parallelized
+    Threads.@threads for u in 1:n_pts
+        tid = Threads.threadid()
+        local_cliques = cliques_threads[tid]
+        candidates = Int64[]
+        for ptr in rowptr[u]:(rowptr[u+1]-1)
+            v = colval[ptr]
+            if v > u
+                push!(candidates, v)
+            end
+        end
+        backtrack(local_cliques, [u], candidates)
+    end
+
+    cliques = reduce(vcat, cliques_threads)
+
+    # Return 0-indexed for Python consistency
+    return [c .- 1 for c in cliques]
+end
+
+"""
+    compute_vietoris_rips_from_distance_matrix(dist_matrix, epsilon, max_dim)
+
+Same fused build as [`compute_vietoris_rips`](@ref) (1-skeleton, then parallel
+clique enumeration up to `max_dim + 1`), but reads pairwise distances directly
+from a precomputed `(N, N)` matrix instead of computing them from point
+coordinates. For an arbitrary/non-Euclidean distance matrix, or to avoid
+re-deriving distances a caller already has.
+"""
+function compute_vietoris_rips_from_distance_matrix(dist_matrix_raw, epsilon_raw, max_dim_raw)
+    # Materialize a native dense copy -- same thread-safety reasoning as
+    # compute_vietoris_rips: a lazy PyArray is not safe to read concurrently
+    # from the @threads loops below.
+    dist_matrix = pyconvert(Matrix{Float64}, dist_matrix_raw)
+    epsilon = pyconvert(Float64, epsilon_raw)
+    max_dim = pyconvert(Int, max_dim_raw)
+    n_pts = size(dist_matrix, 1)
+
+    # 1. 1-skeleton (Edges) - Parallelized, reading distances directly instead
+    # of computing them from coordinates.
+    n_threads = Threads.maxthreadid()
+    I_threads = [Int64[] for _ in 1:n_threads]
+    J_threads = [Int64[] for _ in 1:n_threads]
+
+    Threads.@threads for i in 1:n_pts
+        tid = Threads.threadid()
+        I_local = I_threads[tid]
+        J_local = J_threads[tid]
+        for j in (i+1):n_pts
+            if dist_matrix[i, j] <= epsilon
+                push!(I_local, i)
+                push!(J_local, j)
+                push!(I_local, j)
+                push!(J_local, i)
+            end
+        end
+    end
+
+    I = reduce(vcat, I_threads)
+    J = reduce(vcat, J_threads)
+
+    # 2. Sparse Adjacency
+    adj = sparse(I, J, ones(Int64, length(I)), n_pts, n_pts)
+    rowptr = adj.colptr
+    colval = adj.rowval
+
+    # Per-thread clique buffers — same pattern as compute_vietoris_rips.
     cliques_threads = [Vector{Vector{Int64}}() for _ in 1:Threads.maxthreadid()]
 
     # Optimized adjacency check for sorted neighbor lists (read-only, thread-safe).
@@ -3769,6 +3975,11 @@ function gromov_wasserstein_distance(
 end
 
 @PrecompileTools.setup_workload begin
+  let  # Scope every warm-up temporary. The module does `using AbstractAlgebra`,
+      # which exports names like `gens`/`rels`; assigning to those at module
+      # (global) scope -- which is where @setup_workload's body runs during
+      # precompilation -- raises "cannot assign a value to imported variable".
+      # A `let` makes the temporaries locals that harmlessly shadow the imports.
     # 1. Sparse Integer Matrix Setup (COO format) - 3x3 boundary-like with 1, -1, 0
     # Chain complex boundaries are strictly integer based.
     r_idx = Int64[0, 1, 2, 0]
@@ -3869,6 +4080,7 @@ end
     fv = fo = mf = mi = gens = rels = nothing
     pts_3d = simplices_h1 = pts_A = pts_B = p_gw = q_gw = D_A = nothing
     GC.gc()
+  end  # let
 end
 
 
@@ -4559,6 +4771,348 @@ function compute_crust_simplices_jl(points::AbstractMatrix{Float64}, combined_si
         end
     end
     return collect(valid_simplices)
+end
+
+"""
+    compute_voronoi_poles_jl(points, vor_vertices, cell_vertex_flat, cell_vertex_offsets)
+
+Amenta-Bern pole selection: per point, the farthest own-cell Voronoi vertex
+("positive pole") and the farthest own-cell vertex on the opposite side of the
+tangent plane through that pole ("negative pole"). ``scipy.spatial.Voronoi``
+itself stays in Python (no Julia Voronoi diagram implementation exists here);
+this kernel only takes over the per-point argmax-distance / opposite-side-mask
+numeric loop, given the already-computed Voronoi vertices and each point's
+(``-1``-filtered) cell vertex indices flattened CSR-style
+(``cell_vertex_offsets`` 0-based, length N+1, matching `_flatten_simplices`).
+
+Returns `(positive_pole, negative_pole, has_negative_pole, normal, pole_radius, status)`,
+all length/height N. `status[i]` is 0 (pole and opposite pole both found), 1
+(empty cell), 2 (degenerate/zero-radius cell), or 3 (pole found, no opposite
+pole) -- undefined entries are NaN-filled (poles) or zero-filled
+(normal/pole_radius), matching `estimate_voronoi_poles`'s Python reference.
+"""
+function compute_voronoi_poles_jl(points::AbstractMatrix{Float64}, vor_vertices::AbstractMatrix{Float64}, cell_vertex_flat::AbstractVector{Int64}, cell_vertex_offsets::AbstractVector{Int64})
+    n = size(points, 1)
+    positive_pole = fill(NaN, n, 3)
+    negative_pole = fill(NaN, n, 3)
+    has_negative_pole = falses(n)
+    normal = zeros(Float64, n, 3)
+    pole_radius = zeros(Float64, n)
+    status = zeros(Int8, n)
+
+    for i in 1:n
+        lo, hi = cell_vertex_offsets[i] + 1, cell_vertex_offsets[i + 1]
+        if hi < lo
+            status[i] = 1
+            continue
+        end
+
+        px, py, pz = points[i, 1], points[i, 2], points[i, 3]
+
+        best_d2 = -1.0
+        best_v = 0
+        for k in lo:hi
+            v = cell_vertex_flat[k] + 1
+            dx, dy, dz = vor_vertices[v, 1] - px, vor_vertices[v, 2] - py, vor_vertices[v, 3] - pz
+            d2 = dx * dx + dy * dy + dz * dz
+            if d2 > best_d2
+                best_d2 = d2
+                best_v = v
+            end
+        end
+
+        r_plus = sqrt(best_d2)
+        if r_plus < 1e-12
+            status[i] = 2
+            continue
+        end
+
+        pxp, pyp, pzp = vor_vertices[best_v, 1], vor_vertices[best_v, 2], vor_vertices[best_v, 3]
+        nx, ny, nz = (pxp - px) / r_plus, (pyp - py) / r_plus, (pzp - pz) / r_plus
+        positive_pole[i, 1], positive_pole[i, 2], positive_pole[i, 3] = pxp, pyp, pzp
+        normal[i, 1], normal[i, 2], normal[i, 3] = nx, ny, nz
+        pole_radius[i] = r_plus
+
+        thresh = -1e-9 * r_plus
+        best_opp_d2 = -1.0
+        best_opp_v = 0
+        found_opp = false
+        for k in lo:hi
+            v = cell_vertex_flat[k] + 1
+            dx, dy, dz = vor_vertices[v, 1] - px, vor_vertices[v, 2] - py, vor_vertices[v, 3] - pz
+            side = dx * nx + dy * ny + dz * nz
+            if side < thresh
+                d2 = dx * dx + dy * dy + dz * dz
+                if d2 > best_opp_d2
+                    best_opp_d2 = d2
+                    best_opp_v = v
+                    found_opp = true
+                end
+            end
+        end
+
+        if found_opp
+            negative_pole[i, 1] = vor_vertices[best_opp_v, 1]
+            negative_pole[i, 2] = vor_vertices[best_opp_v, 2]
+            negative_pole[i, 3] = vor_vertices[best_opp_v, 3]
+            has_negative_pole[i] = true
+        else
+            status[i] = 3
+        end
+    end
+
+    return positive_pole, negative_pole, has_negative_pole, normal, pole_radius, status
+end
+
+"""
+    _is_single_path_or_cycle_jl(edges)
+
+Boolean-only inline port of `perturbation.py`'s `is_single_path_or_cycle`
+(connected, max-degree-2 graph check -- a single simple path or cycle). Only
+the boolean is needed by `compute_prune_and_walk_jl`'s fast path (the walk
+order Python also returns is discarded by its own caller), so the `order`
+return value is not reconstructed here.
+"""
+function _is_single_path_or_cycle_jl(edges::Vector{Tuple{Int64,Int64}})
+    unique_edges = Set{Tuple{Int64,Int64}}()
+    for (a, b) in edges
+        a != b && push!(unique_edges, a < b ? (a, b) : (b, a))
+    end
+    isempty(unique_edges) && return false
+
+    adjacency = Dict{Int64, Set{Int64}}()
+    for (a, b) in unique_edges
+        push!(get!(() -> Set{Int64}(), adjacency, a), b)
+        push!(get!(() -> Set{Int64}(), adjacency, b), a)
+    end
+    for neighbors in values(adjacency)
+        length(neighbors) > 2 && return false
+    end
+
+    nodes = sort(collect(keys(adjacency)))
+    node_adj = Dict{Int64, Vector{Int64}}(node => sort(collect(adjacency[node])) for node in nodes)
+    endpoints = [node for node in nodes if length(node_adj[node]) == 1]
+    start = isempty(endpoints) ? nodes[1] : endpoints[1]
+
+    visited = Set{Int64}([start])
+    prev, current, has_prev = -1, start, false
+    while true
+        candidates = [n for n in node_adj[current] if !(has_prev && n == prev)]
+        isempty(candidates) && break
+        nxt = candidates[1]
+        nxt == start && break
+        nxt in visited && return false
+        push!(visited, nxt)
+        prev, current, has_prev = current, nxt, true
+    end
+
+    return length(visited) == length(nodes)
+end
+
+"""
+    _tangent_frame_jl(nx, ny, nz)
+
+Port of `reconstruction.py`'s `_tangent_frame`: two orthonormal vectors
+spanning the plane orthogonal to the (assumed unit) normal `(nx, ny, nz)`.
+Returns `((ux, uy, uz), (vx, vy, vz))`.
+"""
+function _tangent_frame_jl(nx::Float64, ny::Float64, nz::Float64)
+    hx, hy, hz = abs(nx) < 0.9 ? (1.0, 0.0, 0.0) : (0.0, 1.0, 0.0)
+    dot_hn = hx * nx + hy * ny + hz * nz
+    ux, uy, uz = hx - dot_hn * nx, hy - dot_hn * ny, hz - dot_hn * nz
+    u_norm = sqrt(ux * ux + uy * uy + uz * uz)
+    ux, uy, uz = ux / u_norm, uy / u_norm, uz / u_norm
+    vx, vy, vz = ny * uz - nz * uy, nz * ux - nx * uz, nx * uy - ny * ux
+    return (ux, uy, uz), (vx, vy, vz)
+end
+
+"""
+    compute_prune_and_walk_jl(points_raw, triangles_raw, normals_raw)
+
+Fused, per-vertex-parallel port of `reconstruction.py`'s `prune_and_walk`:
+each vertex's local link graph, the fast-path [`_is_single_path_or_cycle_jl`](@ref)
+check, and (where that fails) the deterministic tangent-plane angular walk.
+Per-vertex work is independent, so this parallelizes with `Threads.@threads`
+over vertex slots -- `points`/`normals`/`triangles` are eagerly materialized
+into native arrays first (same thread-safety reasoning as
+`compute_vietoris_rips`: a lazy PyArray is not safe to read concurrently from
+inside a threaded loop). Unlike `compute_vietoris_rips`'s per-thread growable
+buffers (needed because its per-point output count isn't known upfront), each
+vertex here has exactly one natural output slot, so threads write directly to
+their own pre-allocated `status`/`kept_per_vertex` index -- no merge pass
+needed.
+
+`intersect_local_stars` (cross-vertex reconciliation) is intentionally NOT
+duplicated here: it is cheap, shared, and also used by `moser_tardos_repair`,
+so it stays a single Python implementation; this kernel returns each vertex's
+raw local decision for the Python wrapper to reconcile.
+
+Returns `(vertex_ids, status, n_kept_edges, kept_flat, kept_offsets)`:
+- `vertex_ids`: sorted 0-based vertex ids with >= 1 candidate triangle.
+- `status`: 0 (fast-path clean), 1 (no normal estimate -- unresolved), 2
+  (slow-path resolved), 3 (slow-path dead end -- unresolved), 4 (link graph
+  had no usable edges -- silently kept nothing, matching the Python
+  reference's `if not neighbors` branch, which is NOT flagged unresolved).
+- `n_kept_edges`: per-vertex walked-edge count (status 2/3 diagnostic only).
+- `kept_flat`/`kept_offsets`: CSR-style (offsets in units of triangles) list
+  of each vertex's own locally-kept triangles (0-based, ascending-sorted).
+"""
+function compute_prune_and_walk_jl(points_raw, triangles_raw, normals_raw)
+    points = pyconvert(Matrix{Float64}, points_raw)
+    triangles = pyconvert(Matrix{Int64}, triangles_raw)
+    normals = pyconvert(Matrix{Float64}, normals_raw)
+    n_tri = size(triangles, 1)
+
+    vertex_triangles = Dict{Int64, Set{NTuple{3,Int64}}}()
+    for ti in 1:n_tri
+        t = (triangles[ti, 1], triangles[ti, 2], triangles[ti, 3])
+        for v in t
+            push!(get!(() -> Set{NTuple{3,Int64}}(), vertex_triangles, v), t)
+        end
+    end
+
+    vertex_ids = sort(collect(keys(vertex_triangles)))
+    n_v = length(vertex_ids)
+
+    status = zeros(Int8, n_v)
+    n_kept_edges_arr = zeros(Int64, n_v)
+    kept_per_vertex = Vector{Vector{NTuple{3,Int64}}}(undef, n_v)
+
+    Threads.@threads for vi in 1:n_v
+        v = vertex_ids[vi]
+        tris = vertex_triangles[v]
+
+        link_edges = Vector{Tuple{Int64,Int64}}()
+        tri_by_edge = Dict{Tuple{Int64,Int64}, NTuple{3,Int64}}()
+        for t in tris
+            others = sort([x for x in t if x != v])
+            length(others) != 2 && continue
+            e = (others[1], others[2])
+            push!(link_edges, e)
+            tri_by_edge[e] = t
+        end
+
+        if _is_single_path_or_cycle_jl(link_edges)
+            status[vi] = 0
+            kept_per_vertex[vi] = collect(tris)
+            continue
+        end
+
+        nvx, nvy, nvz = normals[v + 1, 1], normals[v + 1, 2], normals[v + 1, 3]
+        if nvx == 0.0 && nvy == 0.0 && nvz == 0.0
+            status[vi] = 1
+            kept_per_vertex[vi] = NTuple{3,Int64}[]
+            continue
+        end
+
+        u_axis, v_axis = _tangent_frame_jl(nvx, nvy, nvz)
+
+        neighbors = sort(collect(Set(x for e in link_edges for x in e)))
+        angles = Dict{Int64, Float64}()
+        for nb in neighbors
+            dx = points[nb + 1, 1] - points[v + 1, 1]
+            dy = points[nb + 1, 2] - points[v + 1, 2]
+            dz = points[nb + 1, 3] - points[v + 1, 3]
+            dot_n = dx * nvx + dy * nvy + dz * nvz
+            dx, dy, dz = dx - dot_n * nvx, dy - dot_n * nvy, dz - dot_n * nvz
+            au = dx * u_axis[1] + dy * u_axis[2] + dz * u_axis[3]
+            av = dx * v_axis[1] + dy * v_axis[2] + dz * v_axis[3]
+            angles[nb] = atan(av, au)
+        end
+
+        adjacency = Dict{Int64, Set{Int64}}()
+        for (a, b) in link_edges
+            push!(get!(() -> Set{Int64}(), adjacency, a), b)
+            push!(get!(() -> Set{Int64}(), adjacency, b), a)
+        end
+
+        if isempty(neighbors)
+            status[vi] = 4
+            kept_per_vertex[vi] = NTuple{3,Int64}[]
+            continue
+        end
+
+        start = neighbors[1]
+        best_key = (angles[start], start)
+        for nb in neighbors
+            k = (angles[nb], nb)
+            if k < best_key
+                best_key, start = k, nb
+            end
+        end
+
+        kept_edges = Vector{Tuple{Int64,Int64}}()
+        visited_edges = Set{Tuple{Int64,Int64}}()
+        walked_nodes = Set{Int64}([start])
+        prev, current, has_prev = -1, start, false
+        clean_termination = false
+
+        for _step in 1:(length(neighbors) + 1)
+            candidates = [x for x in adjacency[current] if !(has_prev && x == prev)]
+            if isempty(candidates)
+                clean_termination = true
+                break
+            end
+            best_c = candidates[1]
+            best_ck = (mod(angles[best_c] - angles[current], 2.0 * pi), best_c)
+            for c in candidates
+                ck = (mod(angles[c] - angles[current], 2.0 * pi), c)
+                if ck < best_ck
+                    best_ck, best_c = ck, c
+                end
+            end
+            nxt = best_c
+            ek = nxt < current ? (nxt, current) : (current, nxt)
+            if ek in visited_edges
+                break
+            end
+            push!(kept_edges, (current, nxt))
+            push!(visited_edges, ek)
+            if nxt == start
+                clean_termination = true
+                break
+            end
+            if nxt in walked_nodes
+                break
+            end
+            push!(walked_nodes, nxt)
+            prev, current, has_prev = current, nxt, true
+        end
+
+        leftover = [e for e in link_edges if !((e[1] < e[2] ? e : (e[2], e[1])) in visited_edges)]
+        disconnected_leftover = any((!(a in walked_nodes) && !(b in walked_nodes)) for (a, b) in leftover)
+        success = clean_termination && !disconnected_leftover
+
+        kept_tris = NTuple{3,Int64}[]
+        seen_tris = Set{NTuple{3,Int64}}()
+        for e in kept_edges
+            ek = e[1] < e[2] ? e : (e[2], e[1])
+            if haskey(tri_by_edge, ek) && !(tri_by_edge[ek] in seen_tris)
+                push!(kept_tris, tri_by_edge[ek])
+                push!(seen_tris, tri_by_edge[ek])
+            end
+        end
+        kept_per_vertex[vi] = kept_tris
+        n_kept_edges_arr[vi] = length(kept_edges)
+        status[vi] = success ? 2 : 3
+    end
+
+    kept_offsets = Vector{Int64}(undef, n_v + 1)
+    kept_offsets[1] = 0
+    for vi in 1:n_v
+        kept_offsets[vi + 1] = kept_offsets[vi] + length(kept_per_vertex[vi])
+    end
+    kept_flat = Vector{Int64}(undef, 3 * kept_offsets[end])
+    for vi in 1:n_v
+        base = kept_offsets[vi]
+        for (j, t) in enumerate(kept_per_vertex[vi])
+            kept_flat[3 * (base + j - 1) + 1] = t[1]
+            kept_flat[3 * (base + j - 1) + 2] = t[2]
+            kept_flat[3 * (base + j - 1) + 3] = t[3]
+        end
+    end
+
+    return vertex_ids, status, n_kept_edges_arr, kept_flat, kept_offsets
 end
 
 function compute_witness_complex_simplices_jl(points::AbstractMatrix{Float64}, landmarks_idx::AbstractVector{Int64}, alpha::Float64, max_dim::Int)
@@ -7221,6 +7775,125 @@ function _circumsphere_jl(P::Matrix{Float64})
     return center, r2
 end
 
+"""
+    compute_cocone_filter_jl(points, tetrahedra, normals, pole_radius, theta, reach_fraction)
+
+Cocone angle + pole-reach filter (Amenta-Choi-Dey-Leekha), fused: builds the
+facet -> incident-tetrahedra map (restricted to facets whose 3 vertices are
+all original points, i.e. `< n_original = size(normals, 1)`), computes every
+tetrahedron's circumcenter via [`_circumsphere_jl`](@ref) (identical to a
+tetrahedron's classical circumcenter for a non-degenerate simplex -- both
+solve for the unique point equidistant from all 4 vertices), then the angle
+filter and per-candidate reach check. See `reconstruction.py`'s `cocone_filter`
+docstring for the full mathematical justification of the two-condition
+(angle + reach) test -- this is a direct fused port of that function.
+
+Returns `(surviving_triangles, n_candidates)`; `surviving_triangles` is a
+`Vector` of 0-based `(v0, v1, v2)` (ascending) tuples, lexicographically
+sorted (matching Python's `sorted(facet_to_tets.keys())`).
+"""
+function compute_cocone_filter_jl(points::AbstractMatrix{Float64}, tetrahedra::AbstractMatrix{Int64}, normals::AbstractMatrix{Float64}, pole_radius::AbstractVector{Float64}, theta::Float64, reach_fraction::Float64)
+    n_original = size(normals, 1)
+    n_tets = size(tetrahedra, 1)
+    empty_result = Vector{Tuple{Int64,Int64,Int64}}()
+    if n_tets == 0
+        return empty_result, 0
+    end
+
+    facet_to_tets = Dict{Tuple{Int64,Int64,Int64}, Vector{Int64}}()
+    for ti in 1:n_tets
+        tet_sorted = sort(Int64.(tetrahedra[ti, :]))
+        for face in combinations(tet_sorted, 3)
+            if face[3] < n_original
+                key = (face[1], face[2], face[3])
+                push!(get!(() -> Int64[], facet_to_tets, key), ti)
+            end
+        end
+    end
+
+    if isempty(facet_to_tets)
+        return empty_result, 0
+    end
+
+    circumcenters = Matrix{Float64}(undef, n_tets, 3)
+    for ti in 1:n_tets
+        P = Matrix{Float64}(points[tetrahedra[ti, :] .+ 1, :])
+        center, _ = _circumsphere_jl(P)
+        circumcenters[ti, 1], circumcenters[ti, 2], circumcenters[ti, 3] = center[1], center[2], center[3]
+    end
+
+    candidate_triangles = sort(collect(keys(facet_to_tets)))
+    n_candidates = length(candidate_triangles)
+    ok = trues(n_candidates)
+    cos_theta = cos(theta)
+
+    for i in 1:n_candidates
+        v0, v1, v2 = candidate_triangles[i]
+        p0x, p0y, p0z = points[v0 + 1, 1], points[v0 + 1, 2], points[v0 + 1, 3]
+        e1x, e1y, e1z = points[v1 + 1, 1] - p0x, points[v1 + 1, 2] - p0y, points[v1 + 1, 3] - p0z
+        e2x, e2y, e2z = points[v2 + 1, 1] - p0x, points[v2 + 1, 2] - p0y, points[v2 + 1, 3] - p0z
+        tnx = e1y * e2z - e1z * e2y
+        tny = e1z * e2x - e1x * e2z
+        tnz = e1x * e2y - e1y * e2x
+        tn_norm = sqrt(tnx * tnx + tny * tny + tnz * tnz)
+        if tn_norm <= 1e-15
+            ok[i] = false
+            continue
+        end
+        tnx, tny, tnz = tnx / tn_norm, tny / tn_norm, tnz / tn_norm
+
+        facet_ok = true
+        for v in (v0, v1, v2)
+            nvx, nvy, nvz = normals[v + 1, 1], normals[v + 1, 2], normals[v + 1, 3]
+            nv_norm = sqrt(nvx * nvx + nvy * nvy + nvz * nvz)
+            if nv_norm <= 1e-15
+                facet_ok = false
+                break
+            end
+            cos_angle = abs(tnx * nvx + tny * nvy + tnz * nvz)
+            if cos_angle < cos_theta
+                facet_ok = false
+                break
+            end
+        end
+        ok[i] = facet_ok
+    end
+
+    for i in 1:n_candidates
+        ok[i] || continue
+        tri = candidate_triangles[i]
+        tets_i = facet_to_tets[tri]
+        reaches = true
+        for v in tri
+            pr = pole_radius[v + 1]
+            if pr <= 1e-12
+                reaches = false
+                break
+            end
+            vx, vy, vz = points[v + 1, 1], points[v + 1, 2], points[v + 1, 3]
+            max_d = 0.0
+            for tj in tets_i
+                dx = circumcenters[tj, 1] - vx
+                dy = circumcenters[tj, 2] - vy
+                dz = circumcenters[tj, 3] - vz
+                d = sqrt(dx * dx + dy * dy + dz * dz)
+                max_d = d > max_d ? d : max_d
+            end
+            if max_d < reach_fraction * pr
+                reaches = false
+                break
+            end
+        end
+        ok[i] = reaches
+    end
+
+    surviving = Vector{Tuple{Int64,Int64,Int64}}()
+    for i in 1:n_candidates
+        ok[i] && push!(surviving, candidate_triangles[i])
+    end
+    return surviving, n_candidates
+end
+
 function _compute_alpha_filtration(points::Matrix{Float64}, top_simplices::Matrix{Int}, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, eps_max::Union{Nothing, Float64}=nothing, verify_manifold_only_at_betti_change::Bool=false, track_connected_components::Bool=false)
     n_pts = size(points, 1)
     full_dim = size(points, 2)
@@ -7370,6 +8043,308 @@ function compute_alpha_filtration(points_raw, top_simplices_raw, max_dim_raw, an
         pyconvert(Bool, verify_manifold_only_at_betti_change_raw),
         pyconvert(Bool, track_connected_components_raw)
     )
+end
+
+# --- Delaunay-restricted Rips / Cech filtrations ---
+#
+# Both share _compute_alpha_filtration's step 1 (enumerate every face of every
+# dimension from the Delaunay top simplices) but skip its coface-propagation
+# machinery (the `opposite` dict, the Gabriel test) entirely: unlike Alpha's
+# circumradius value, a Rips (longest-edge) or Cech (min-enclosing-ball) value
+# is a pure function of a face's own vertices, so it needs no coface lookups.
+
+function _delaunay_faces_by_dim(top_simplices::Matrix{Int}, full_dim::Int)
+    faces_by_dim = [Set{Vector{Int}}() for _ in 1:(full_dim + 1)]
+    n_top = size(top_simplices, 1)
+    d_top = size(top_simplices, 2)
+    for i in 1:n_top
+        t = sort([top_simplices[i, j] + 1 for j in 1:d_top])
+        for d in 0:min(full_dim, d_top - 1)
+            for f in combinations(t, d + 1)
+                push!(faces_by_dim[d + 1], f)
+            end
+        end
+    end
+    return faces_by_dim
+end
+
+function _compute_delaunay_rips_filtration(points::Matrix{Float64}, top_simplices::Matrix{Int}, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, eps_max::Union{Nothing, Float64}=nothing, verify_manifold_only_at_betti_change::Bool=false, track_connected_components::Bool=false)
+    n_pts = size(points, 1)
+    full_dim = size(points, 2)
+
+    # 1. Every face of every dimension from the Delaunay triangulation.
+    faces_by_dim = _delaunay_faces_by_dim(top_simplices, full_dim)
+
+    # 2. Rips value per face: the longest edge among its own vertices.
+    cliques = Vector{Vector{Int}}()
+    vals = Float64[]
+    for d in 0:max_dim
+        if d <= full_dim
+            for f in faces_by_dim[d + 1]
+                maxv = 0.0
+                for a in 1:length(f)
+                    for b in (a+1):length(f)
+                        d2 = 0.0
+                        for j in 1:full_dim
+                            diff = points[f[a], j] - points[f[b], j]
+                            d2 += diff * diff
+                        end
+                        dist = sqrt(d2)
+                        dist > maxv && (maxv = dist)
+                    end
+                end
+                if eps_max === nothing || maxv <= eps_max
+                    push!(cliques, f)
+                    push!(vals, maxv)
+                end
+            end
+        end
+    end
+
+    M = length(cliques)
+
+    # 3. Persistent homology reduction.
+    (bar_dim, bar_birth, bar_death) = _reduce_from_simplices(cliques, vals)
+
+    eps_values = sort(unique(vals))
+    dim_first = Dict{Int, Float64}()
+    dim_cnt = Dict{Int, Int}()
+    @inbounds for j in 1:M
+        d = length(cliques[j]) - 1
+        v = vals[j]
+        if haskey(dim_first, d)
+            v < dim_first[d] && (dim_first[d] = v)
+            dim_cnt[d] += 1
+        else
+            dim_first[d] = v
+            dim_cnt[d] = 1
+        end
+    end
+    dim_ids = sort(collect(keys(dim_first)))
+    dim_first_val = Float64[dim_first[d] for d in dim_ids]
+    dim_count = Int[dim_cnt[d] for d in dim_ids]
+
+    # 4. Manifold analysis.
+    if analyze_manifolds
+        epsilon_val = (eps_max !== nothing) ? eps_max : (isempty(vals) ? 1.0 : maximum(vals))
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures, m_comp_keys, m_comp_vals = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon_val, n_samples, n_pts, verify_manifold_only_at_betti_change, track_connected_components, bar_dim, bar_birth, bar_death)
+        return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+                dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures, m_comp_keys, m_comp_vals)
+    else
+        return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+                dim_count, M, false, Float64[], Bool[], Int[], Bool[], Int[], Vector{Vector{Int}}(), Vector{Vector{String}}())
+    end
+end
+
+"""
+    compute_delaunay_rips_filtration(points, top_simplices, max_dim, analyze_manifolds, n_samples, eps_max)
+
+PythonCall entry point for [`_compute_delaunay_rips_filtration`](@ref).
+"""
+function compute_delaunay_rips_filtration(points_raw, top_simplices_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, eps_max_raw=nothing, verify_manifold_only_at_betti_change_raw=false, track_connected_components_raw=false)
+    return _compute_delaunay_rips_filtration(
+        pyconvert(Matrix{Float64}, points_raw),
+        pyconvert(Matrix{Int}, top_simplices_raw),
+        pyconvert(Int, max_dim_raw),
+        pyconvert(Bool, analyze_manifolds_raw),
+        pyconvert(Union{Nothing, Int}, n_samples_raw),
+        pyconvert(Union{Nothing, Float64}, eps_max_raw),
+        pyconvert(Bool, verify_manifold_only_at_betti_change_raw),
+        pyconvert(Bool, track_connected_components_raw)
+    )
+end
+
+"""
+    _miniball_r2_jl(P::Matrix{Float64})
+
+Squared radius of the minimum enclosing ball of `P`'s rows (Welzl's algorithm),
+mirroring the Python reference implementation in `filtration_values._miniball_r2`.
+`P` is tiny here (a Delaunay face has at most `full_dim + 1` vertices), so the
+recursion is cheap and the exponential worst case is irrelevant. Reuses
+[`_circumsphere_jl`](@ref) as the boundary solver, exactly as the Python version
+reuses `_circumsphere`.
+"""
+function _miniball_r2_jl(P::Matrix{Float64})
+    m, dim = size(P)
+    if m == 0
+        return 0.0
+    end
+    pts = [P[i, :] for i in 1:m]
+
+    function welzl(pset::Vector{Vector{Float64}}, boundary::Vector{Vector{Float64}})
+        if isempty(pset) || length(boundary) == dim + 1
+            if isempty(boundary)
+                return nothing, 0.0
+            end
+            B = Matrix{Float64}(undef, length(boundary), dim)
+            for i in 1:length(boundary), j in 1:dim
+                B[i, j] = boundary[i][j]
+            end
+            return _circumsphere_jl(B)
+        end
+        p = pset[end]
+        c, r2 = welzl(pset[1:end-1], boundary)
+        if c !== nothing
+            d2 = 0.0
+            for j in 1:dim
+                diff = p[j] - c[j]
+                d2 += diff * diff
+            end
+            if d2 <= r2 + 1e-12
+                return c, r2
+            end
+        end
+        return welzl(pset[1:end-1], vcat(boundary, [p]))
+    end
+
+    _, r2 = welzl(pts, Vector{Float64}[])
+    return max(r2, 0.0)
+end
+
+function _compute_delaunay_cech_filtration(points::Matrix{Float64}, top_simplices::Matrix{Int}, max_dim::Int, analyze_manifolds::Bool=false, n_samples::Union{Nothing, Int}=nothing, eps_max::Union{Nothing, Float64}=nothing, verify_manifold_only_at_betti_change::Bool=false, track_connected_components::Bool=false)
+    n_pts = size(points, 1)
+    full_dim = size(points, 2)
+
+    # 1. Every face of every dimension from the Delaunay triangulation.
+    faces_by_dim = _delaunay_faces_by_dim(top_simplices, full_dim)
+
+    # 2. Cech value per face: its own minimum-enclosing-ball radius.
+    cliques = Vector{Vector{Int}}()
+    vals = Float64[]
+    for d in 0:max_dim
+        if d <= full_dim
+            for f in faces_by_dim[d + 1]
+                val = 0.0
+                if length(f) > 1
+                    P = Matrix{Float64}(undef, length(f), full_dim)
+                    for r in 1:length(f)
+                        for c in 1:full_dim
+                            P[r, c] = points[f[r], c]
+                        end
+                    end
+                    val = sqrt(_miniball_r2_jl(P))
+                end
+                if eps_max === nothing || val <= eps_max
+                    push!(cliques, f)
+                    push!(vals, val)
+                end
+            end
+        end
+    end
+
+    M = length(cliques)
+
+    # 3. Persistent homology reduction.
+    (bar_dim, bar_birth, bar_death) = _reduce_from_simplices(cliques, vals)
+
+    eps_values = sort(unique(vals))
+    dim_first = Dict{Int, Float64}()
+    dim_cnt = Dict{Int, Int}()
+    @inbounds for j in 1:M
+        d = length(cliques[j]) - 1
+        v = vals[j]
+        if haskey(dim_first, d)
+            v < dim_first[d] && (dim_first[d] = v)
+            dim_cnt[d] += 1
+        else
+            dim_first[d] = v
+            dim_cnt[d] = 1
+        end
+    end
+    dim_ids = sort(collect(keys(dim_first)))
+    dim_first_val = Float64[dim_first[d] for d in dim_ids]
+    dim_count = Int[dim_cnt[d] for d in dim_ids]
+
+    # 4. Manifold analysis.
+    if analyze_manifolds
+        epsilon_val = (eps_max !== nothing) ? eps_max : (isempty(vals) ? 1.0 : maximum(vals))
+        m_eps, m_is_mani, m_dims, m_is_closed, m_failures, m_comp_keys, m_comp_vals = _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon_val, n_samples, n_pts, verify_manifold_only_at_betti_change, track_connected_components, bar_dim, bar_birth, bar_death)
+        return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+                dim_count, M, true, m_eps, m_is_mani, m_dims, m_is_closed, m_failures, m_comp_keys, m_comp_vals)
+    else
+        return (bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val,
+                dim_count, M, false, Float64[], Bool[], Int[], Bool[], Int[], Vector{Vector{Int}}(), Vector{Vector{String}}())
+    end
+end
+
+"""
+    compute_delaunay_cech_filtration(points, top_simplices, max_dim, analyze_manifolds, n_samples, eps_max)
+
+PythonCall entry point for [`_compute_delaunay_cech_filtration`](@ref).
+"""
+function compute_delaunay_cech_filtration(points_raw, top_simplices_raw, max_dim_raw, analyze_manifolds_raw=false, n_samples_raw=nothing, eps_max_raw=nothing, verify_manifold_only_at_betti_change_raw=false, track_connected_components_raw=false)
+    return _compute_delaunay_cech_filtration(
+        pyconvert(Matrix{Float64}, points_raw),
+        pyconvert(Matrix{Int}, top_simplices_raw),
+        pyconvert(Int, max_dim_raw),
+        pyconvert(Bool, analyze_manifolds_raw),
+        pyconvert(Union{Nothing, Int}, n_samples_raw),
+        pyconvert(Union{Nothing, Float64}, eps_max_raw),
+        pyconvert(Bool, verify_manifold_only_at_betti_change_raw),
+        pyconvert(Bool, track_connected_components_raw)
+    )
+end
+
+# --- Delaunay-restricted Rips / Cech: simplices-only (no persistence) ---
+#
+# Lighter counterparts mirroring compute_alpha_complex_simplices_jl: return the
+# (simplex, value) pairs directly for callers (from_delaunay_rips/from_delaunay_cech)
+# that build a SimplicialComplex with a .filtration map rather than a barcode.
+
+function compute_delaunay_rips_simplices_jl(points::AbstractMatrix{Float64}, top_simplices::AbstractMatrix{Int64}, max_dim::Int)
+    full_dim = size(points, 2)
+    faces_by_dim = _delaunay_faces_by_dim(Matrix{Int}(top_simplices), full_dim)
+
+    cliques = Vector{Vector{Int}}()
+    vals = Float64[]
+    for d in 0:max_dim
+        if d <= full_dim
+            for f in faces_by_dim[d + 1]
+                maxv = 0.0
+                for a in 1:length(f)
+                    for b in (a+1):length(f)
+                        d2 = 0.0
+                        for j in 1:full_dim
+                            diff = points[f[a], j] - points[f[b], j]
+                            d2 += diff * diff
+                        end
+                        dist = sqrt(d2)
+                        dist > maxv && (maxv = dist)
+                    end
+                end
+                push!(cliques, f .- 1)  # 0-indexed for Python
+                push!(vals, maxv)
+            end
+        end
+    end
+    return cliques, vals
+end
+
+function compute_delaunay_cech_simplices_jl(points::AbstractMatrix{Float64}, top_simplices::AbstractMatrix{Int64}, max_dim::Int)
+    full_dim = size(points, 2)
+    faces_by_dim = _delaunay_faces_by_dim(Matrix{Int}(top_simplices), full_dim)
+
+    cliques = Vector{Vector{Int}}()
+    vals = Float64[]
+    for d in 0:max_dim
+        if d <= full_dim
+            for f in faces_by_dim[d + 1]
+                val = 0.0
+                if length(f) > 1
+                    P = Matrix{Float64}(undef, length(f), full_dim)
+                    for r in 1:length(f)
+                        for c in 1:full_dim
+                            P[r, c] = points[f[r], c]
+                        end
+                    end
+                    val = sqrt(_miniball_r2_jl(P))
+                end
+                push!(cliques, f .- 1)  # 0-indexed for Python
+                push!(vals, val)
+            end
+        end
+    end
+    return cliques, vals
 end
 
 """

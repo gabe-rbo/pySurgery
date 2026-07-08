@@ -2664,6 +2664,24 @@ class SimplicialComplex(ChainComplex):
 
         n_pts = dist_mat.shape[0]
 
+        backend_norm = str(backend).lower().strip()
+        use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
+        if use_julia:
+            try:
+                simplices = julia_engine.compute_vietoris_rips_from_distance_matrix(
+                    dist_mat, epsilon, max_dimension
+                )
+                return cls.from_simplices(
+                    simplices, coefficient_ring=coefficient_ring, close_under_faces=True
+                )
+            except Exception as e:
+                if backend_norm == "julia":
+                    raise e
+                warnings.warn(
+                    f"Julia distance-matrix Vietoris-Rips failed: {e!r}. Falling back to Python."
+                )
+
         # Extract upper triangle indices (excluding diagonal)
         i_indices, j_indices = np.triu_indices(n_pts, k=1)
 
@@ -3029,12 +3047,28 @@ class SimplicialComplex(ChainComplex):
         # 4. Extract simplices of dimension (dim-1) where all vertices are from the original point set
         # This is the "Crust".
         target_dim = dim - 1
-        valid_simplices = set()
-        for s in dt_combined.simplices:
-            for face in itertools.combinations(s, target_dim + 1):
-                if np.all(np.array(face) < n_pts):
-                    valid_simplices.add(tuple(sorted(int(v) for v in face)))
-        
+
+        backend_norm = str(backend).lower().strip()
+        use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+
+        valid_simplices = None
+        if use_julia:
+            try:
+                valid_simplices = set(
+                    julia_engine.compute_crust_simplices(combined_pts, dt_combined.simplices, n_pts)
+                )
+            except Exception as e:
+                if backend_norm == "julia":
+                    raise e
+                warnings.warn(f"Julia Crust algorithm failed ({e!r}). Falling back to pure Python.")
+
+        if valid_simplices is None:
+            valid_simplices = set()
+            for s in dt_combined.simplices:
+                for face in itertools.combinations(s, target_dim + 1):
+                    if np.all(np.array(face) < n_pts):
+                        valid_simplices.add(tuple(sorted(int(v) for v in face)))
+
         # Ensure vertices are included
         for i in range(n_pts):
             valid_simplices.add((i,))
@@ -3060,6 +3094,7 @@ class SimplicialComplex(ChainComplex):
         perturbation_scale: Optional[float] = None,
         seed: int = 0,
         coefficient_ring: str = "Z",
+        backend: str = "auto",
     ) -> "SimplicialComplex":
         r"""Reconstruct a manifold-certified surface from a 3D point cloud (Cocone algorithm).
 
@@ -3108,6 +3143,9 @@ class SimplicialComplex(ChainComplex):
                 with the data (see ``cocone_reconstruction``'s docstring).
             seed: Passed through to ``moser_tardos_repair``.
             coefficient_ring: Coefficient ring label.
+            backend: ``"auto"`` (default; use Julia when available), ``"julia"``, or
+                ``"python"``, passed through to every stage of the reconstruction pipeline
+                (see ``cocone_reconstruction``'s docstring).
 
         Returns:
             A SimplicialComplex representing the reconstructed surface, over the (possibly
@@ -3145,7 +3183,7 @@ class SimplicialComplex(ChainComplex):
             tight=tight,
             bounding_radius_factor=bounding_radius_factor, n_sentinels=n_sentinels,
             repair=repair, max_repair_rounds=max_repair_rounds,
-            perturbation_scale=perturbation_scale, seed=seed,
+            perturbation_scale=perturbation_scale, seed=seed, backend=backend,
         )
         if result.unresolved_vertices:
             import warnings
@@ -3185,9 +3223,11 @@ class SimplicialComplex(ChainComplex):
         perturbation_scale: Optional[float] = None,
         seed: int = 0,
         coefficient_ring: str = "Z",
+        backend: str = "auto",
     ) -> "SimplicialComplex":
-        r"""Reconstruct a ``k``-manifold-certified complex from a point cloud (Boissonnat-
-        Ghosh tangential Delaunay complex).
+        r"""Reconstruct a ``k``-manifold-certified complex from a point cloud.
+
+        Uses the Boissonnat-Ghosh tangential Delaunay complex.
 
         Unlike ``from_cocone`` (specialized to codimension-1 surfaces in R^3 via per-point
         pole/normal estimation), this handles the general case of a ``k``-dimensional
@@ -3217,6 +3257,10 @@ class SimplicialComplex(ChainComplex):
                 with the data.
             seed: Passed through to ``moser_tardos_repair``.
             coefficient_ring: Coefficient ring label.
+            backend: ``"auto"`` (default; use Julia when available), ``"julia"``, or
+                ``"python"``. Julia acceleration only ever applies for ``k == 2`` (see
+                ``tangential_complex_reconstruction``'s docstring); for any other ``k`` this
+                has no effect.
 
         Returns:
             A SimplicialComplex representing the reconstructed complex, over the (possibly
@@ -3246,7 +3290,7 @@ class SimplicialComplex(ChainComplex):
         result = tangential_complex_reconstruction(
             pts, k=k, neighborhood_size=neighborhood_size, variance_threshold=variance_threshold,
             repair=repair, max_repair_rounds=max_repair_rounds,
-            perturbation_scale=perturbation_scale, seed=seed,
+            perturbation_scale=perturbation_scale, seed=seed, backend=backend,
         )
         if result.unresolved_points:
             import warnings
@@ -3268,21 +3312,31 @@ class SimplicialComplex(ChainComplex):
         return sc
 
     @classmethod
-    def _from_delaunay_filtered(cls, points, value_fn, threshold, max_dimension, coefficient_ring):
+    def _from_delaunay_filtered(cls, points, value_fn, threshold, max_dimension, coefficient_ring,
+                                 backend="auto", julia_simplices_fn=None):
         """Build the Delaunay complex and tag each simplex with an appearance value.
 
         Constructs the Delaunay triangulation (faces up to ``max_dimension``), tags
-        every simplex with its appearance value via ``value_fn(table, coords)``, and
-        optionally keeps only simplices appearing by ``threshold``. The per-simplex
-        values are stored on ``sc.filtration``.
+        every simplex with its appearance value either via a fused Julia kernel
+        (``julia_simplices_fn``, when available and ``backend`` allows it) or via
+        ``value_fn(table, coords)`` (the pure-Python fallback), and optionally keeps
+        only simplices appearing by ``threshold``. The per-simplex values are stored
+        on ``sc.filtration``.
 
         Args:
             points: (N, D) array of point coordinates.
             value_fn: Callable ``(simplices_table, coords) -> {simplex: value}``
-                producing the monotone appearance value for each simplex.
+                producing the monotone appearance value for each simplex (the
+                pure-Python fallback path).
             threshold: Appearance-value cutoff; ``None`` keeps the full complex.
             max_dimension: Maximum simplex dimension to include.
             coefficient_ring: Coefficient ring label.
+            backend: 'auto', 'julia', or 'python'.
+            julia_simplices_fn: Callable ``(points, delaunay_top_simplices, max_dim)
+                -> {simplex: value}`` (e.g.
+                ``julia_engine.compute_delaunay_rips_simplices``) used instead of the
+                Python face-enumeration loop + ``value_fn`` when Julia is available
+                and ``backend`` allows it.
 
         Returns:
             A SimplicialComplex with ``.filtration`` populated and geometric
@@ -3309,17 +3363,39 @@ class SimplicialComplex(ChainComplex):
         from scipy.spatial import Delaunay
         dt = Delaunay(pts, qhull_options="QJ")
         md = min(int(max_dimension), dim)
-        faces = set()
-        for s in dt.simplices:
-            s = tuple(sorted(int(v) for v in s))
-            for d in range(md + 1):
-                for f in itertools.combinations(s, d + 1):
-                    faces.add(tuple(sorted(f)))
 
-        sc = cls.from_simplices([list(f) for f in faces],
-                                coefficient_ring=coefficient_ring, close_under_faces=True)
-        sc._coordinates = pts
-        vals = value_fn(sc._simplices_table, pts)
+        backend_norm = str(backend).lower().strip()
+        use_julia = julia_simplices_fn is not None and (
+            (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
+        )
+
+        vals = None
+        if use_julia:
+            try:
+                vals = julia_simplices_fn(pts, dt.simplices, md)
+            except Exception as e:
+                if backend_norm == "julia":
+                    raise e
+                warnings.warn(
+                    f"Julia Delaunay-restricted filtration failed ({e!r}). Falling back to pure Python."
+                )
+
+        if vals is not None:
+            sc = cls.from_simplices([list(f) for f in vals],
+                                    coefficient_ring=coefficient_ring, close_under_faces=True)
+            sc._coordinates = pts
+        else:
+            faces = set()
+            for s in dt.simplices:
+                s = tuple(sorted(int(v) for v in s))
+                for d in range(md + 1):
+                    for f in itertools.combinations(s, d + 1):
+                        faces.add(tuple(sorted(f)))
+
+            sc = cls.from_simplices([list(f) for f in faces],
+                                    coefficient_ring=coefficient_ring, close_under_faces=True)
+            sc._coordinates = pts
+            vals = value_fn(sc._simplices_table, pts)
 
         if threshold is not None:
             tol = abs(float(threshold)) * 1e-9 + 1e-12
@@ -3366,7 +3442,8 @@ class SimplicialComplex(ChainComplex):
         """
         from .filtration_values import rips_filtration_values
         return cls._from_delaunay_filtered(
-            points, rips_filtration_values, threshold, max_dimension, coefficient_ring
+            points, rips_filtration_values, threshold, max_dimension, coefficient_ring,
+            backend=backend, julia_simplices_fn=julia_engine.compute_delaunay_rips_simplices,
         )
 
     @classmethod
@@ -3400,7 +3477,8 @@ class SimplicialComplex(ChainComplex):
         """
         from .filtration_values import cech_filtration_values
         return cls._from_delaunay_filtered(
-            points, cech_filtration_values, threshold, max_dimension, coefficient_ring
+            points, cech_filtration_values, threshold, max_dimension, coefficient_ring,
+            backend=backend, julia_simplices_fn=julia_engine.compute_delaunay_cech_simplices,
         )
 
     @classmethod

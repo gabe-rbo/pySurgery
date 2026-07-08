@@ -381,6 +381,8 @@ The algorithms and constructs implemented in **pySurgery** are rigorously ground
 *   **Computational Topology Foundations:** Edelsbrunner, H., & Harer, J. (2010). *Computational topology: An introduction*. American Mathematical Society.
 *   **Optimal Generators:** Dey, T. K., & Wang, Y. (2022). *Computational topology for data analysis*. Cambridge University Press.
 *   **Alpha Complexes:** Edelsbrunner, H. (1994). The weighted Delaunay triangulation or how to stabilize the radical axis. *Discrete & Computational Geometry*, 13, 371-390.
+*   **Delaunay-Čech/Delaunay-Rips Filtration:** Bauer, U., & Edelsbrunner, H. (2017). The Morse theory of Čech and Delaunay complexes. *Transactions of the American Mathematical Society*, 369(5), 3741-3762.
+*   **Minimum Enclosing Ball (Welzl's Algorithm):** Welzl, E. (1991). Smallest enclosing disks (balls and ellipsoids). *New Results and New Trends in Computer Science*, 359-370.
 *   **Vietoris-Rips Construction:** Zomorodian, A. (2010). Fast construction of the Vietoris-Rips complex. *Computers & Graphics*, 34(3), 263-271.
 *   **Witness Complexes:** de Silva, V., & Carlsson, G. (2004). Topological estimation using witness complexes. *Eurographics Symposium on Point-Based Graphics*, 157-166.
 *   **Orthogonal Procrustes:** Schönemann, P. H. (1966). A generalized solution of the orthogonal Procrustes problem. *Psychometrika*, 31(1), 1-10.

@@ -23,7 +23,7 @@
     },
     "SimpleWeightedGraphs": {
       "uuid": "47aef6b3-ad0c-573a-a1e2-d07658019622",
-      "version": "1"
+      "version": "1.5"
     },
     "DelaunayTriangulation": {
       "uuid": "927a84f5-c5f4-47a5-9785-b46e178433df",
@@ -44,6 +44,11 @@
     "KrylovKit": {
       "uuid": "0b1a1467-8014-51b9-945f-bf0ae24f4b77",
       "version": "0.6"
+    },
+    "SurgeryBackend": {
+      "uuid": "7e7add94-b7d2-4577-b60d-50cddf9f414e",
+      "path": "./SurgeryBackend",
+      "dev": true
     }
   }
 }

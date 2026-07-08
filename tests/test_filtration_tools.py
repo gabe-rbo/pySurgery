@@ -48,9 +48,9 @@ def test_generate_filtration_report_manual():
     report = str(report_obj)
     
     # Basic checks
-    assert "# Betti Numbers Report" in report
-    assert "# Manifold Status Report" in report
-    assert "Betti \\ Eps" in report
+    assert "# Unified Filtration Report" in report
+    assert "Is Homology Manifold" in report
+    assert "Property \\ Eps" in report
     assert "0.100000" in report
     assert "0.700000" in report
 
@@ -62,7 +62,7 @@ def test_generate_filtration_report_dynamic():
     report_obj = FiltrationReport(points, epsilons=None, max_dimension=1, manifold_analysis=True)
     report = str(report_obj)
     
-    assert "# Betti Numbers Report" in report
+    assert "# Unified Filtration Report" in report
     assert "0.000000" in report
     assert "1.000000" in report
     assert "1.414214" in report
@@ -101,7 +101,7 @@ def test_generate_filtration_report_with_components():
     report_obj = FiltrationReport(points, epsilons=[1.1, 6.0], track_connected_components=True)
     report = str(report_obj)
     
-    assert "# Connected Components Report" in report
+    assert "# Unified Filtration Report" in report
     assert "C_1" in report
     assert "C_2" in report
     assert "M(D:1, Closed)" in report

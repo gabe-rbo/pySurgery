@@ -136,6 +136,7 @@ class _BaseFiltrationReport:
                 grid (``n_samples``) or a modest ``eps_max``.
             manifold_analysis: Alias/override for analyze_manifolds. If provided,
                 overrides analyze_manifolds.
+            verify_manifold_only_at_betti_change: If True, check manifold criteria only when Betti numbers change.
             **kwargs: Method-specific options (e.g. ``k``, ``n_landmarks``).
         """
         self.points = np.asarray(points, dtype=np.float64)
@@ -1753,6 +1754,56 @@ class DelaunayRipsFiltrationReport(_BaseFiltrationReport):
 
     param_label = "Eps"
     method_name = "Delaunay-Rips"
+    _DELAUNAY_FUSED_MIN_POINTS = 256
+
+    def _assemble(self):
+        """Fuse the Delaunay build, longest-edge values, and Z2 reduction inside Julia.
+
+        Mirrors ``AlphaFiltrationReport._assemble()``: for large clouds, run the
+        entire hot path (Delaunay face enumeration, longest-edge values, and the
+        twist/clearing reduction) inside Julia, bypassing the staged build and
+        Python loops entirely. For small complexes, defer to the staged build.
+        """
+        need_explicit = self.compute_torsion
+        if (need_explicit or self.backend == "python"
+                or len(self.points) < self._DELAUNAY_FUSED_MIN_POINTS):
+            return super()._assemble()
+        try:
+            from scipy.spatial import Delaunay
+            from pysurgery.bridge.julia_bridge import julia_engine
+            if not julia_engine.available:
+                return super()._assemble()
+
+            pts = self.points
+            n, dim = pts.shape
+            if n < dim + 1:
+                return super()._assemble()
+
+            dt = Delaunay(pts, qhull_options="QJ")
+            payload = julia_engine.compute_delaunay_rips_filtration(
+                pts, dt.simplices, self.max_dimension,
+                analyze_manifolds=self.analyze_manifolds,
+                n_samples=self.n_samples,
+                eps_max=self.eps_max,
+                verify_manifold_only_at_betti_change=self.verify_manifold_only_at_betti_change,
+                track_connected_components=self.track_connected_components,
+            )
+        except Exception as exc:
+            warnings.warn(
+                f"Fused Julia Delaunay-Rips filtration failed ({exc!r}); falling back to the "
+                "staged build.", stacklevel=2)
+            return super()._assemble()
+
+        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
+            return super()._assemble()
+
+        if "manifold_data" in payload and payload["manifold_data"] is not None:
+            self._precomputed_manifolds = payload["manifold_data"]
+        if "component_data" in payload and payload["component_data"] is not None:
+            self._precomputed_components = payload["component_data"]
+
+        return (None, None, payload["barcode"], payload["dim_first_appear"],
+                payload["total"], payload["eps_values"])
 
     def _build_maximal_and_values(self):
         """Build the Delaunay-Rips complex (longest-edge values on Delaunay edges)."""
@@ -1781,6 +1832,57 @@ class DelaunayCechFiltrationReport(_BaseFiltrationReport):
 
     param_label = "Radius"
     method_name = "Delaunay-Cech"
+    _DELAUNAY_FUSED_MIN_POINTS = 256
+
+    def _assemble(self):
+        """Fuse the Delaunay build, min-enclosing-ball values, and Z2 reduction inside Julia.
+
+        Mirrors ``AlphaFiltrationReport._assemble()``: for large clouds, run the
+        entire hot path (Delaunay face enumeration, Welzl min-enclosing-ball
+        values, and the twist/clearing reduction) inside Julia, bypassing the
+        staged build and Python loops entirely. For small complexes, defer to the
+        staged build.
+        """
+        need_explicit = self.compute_torsion
+        if (need_explicit or self.backend == "python"
+                or len(self.points) < self._DELAUNAY_FUSED_MIN_POINTS):
+            return super()._assemble()
+        try:
+            from scipy.spatial import Delaunay
+            from pysurgery.bridge.julia_bridge import julia_engine
+            if not julia_engine.available:
+                return super()._assemble()
+
+            pts = self.points
+            n, dim = pts.shape
+            if n < dim + 1:
+                return super()._assemble()
+
+            dt = Delaunay(pts, qhull_options="QJ")
+            payload = julia_engine.compute_delaunay_cech_filtration(
+                pts, dt.simplices, self.max_dimension,
+                analyze_manifolds=self.analyze_manifolds,
+                n_samples=self.n_samples,
+                eps_max=self.eps_max,
+                verify_manifold_only_at_betti_change=self.verify_manifold_only_at_betti_change,
+                track_connected_components=self.track_connected_components,
+            )
+        except Exception as exc:
+            warnings.warn(
+                f"Fused Julia Delaunay-Cech filtration failed ({exc!r}); falling back to the "
+                "staged build.", stacklevel=2)
+            return super()._assemble()
+
+        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
+            return super()._assemble()
+
+        if "manifold_data" in payload and payload["manifold_data"] is not None:
+            self._precomputed_manifolds = payload["manifold_data"]
+        if "component_data" in payload and payload["component_data"] is not None:
+            self._precomputed_components = payload["component_data"]
+
+        return (None, None, payload["barcode"], payload["dim_first_appear"],
+                payload["total"], payload["eps_values"])
 
     def _build_maximal_and_values(self):
         """Build the Delaunay-Cech complex (smallest-enclosing-ball radius values)."""

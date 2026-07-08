@@ -75,9 +75,21 @@ def test_julia_bridge_warmup_full_executes_and_caches(monkeypatch):
     """Verify that full warmup executes workloads exactly once and caches the result.
 
     Algorithm:
-        1. Mock the internal workload runners of julia_engine.
+        1. Mock the internal workload runners of julia_engine -- all three sources
+           _run_warmup("full") pulls from (_minimal_warmup_workloads,
+           _full_warmup_workloads, _coverage_warmup_workloads), so no real (unmocked)
+           kernel ever runs against the fake ``backend``/``jl`` objects below. An
+           earlier version of this test mocked only the first two, leaving
+           _coverage_warmup_workloads to execute for real against a bare ``object()``
+           backend -- every one of its workloads failed with AttributeError, silently
+           tolerated because nothing here asserted on report["failed"]. That was a gap
+           in this test's own mock, not a bug in warmup() or any real kernel (confirmed
+           2026-07-07: a real, non-monkeypatched double warmup() call in a fresh
+           process is fully idempotent, only the pre-existing, unrelated
+           'h1_opt_square' workload fails).
         2. Call warmup() twice.
-        3. Assert that workloads were called in the first turn and cached in the second.
+        3. Assert that workloads were called in the first turn and cached in the
+           second, and that neither run reports any failures.
     """
     monkeypatch.setattr(julia_engine, "_initialized", True, raising=False)
     monkeypatch.setattr(julia_engine, "_available", True, raising=False)
@@ -86,7 +98,7 @@ def test_julia_bridge_warmup_full_executes_and_caches(monkeypatch):
     monkeypatch.setattr(julia_engine, "_warmup_level", 0, raising=False)
     monkeypatch.setattr(julia_engine, "_warmup_report", {}, raising=False)
 
-    calls = {"minimal": 0, "full": 0}
+    calls = {"minimal": 0, "full": 0, "coverage": 0}
 
     def _minimal_workloads():
         return [
@@ -96,11 +108,19 @@ def test_julia_bridge_warmup_full_executes_and_caches(monkeypatch):
     def _full_workloads():
         return [("full_probe", lambda: calls.__setitem__("full", calls["full"] + 1))]
 
+    def _coverage_workloads():
+        return [
+            ("coverage_probe", lambda: calls.__setitem__("coverage", calls["coverage"] + 1))
+        ]
+
     monkeypatch.setattr(
         julia_engine, "_minimal_warmup_workloads", _minimal_workloads, raising=False
     )
     monkeypatch.setattr(
         julia_engine, "_full_warmup_workloads", _full_workloads, raising=False
+    )
+    monkeypatch.setattr(
+        julia_engine, "_coverage_warmup_workloads", _coverage_workloads, raising=False
     )
 
     report_first = julia_engine.warmup()
@@ -108,9 +128,11 @@ def test_julia_bridge_warmup_full_executes_and_caches(monkeypatch):
 
     assert calls["minimal"] == 1
     assert calls["full"] == 1
+    assert calls["coverage"] == 1
     assert report_first["available"] is True
     assert report_first["mode"] == "full"
     assert report_first["cached"] is False
+    assert report_first["failed"] == {}
     assert report_second["cached"] is True
 
 

@@ -238,7 +238,7 @@ def test_compute_torsion_detects_rp2_z2_torsion():
     res = rep.results[-1]                      # threshold where the whole complex is present
     assert res["torsion"].get(1) == [2]        # H_1(RP^2; Z) = Z/2
     md = rep.to_markdown()
-    assert "Integer Torsion Report" in md
+    assert "Torsion H_1" in md
     assert "Z/2" in md
 
 
@@ -247,12 +247,12 @@ def test_compute_torsion_default_off_and_torsion_free():
     pts = _circle(14)
     off = RipsFiltrationReport(pts, max_dimension=2, analyze_manifolds=False)
     assert all(r.get("torsion", {}) == {} for r in off.results)
-    assert "Integer Torsion Report" not in off.to_markdown()
+    assert "Torsion" not in off.to_markdown()
 
     on = RipsFiltrationReport(pts, max_dimension=2, analyze_manifolds=False,
                               compute_torsion=True, n_samples=6)
     assert all(r["torsion"] == {} for r in on.results)         # circle is torsion-free
-    assert "Integer Torsion Report" in on.to_markdown()
+    assert "Torsion" in on.to_markdown()
     # Betti table is unchanged by enabling torsion.
     assert _bagify(on.barcode) == _bagify(off.barcode)
 

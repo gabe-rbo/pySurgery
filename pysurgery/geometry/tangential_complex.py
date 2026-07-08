@@ -1,5 +1,6 @@
-"""Tangential Delaunay complex reconstruction (Boissonnat-Ghosh) for point clouds of
-arbitrary codimension.
+"""Tangential Delaunay complex reconstruction (Boissonnat-Ghosh).
+
+For point clouds of arbitrary codimension.
 
 Overview:
     Cocone/Tight Cocone (``pysurgery.geometry.reconstruction``) is specialized to surfaces
@@ -39,6 +40,7 @@ Common Workflows:
 
 from __future__ import annotations
 
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
@@ -46,6 +48,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 from scipy.spatial import Delaunay, cKDTree
 
+from ..bridge.julia_bridge import julia_engine
 from .intrinsic_dimension import local_pca_tangent_basis, local_pca_tangent_space_dimension
 from .perturbation import intersect_local_stars, moser_tardos_repair
 
@@ -86,6 +89,8 @@ def _compute_all_local_stars(
     points: np.ndarray,
     bases: np.ndarray,
     neighborhood_size: int,
+    *,
+    backend: str = "auto",
 ) -> tuple[dict[int, set[frozenset[int]]], list[int]]:
     """Compute every point's local star, in parallel (each Qhull call is independent).
 
@@ -94,6 +99,13 @@ def _compute_all_local_stars(
         bases: (N, D, k) per-point tangent bases (see ``local_pca_tangent_basis``).
         neighborhood_size: Number of nearest neighbors (excluding the point itself) to
             include in each point's local Delaunay triangulation.
+        backend: ``"auto"`` (default), ``"julia"``, or ``"python"``. Julia is only ever
+            attempted when ``k == 2`` (DelaunayTriangulation.jl, the library used, is a 2D
+            triangulator; for ``k != 2`` this always uses the SciPy/``ThreadPoolExecutor``
+            path below, regardless of ``backend``). A differently-chosen diagonal on a
+            near-cocircular local neighborhood between the two triangulators is expected, not
+            a bug -- see ``tangential_complex_reconstruction``'s docstring for why
+            ``intersect_local_stars``/``moser_tardos_repair`` already tolerate this.
 
     Returns:
         tuple[dict[int, set[frozenset[int]]], list[int]]: ``(local_stars, failed_points)``
@@ -101,21 +113,56 @@ def _compute_all_local_stars(
         whose local Delaunay call itself failed (degenerate neighborhood).
     """
     n = points.shape[0]
+    k = bases.shape[2]
     tree = cKDTree(points)
     k_query = min(neighborhood_size + 1, n)
     _, all_nbr_idx = tree.query(points, k=k_query)
     all_nbr_idx = np.atleast_2d(all_nbr_idx)
 
-    def _one(i: int):
+    nbr_idx_list: list[np.ndarray] = []
+    local_coords_list: list[np.ndarray] = []
+    for i in range(n):
         nbr_idx = all_nbr_idx[i]
         if nbr_idx[0] != i:
             nbr_idx = np.concatenate(([i], nbr_idx[nbr_idx != i]))
-        local_coords = (points[nbr_idx] - points[i]) @ bases[i]
-        star, ok = _local_star(nbr_idx, local_coords)
+        nbr_idx_list.append(nbr_idx)
+        local_coords_list.append((points[nbr_idx] - points[i]) @ bases[i])
+
+    backend_norm = str(backend).lower().strip()
+    use_julia = k == 2 and ((backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available))
+    if use_julia:
+        try:
+            offsets = np.zeros(n + 1, dtype=np.int64)
+            for i in range(n):
+                offsets[i + 1] = offsets[i] + len(nbr_idx_list[i])
+            flat_global_idx = np.concatenate(nbr_idx_list).astype(np.int64)
+            flat_coords = np.concatenate(local_coords_list, axis=0)
+
+            star_flat, star_offsets, ok_arr = julia_engine.compute_tangential_local_stars_2d(
+                flat_global_idx, flat_coords, offsets
+            )
+            local_stars: dict[int, set[frozenset[int]]] = {}
+            failed_points: list[int] = []
+            for i in range(n):
+                lo, hi = int(star_offsets[i]), int(star_offsets[i + 1])
+                star = set()
+                for t in range(lo, hi):
+                    star.add(frozenset((int(star_flat[3 * t]), int(star_flat[3 * t + 1]), int(star_flat[3 * t + 2]))))
+                local_stars[i] = star
+                if not bool(ok_arr[i]):
+                    failed_points.append(i)
+            return local_stars, failed_points
+        except Exception as e:
+            if backend_norm == "julia":
+                raise
+            warnings.warn(f"Julia backend failed for tangential local stars, falling back to Python: {e!r}")
+
+    def _one(i: int):
+        star, ok = _local_star(nbr_idx_list[i], local_coords_list[i])
         return i, star, ok
 
-    local_stars: dict[int, set[frozenset[int]]] = {}
-    failed_points: list[int] = []
+    local_stars = {}
+    failed_points = []
     with ThreadPoolExecutor() as executor:
         for i, star, ok in executor.map(_one, range(n)):
             local_stars[i] = star
@@ -129,9 +176,11 @@ def _tangential_conflict_vertices(
     surviving: set[frozenset[int]],
     failed_points: list[int],
 ) -> list[int]:
-    """Vertices ``tangential_complex_reconstruction``'s repair loop should perturb: points
-    whose own local Delaunay call failed outright, plus every vertex of a simplex some --
-    but not all -- of its own vertices' local stars kept."""
+    """Identify vertices that tangential_complex_reconstruction's repair loop should perturb.
+
+    Specifically, points whose own local Delaunay call failed outright, plus every
+    vertex of a simplex some -- but not all -- of its own vertices' local stars kept.
+    """
     all_candidates: set = set()
     for local in local_stars.values():
         all_candidates.update(local)
@@ -181,6 +230,7 @@ def tangential_complex_reconstruction(
     max_repair_rounds: int = 250,
     perturbation_scale: Optional[float] = None,
     seed: int = 0,
+    backend: str = "auto",
 ) -> TangentialComplexResult:
     """Reconstruct a ``k``-dimensional simplicial complex from a point cloud in R^d.
 
@@ -248,6 +298,17 @@ def tangential_complex_reconstruction(
             should try explicitly widening this rather than only raising
             ``max_repair_rounds``.
         seed: Passed through to ``moser_tardos_repair``.
+        backend: ``"auto"`` (default), ``"julia"``, or ``"python"``, passed through to
+            ``_compute_all_local_stars`` for the per-point local-Delaunay/star step (step 3
+            above). Julia acceleration here is only ever available for ``k == 2``: it uses
+            DelaunayTriangulation.jl, a 2D-only triangulator, so for any other ``k`` this
+            parameter has no effect and the existing SciPy/``ThreadPoolExecutor`` path always
+            runs. When it does apply, expect *more* (not fewer) of the near-cocircular
+            diagonal-choice disagreements described above, since the two triangulators (Qhull
+            vs. DelaunayTriangulation.jl) do not always break a near-tie the same way --
+            ``intersect_local_stars``/``moser_tardos_repair`` already reconcile this class of
+            disagreement regardless of which triangulator produced it, so it does not change
+            the correctness of the final result, only (possibly) the repair round count.
 
     Returns:
         TangentialComplexResult: The reconstructed simplices and full diagnostics.
@@ -293,7 +354,9 @@ def tangential_complex_reconstruction(
 
     def _detect_conflicts(cur_pts):
         basis_result = local_pca_tangent_basis(cur_pts, k=k, neighborhood_size=neighborhood_size)
-        local_stars, failed_points = _compute_all_local_stars(cur_pts, basis_result.bases, neighborhood_size)
+        local_stars, failed_points = _compute_all_local_stars(
+            cur_pts, basis_result.bases, neighborhood_size, backend=backend
+        )
         surviving, stats = intersect_local_stars(local_stars)
         state["basis_result"] = basis_result
         state["local_stars"] = local_stars

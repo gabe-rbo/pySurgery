@@ -1,0 +1,40 @@
+# Controls sdist contents (the wheel is unaffected -- it's already scoped
+# correctly by [tool.setuptools.packages.find]'s `include = ["pysurgery*"]`).
+# Ship only what's needed to install and use pysurgery from source; keep
+# development-only material (tests, scripts, docs, examples, notes, tool/IDE
+# config, etc.) in the git repository but out of the PyPI release.
+
+include LICENSE
+include README.md
+include CITATION.cff
+
+prune tests
+prune scripts
+prune docs
+prune documentation
+prune examples
+prune experiments
+prune logo
+prune memory
+prune scratch
+prune build
+prune dist
+prune .github
+prune .claude
+prune .idea
+prune .antigravitycli
+prune .CondaPkg
+prune .pysurgery
+prune .hypothesis
+prune .pytest_cache
+prune .ruff_cache
+prune venv
+prune .venv
+
+exclude Project.toml
+exclude Manifest.toml
+exclude .gitignore
+
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store

@@ -156,8 +156,76 @@ class TestBackendConsistency:
         
         sc_py = SimplicialComplex.from_crust_algorithm(points, backend="python")
         sc_jl = SimplicialComplex.from_crust_algorithm(points, backend="julia")
-        
+
         assert sorted(sc_py.simplices) == sorted(sc_jl.simplices)
+
+    def test_from_distance_matrix_consistency(self):
+        """Verify distance-matrix Vietoris-Rips construction across backends.
+
+        What is Being Computed?:
+            A VR complex built from a precomputed (N, N) distance matrix rather
+            than point coordinates.
+
+        Algorithm:
+            1. Build a distance matrix from 20 random 3D points.
+            2. Construct the complex with both backends.
+            3. Assert identical simplex sets.
+        """
+        rng = np.random.default_rng(42)
+        points = rng.random((20, 3))
+        from scipy.spatial.distance import pdist, squareform
+        dist_mat = squareform(pdist(points))
+
+        sc_py = SimplicialComplex.from_distance_matrix(dist_mat, epsilon=0.5, max_dimension=2, backend="python")
+        sc_jl = SimplicialComplex.from_distance_matrix(dist_mat, epsilon=0.5, max_dimension=2, backend="julia")
+
+        assert sorted(sc_py.simplices) == sorted(sc_jl.simplices)
+
+    def test_from_delaunay_rips_consistency(self):
+        """Verify Delaunay-Rips complex construction and values across backends.
+
+        What is Being Computed?:
+            The Delaunay triangulation tagged with longest-edge (Rips) appearance
+            values.
+
+        Algorithm:
+            1. Define 15 random 2D points.
+            2. Construct the Delaunay-Rips complex with both backends.
+            3. Assert identical simplex sets and per-simplex filtration values.
+        """
+        rng = np.random.default_rng(7)
+        points = rng.random((15, 2))
+
+        sc_py = SimplicialComplex.from_delaunay_rips(points, max_dimension=2, backend="python")
+        sc_jl = SimplicialComplex.from_delaunay_rips(points, max_dimension=2, backend="julia")
+
+        assert sorted(sc_py.simplices) == sorted(sc_jl.simplices)
+        for s, v in sc_py.filtration.items():
+            assert s in sc_jl.filtration
+            assert abs(v - sc_jl.filtration[s]) < 1e-9
+
+    def test_from_delaunay_cech_consistency(self):
+        """Verify Delaunay-Cech complex construction and values across backends.
+
+        What is Being Computed?:
+            The Delaunay triangulation tagged with minimum-enclosing-ball (Cech)
+            appearance values.
+
+        Algorithm:
+            1. Define 15 random 2D points.
+            2. Construct the Delaunay-Cech complex with both backends.
+            3. Assert identical simplex sets and per-simplex filtration values.
+        """
+        rng = np.random.default_rng(11)
+        points = rng.random((15, 2))
+
+        sc_py = SimplicialComplex.from_delaunay_cech(points, max_dimension=2, backend="python")
+        sc_jl = SimplicialComplex.from_delaunay_cech(points, max_dimension=2, backend="julia")
+
+        assert sorted(sc_py.simplices) == sorted(sc_jl.simplices)
+        for s, v in sc_py.filtration.items():
+            assert s in sc_jl.filtration
+            assert abs(v - sc_jl.filtration[s]) < 1e-9
 
     def test_compute_optimal_h1_basis_consistency(self):
         """Verify optimal homology basis computation consistency.

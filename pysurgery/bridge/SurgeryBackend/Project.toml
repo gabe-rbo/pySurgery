@@ -1,0 +1,37 @@
+name = "SurgeryBackend"
+uuid = "7e7add94-b7d2-4577-b60d-50cddf9f414e"
+authors = ["pySurgery"]
+version = "0.1.0"
+
+# Local (path/dev) package developed into the juliacall-managed environment via
+# `pysurgery/bridge/juliapkg.json`. Making the backend a real precompiled package
+# -- rather than `include()`ing it as a bare script -- means its
+# `PrecompileTools.@compile_workload` block (in src/SurgeryBackend.jl) actually
+# runs: Julia executes it in a separate, pure-Julia precompile subprocess and
+# caches the resulting *native* code (pkgimages) to disk. The Python/juliacall
+# process then just loads that cache, so it never performs the back-to-back
+# first-time JIT compilations under the GIL that used to deadlock warmup().
+#
+# `[deps]` mirrors every `using`/`import` in src/SurgeryBackend.jl, INCLUDING the
+# geometric packages that the module loads lazily via `@eval using ...`
+# (Graphs / SimpleWeightedGraphs / DelaunayTriangulation). As a package, a
+# runtime `using X` resolves only through this package's own `[deps]`, so those
+# must be declared here (they are already provisioned by juliapkg.json). UUIDs
+# are copied verbatim from juliapkg.json; PythonCall's is its well-known UUID.
+# No `[compat]` is declared on purpose: this package shares the juliacall-managed
+# project, so every dependency (notably PythonCall, which juliacall pins to an
+# exact version) must resolve to whatever that environment already provides.
+[deps]
+AbstractAlgebra = "c3fe647b-3220-5bb0-a1ea-a7954cac585d"
+Combinatorics = "861a8166-3701-5b0c-9a16-15d98fcdc6aa"
+DelaunayTriangulation = "927a84f5-c5f4-47a5-9785-b46e178433df"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+IntegerSmithNormalForm = "17272adc-a42e-4be8-afd0-5a751f607cdd"
+KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
+PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SimpleWeightedGraphs = "47aef6b3-ad0c-573a-a1e2-d07658019622"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"

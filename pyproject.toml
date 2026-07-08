@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pysurgery"
-version = "2.4.2"
+version = "2.4.3"
 description = "A high-performance Python library for Computational Surgery Theory."
 dependencies = [
     "numpy>=2.4.4",
@@ -83,9 +83,14 @@ python_files = ["test_*.py"]
 
 [tool.setuptools.package-data]
 "*" = ["*.jl", "*.yaml", "*.json"]
+# The Julia backend now ships as a precompiled package under a non-package
+# subdirectory of pysurgery/bridge, so the top-level "*.jl" glob (which only
+# matches files directly inside a Python package) misses it. List its files
+# explicitly so the wheel/sdist carry the package manifest and source.
+"pysurgery.bridge" = ["SurgeryBackend/Project.toml", "SurgeryBackend/src/*.jl"]
 
 [tool.bumpversion]
-current_version = "2.4.2"
+current_version = "2.4.3"
 commit = true
 tag = true
 

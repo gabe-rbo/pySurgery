@@ -71,6 +71,22 @@ class JuliaBridge:
         "SimpleWeightedGraphs",
         "DelaunayTriangulation",
     )
+    # Known-good floors for packages where an older-but-already-present
+    # version is broken, so a bare `Pkg.add(name)` (a no-op once a package
+    # is present at all, regardless of version) would never self-heal.
+    # SimpleWeightedGraphs < 1.5 depends on the deprecated LightGraphs.jl
+    # (a different UUID from Graphs.jl) instead of Graphs.jl itself, so
+    # `SimpleWeightedGraph <: Graphs.AbstractGraph` is false there and
+    # optgen_from_simplices's `dijkstra_shortest_paths` call fails with a
+    # MethodError. Both `_ensure_julia_packages` and `install_dependencies`
+    # enforce these via `_enforce_minimum_versions`, which forces an
+    # explicit-version `Pkg.add` (unlike a bare `Pkg.add(name)`, this does
+    # upgrade an already-present package) whenever the resolved version is
+    # below floor.
+    _MIN_JULIA_VERSIONS = {
+        "Graphs": "1.14",
+        "SimpleWeightedGraphs": "1.5",
+    }
 
     _instance = None
     _lock = threading.RLock()
@@ -143,10 +159,38 @@ class JuliaBridge:
             else:
                 self._ensure_julia_packages(verbose=False)
             
+            # Prefer the precompiled SurgeryBackend package. It is dev-developed
+            # into the juliacall-managed environment by juliapkg (see
+            # juliapkg.json) and precompiled once, in a separate pure-Julia
+            # subprocess, where its PrecompileTools.@compile_workload block runs
+            # and caches native code (pkgimages) to disk. Loading it here just
+            # mmaps that cache, so this GIL-holding process never performs the
+            # back-to-back first-time JIT compilations that previously deadlocked
+            # warmup() (Julia JIT vs. Python GIL; see the warmup deadlock report).
+            #
+            # If the package cannot be loaded for any reason (juliapkg not yet
+            # resolved, a missing optional geometric dependency blocking
+            # precompilation, an uninstalled source checkout, ...), fall back to
+            # include()ing the source directly. That path reproduces the
+            # pre-package behavior exactly -- including graceful degradation when
+            # optional packages are absent -- so this change can only add the
+            # fast, deadlock-free path, never remove the old one.
             backend_script = os.path.join(
-                os.path.dirname(__file__), "surgery_backend.jl"
+                os.path.dirname(__file__),
+                "SurgeryBackend",
+                "src",
+                "SurgeryBackend.jl",
             )
-            self.jl.include(backend_script)
+            try:
+                self.jl.seval("import SurgeryBackend")
+            except Exception as pkg_err:
+                warnings.warn(
+                    "Precompiled SurgeryBackend package unavailable "
+                    f"({pkg_err!r}); falling back to include()ing the source. "
+                    "Warm-up will JIT-compile kernels in-process.",
+                    stacklevel=2,
+                )
+                self.jl.include(backend_script)
             self.jl.seval("import SparseArrays")
             self.backend = self.jl.SurgeryBackend
             self._available = True
@@ -248,8 +292,22 @@ class JuliaBridge:
                 if verbose:
                     print(f"[pySurgery] Optional packages failed (non-critical): {e!r}")
 
+        # Force-upgrade any already-present package below its known-good
+        # floor (see _MIN_JULIA_VERSIONS). Detection above only catches
+        # packages that are entirely absent (`find_package === nothing`) --
+        # an old-but-present version is invisible to it, so a stale
+        # environment resolved before a floor was raised would otherwise
+        # never self-heal.
+        try:
+            self.jl.eval("import Pkg")
+        except Exception:
+            pass
+        version_report = self._enforce_minimum_versions(
+            self.jl, required_packages + optional_packages, verbose=verbose
+        )
+
         # Precompile (best-effort, improves startup time)
-        if missing_required or missing_optional:
+        if missing_required or missing_optional or version_report["upgraded"]:
             try:
                 if verbose:
                     print("[pySurgery] Precompiling Julia packages (may take a minute)...")
@@ -261,6 +319,87 @@ class JuliaBridge:
                     print("[pySurgery] Precompilation skipped or failed (non-critical)")
         elif verbose:
             print("[pySurgery] All Julia packages already installed")
+
+    def _enforce_minimum_versions(
+        self, jl, packages: List[str], verbose: bool = False
+    ) -> Dict[str, Any]:
+        """Force-upgrade packages below their floor in `_MIN_JULIA_VERSIONS`.
+
+        `Pkg.add("Name")` (used elsewhere in this module to install anything
+        entirely missing) is a no-op when the package is already present,
+        regardless of how old that version is. This checks each candidate's
+        actually-resolved version and only calls
+        `Pkg.add(PackageSpec(name=..., version=...))` -- which does force
+        Pkg to re-resolve and upgrade -- for ones genuinely below floor (or
+        whose version can't be determined, e.g. a prior install attempt
+        failed).
+
+        Args:
+            jl: Julia ``Main`` handle with ``Pkg`` already ``import``ed.
+            packages: Candidate package names; only ones with an entry in
+                `_MIN_JULIA_VERSIONS` are considered, others are skipped.
+            verbose: Print progress messages.
+
+        Returns:
+            ``{"upgraded": [pkg, ...], "failed": {pkg: err, ...}}``, where
+            ``"upgraded"`` lists only packages that actually needed action.
+        """
+        result: Dict[str, Any] = {"upgraded": [], "failed": {}}
+        candidates = [p for p in packages if p in self._MIN_JULIA_VERSIONS]
+        if not candidates:
+            return result
+
+        installed_versions: Dict[str, str] = {}
+        try:
+            raw = str(jl.seval(
+                'join(["$(info.name)=$(info.version)" for (_, info) in '
+                'Pkg.dependencies() if info.version !== nothing], ",")'
+            ))
+            for entry in raw.split(","):
+                name, sep, ver = entry.partition("=")
+                if sep:
+                    installed_versions[name] = ver
+        except Exception:
+            pass  # Fall through and attempt every candidate below.
+
+        for pkg in candidates:
+            floor = self._MIN_JULIA_VERSIONS[pkg]
+            current = installed_versions.get(pkg)
+            if current is not None and self._version_ge(current, floor):
+                continue
+            try:
+                jl.seval(
+                    f'Pkg.add(Pkg.PackageSpec(name="{pkg}", version="{floor}"))'
+                )
+                result["upgraded"].append(pkg)
+                if verbose:
+                    print(f"[pySurgery] Upgraded {pkg} {current or '(unknown)'} -> >={floor}")
+            except Exception as exc:
+                result["failed"][pkg] = repr(exc)
+                if verbose:
+                    print(f"[pySurgery] Failed to enforce {pkg} >= {floor}: {exc!r}")
+        return result
+
+    @staticmethod
+    def _version_ge(version: str, floor: str) -> bool:
+        """Compare two dotted version strings numerically, component-wise.
+
+        Args:
+            version: The version to check, e.g. ``"1.14.0"``.
+            floor: The minimum required version, e.g. ``"1.5"``.
+
+        Returns:
+            True if ``version`` is greater than or equal to ``floor``.
+        """
+
+        def _parts(v: str) -> tuple:
+            out = []
+            for p in v.split("."):
+                digits = "".join(ch for ch in p if ch.isdigit())
+                out.append(int(digits) if digits else 0)
+            return tuple(out)
+
+        return _parts(version) >= _parts(floor)
 
     def install_dependencies(
         self,
@@ -288,8 +427,11 @@ class JuliaBridge:
             verbose: Print progress messages.
 
         Returns:
-            A report dict: ``{"installed": [...], "failed": {pkg: err}, ...,
-            "precompiled": bool, "available": bool}``.
+            A report dict: ``{"installed": [...], "upgraded": [...],
+            "failed": {pkg: err}, "precompiled": bool, "available": bool}``.
+            ``"upgraded"`` lists packages that were already present but
+            below their floor in ``_MIN_JULIA_VERSIONS`` and were forced to
+            a newer version.
         """
         if not HAS_JULIACALL:
             raise RuntimeError(
@@ -308,7 +450,13 @@ class JuliaBridge:
 
         required = list(self._REQUIRED_JULIA_PACKAGES)
         packages = required + (list(self._OPTIONAL_JULIA_PACKAGES) if optional else [])
-        report: dict = {"installed": [], "failed": {}, "precompiled": False, "available": False}
+        report: dict = {
+            "installed": [],
+            "upgraded": [],
+            "failed": {},
+            "precompiled": False,
+            "available": False,
+        }
 
         def _add(pkgs: list[str]) -> None:
             """Batch-add; on failure fall back to per-package to isolate the bad one."""
@@ -331,6 +479,16 @@ class JuliaBridge:
             if verbose:
                 print(f"[pySurgery] Installing Julia packages: {', '.join(packages)}")
             _add(packages)
+
+            # `_add` above is `Pkg.add([names...])`, a no-op for packages
+            # already present -- even below a floor in `_MIN_JULIA_VERSIONS`
+            # added after the environment was last resolved. Force those up
+            # explicitly so this actually repairs a stale environment
+            # rather than only filling in what's entirely missing.
+            version_report = self._enforce_minimum_versions(jl, packages, verbose=verbose)
+            report["upgraded"] = version_report["upgraded"]
+            if version_report["failed"]:
+                report["failed"].update(version_report["failed"])
 
             if precompile and not report["failed"]:
                 try:
@@ -570,6 +728,38 @@ class JuliaBridge:
                 ),
             ),
             (
+                # The fused Delaunay-Rips / Delaunay-Cech build + reduce paths, plus
+                # their lighter simplices-only counterparts. Same small square with
+                # Delaunay top simplices as alpha_filtration above.
+                "delaunay_restricted_filtration",
+                lambda: (
+                    self.compute_delaunay_rips_filtration(
+                        np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+                                 dtype=np.float64),
+                        np.array([[0, 1, 2], [1, 2, 3]], dtype=np.int64),
+                        2,
+                    ),
+                    self.compute_delaunay_cech_filtration(
+                        np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+                                 dtype=np.float64),
+                        np.array([[0, 1, 2], [1, 2, 3]], dtype=np.int64),
+                        2,
+                    ),
+                    self.compute_delaunay_rips_simplices(
+                        np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+                                 dtype=np.float64),
+                        np.array([[0, 1, 2], [1, 2, 3]], dtype=np.int64),
+                        2,
+                    ),
+                    self.compute_delaunay_cech_simplices(
+                        np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+                                 dtype=np.float64),
+                        np.array([[0, 1, 2], [1, 2, 3]], dtype=np.int64),
+                        2,
+                    ),
+                ),
+            ),
+            (
                 # The implicit-cohomology Rips engine (Phase B), used for high
                 # max_dimension. Warm it on a small tetrahedral cloud at max_dim=3
                 # so its first real call does not pay the JIT cost.
@@ -648,6 +838,9 @@ class JuliaBridge:
                     # hot path; compile it here so the first filtration report does
                     # not pay its JIT cost.
                     self.compute_vietoris_rips(np.array([[0,0,0], [1,0,0], [0,1,0], [0,0,1]], dtype=float), 1.5, 2),
+                    self.compute_vietoris_rips_from_distance_matrix(
+                        np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]], dtype=float), 1.5, 2
+                    ),
                     self.simplify_jl([(0, 1), (1, 2), (0, 2)])
                 ),
             ),
@@ -765,6 +958,42 @@ class JuliaBridge:
             combined = np.array([[0, 1, 2], [1, 2, 3], [0, 1, 4]], dtype=np.int64)
             self.compute_crust_simplices(pts, combined, 4)
 
+        def _voronoi_poles():
+            pts = np.array([[0., 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float64)
+            vor_vertices = np.array([[0.5, 0.5, 0.5], [-0.5, -0.5, -0.5]], dtype=np.float64)
+            cell_vertex_lists = [[0, 1], [0], [0], [0]]
+            self.compute_voronoi_poles(pts, vor_vertices, cell_vertex_lists)
+
+        def _cocone_filter():
+            pts = np.array([[0., 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [0.25, 0.25, -1.0]],
+                           dtype=np.float64)
+            tets = np.array([[0, 1, 2, 3], [0, 1, 2, 4]], dtype=np.int64)
+            normals = np.array([[0., 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1]], dtype=np.float64)
+            pole_radius = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float64)
+            self.compute_cocone_filter(pts, tets, normals, pole_radius, np.deg2rad(40.0), 0.6)
+
+        def _prune_and_walk():
+            pts = np.array([[0., 0, 0], [1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]],
+                           dtype=np.float64)
+            # Two candidate triangles at vertex 0: a clean fan (fast path) plus a
+            # 3rd triangle at vertex 1 to also exercise the slow angular-walk path.
+            tris = np.array([[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1], [1, 2, 3]],
+                            dtype=np.int64)
+            normals = np.array([[0., 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1]],
+                               dtype=np.float64)
+            self.compute_prune_and_walk(pts, tris, normals)
+
+        def _tangential_local_stars():
+            # 2 disjoint 4-point neighborhoods (offsets splits them): each is a
+            # small square with its own center point first (local index 0/1).
+            flat_global_idx = np.array([0, 1, 2, 3, 4, 5, 6, 7], dtype=np.int64)
+            flat_coords = np.array([
+                [0., 0], [1, 0], [0, 1], [1, 1],
+                [0., 0], [1, 0], [0, 1], [1, 1],
+            ], dtype=np.float64)
+            offsets = np.array([0, 4, 8], dtype=np.int64)
+            self.compute_tangential_local_stars_2d(flat_global_idx, flat_coords, offsets)
+
         return [
             ("exact_snf_certificates", _exact_snf_certs),
             ("alpha_witness_morse", _alpha_witness_morse),
@@ -773,6 +1002,10 @@ class JuliaBridge:
             ("surgery_linking", _surgery_linking),
             ("surgery_handle_attach", _surgery_handle),
             ("crust_simplices", _crust),
+            ("voronoi_poles", _voronoi_poles),
+            ("cocone_filter", _cocone_filter),
+            ("prune_and_walk", _prune_and_walk),
+            ("tangential_local_stars", _tangential_local_stars),
         ]
 
     def compute_normal_surface_residual_norms(
@@ -921,13 +1154,42 @@ class JuliaBridge:
                 "failed": {},
                 "cached": False,
             }
-            for name, workload in workloads:
-                try:
-                    print(f"[julia_engine.warmup() :: WARMING UP] {name}")
-                    workload()
-                    report["completed"].append(name)
-                except Exception as exc:
-                    report["failed"][name] = repr(exc)
+            # Defer PythonCall's Python-object finalizations for the duration of
+            # the warm-up loop. The precompiled SurgeryBackend package moved all
+            # heavy kernel compilation into a GIL-free precompile subprocess, but
+            # the thin Python<->Julia boundary specializations still JIT here,
+            # in-process, under the GIL: juliacall passes zero-copy PyArray/Py
+            # argument types that only exist once Python is running, so they
+            # cannot be precompiled ahead of time. That JIT is the last place the
+            # historic warm-up deadlock could form -- compilation allocates,
+            # which triggers a Julia GC, whose PythonCall finalizer hook tries to
+            # DecRef queued Python objects, which needs the very GIL the blocked
+            # main thread is holding. Disabling PythonCall's GC queues those
+            # frees instead of running them under the GIL, removing the deadlock
+            # precondition. This is the safe lever (unlike releasing the GIL,
+            # which these pyconvert-calling kernels cannot tolerate) and its cost
+            # is bounded -- warm-up inputs are tiny, and enable()+gc() drains the
+            # queue immediately after. Best-effort: older PythonCall lacks it.
+            _pc_gc_disabled = False
+            try:
+                self.jl.seval("PythonCall.GC.disable()")
+                _pc_gc_disabled = True
+            except Exception:
+                pass
+            try:
+                for name, workload in workloads:
+                    try:
+                        print(f"[julia_engine.warmup() :: WARMING UP] {name}")
+                        workload()
+                        report["completed"].append(name)
+                    except Exception as exc:
+                        report["failed"][name] = repr(exc)
+            finally:
+                if _pc_gc_disabled:
+                    try:
+                        self.jl.seval("PythonCall.GC.enable(); PythonCall.GC.gc()")
+                    except Exception:
+                        pass
 
             # Explicitly delete trash variables generated during warmup to free memory
             workloads.clear()
@@ -2024,6 +2286,45 @@ class JuliaBridge:
         )
         return [list(tri) for tri in triangles]
 
+    def compute_tangential_local_stars_2d(
+        self, flat_global_idx: np.ndarray, flat_coords: np.ndarray, offsets: np.ndarray
+    ) -> tuple:
+        """Per-point local-star construction (k=2 only) via DelaunayTriangulation.jl.
+
+        Args:
+            flat_global_idx: (M,) flattened global point indices of every
+                point's local neighborhood (CSR-style, see ``offsets``); each
+                neighborhood's own center point is at its own first position.
+            flat_coords: (M, 2) flattened tangent-projected local
+                coordinates, row-aligned with ``flat_global_idx``.
+            offsets: (N + 1,) CSR offsets into the two flat arrays above.
+
+        Returns:
+            A tuple ``(star_flat, star_offsets, ok)``: ``ok[i]`` is False iff
+            point ``i``'s own local triangulation failed outright;
+            ``star_flat``/``star_offsets`` are a CSR-style (offsets in units
+            of triangles) list of each point's own local star, as 0-based
+            global-index triples.
+
+        Raises:
+            RuntimeError: If the Julia call fails (including when
+                DelaunayTriangulation.jl itself is not installed).
+        """
+        self.require_julia()
+        try:
+            star_flat, star_offsets, ok = self.backend.compute_tangential_local_stars_2d_jl(
+                np.ascontiguousarray(flat_global_idx, dtype=np.int64),
+                np.ascontiguousarray(flat_coords, dtype=np.float64),
+                np.ascontiguousarray(offsets, dtype=np.int64),
+            )
+            return (
+                np.asarray(star_flat, dtype=np.int64),
+                np.asarray(star_offsets, dtype=np.int64),
+                np.asarray(ok, dtype=bool),
+            )
+        except Exception as e:
+            raise RuntimeError(f"compute_tangential_local_stars_2d failed: {e!r}")
+
     def orthogonal_procrustes(self, A: np.ndarray, B: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
         """Solves the orthogonal Procrustes problem using Julia.
 
@@ -2433,6 +2734,8 @@ class JuliaBridge:
             max_dim: Maximum simplex dimension to build.
             analyze_manifolds: If True, run the per-threshold manifold analysis in Julia.
             n_samples: If given, select this many thresholds from distinct values.
+            verify_manifold_only_at_betti_change: If True, check manifold criteria only when Betti numbers change.
+            track_connected_components: If True, track connected components.
 
         Returns:
             A dict with keys:
@@ -2513,6 +2816,8 @@ class JuliaBridge:
             analyze_manifolds: If True, run the per-threshold manifold analysis in Julia.
             n_samples: If given, select this many thresholds from distinct values.
             eps_max: If given, maximum filtration value to include.
+            verify_manifold_only_at_betti_change: If True, check manifold criteria only when Betti numbers change.
+            track_connected_components: If True, track connected components.
 
         Returns:
             A dict with keys:
@@ -2574,6 +2879,227 @@ class JuliaBridge:
         except Exception as e:
             raise RuntimeError(f"compute_alpha_filtration failed: {e!r}")
 
+    def _compute_delaunay_restricted_filtration(
+        self,
+        kernel_name: str,
+        points: np.ndarray,
+        top_simplices: np.ndarray,
+        max_dim: int,
+        analyze_manifolds: bool,
+        n_samples: Optional[int],
+        eps_max: Optional[float],
+        verify_manifold_only_at_betti_change: bool,
+        track_connected_components: bool,
+    ) -> dict:
+        """Shared payload assembly for the Delaunay-Rips/Cech fused kernels.
+
+        Both ``compute_delaunay_rips_filtration`` and
+        ``compute_delaunay_cech_filtration`` call the same Julia entry-point
+        shape (see ``compute_alpha_filtration``) and build an identical payload
+        dict; only the Julia function name differs.
+        """
+        self.require_julia()
+        try:
+            backend_fn = getattr(self.backend, kernel_name)
+            res = backend_fn(
+                np.ascontiguousarray(points, dtype=np.float64),
+                np.ascontiguousarray(top_simplices, dtype=np.int64),
+                int(max_dim),
+                bool(analyze_manifolds),
+                n_samples,
+                float(eps_max) if eps_max is not None else None,
+                bool(verify_manifold_only_at_betti_change),
+                bool(track_connected_components),
+            )
+            bar_dim, bar_birth, bar_death, eps_values, dim_ids, dim_first_val, _dim_count, total = res[0:8]
+            dims = np.asarray(bar_dim, dtype=np.int64).tolist()
+            births = np.asarray(bar_birth, dtype=np.float64).tolist()
+            deaths = np.asarray(bar_death, dtype=np.float64).tolist()
+            barcode = list(zip(dims, births, deaths))
+
+            ids = np.asarray(dim_ids, dtype=np.int64).tolist()
+            firsts = np.asarray(dim_first_val, dtype=np.float64).tolist()
+            payload = {
+                "barcode": barcode,
+                "eps_values": np.asarray(eps_values, dtype=np.float64).tolist(),
+                "dim_first_appear": {int(d): float(f) for d, f in zip(ids, firsts)},
+                "total": int(total),
+            }
+
+            if len(res) > 8 and res[8]:
+                payload["manifold_data"] = {
+                    "epsilons": np.asarray(res[9], dtype=np.float64).tolist(),
+                    "is_manifold": np.asarray(res[10], dtype=bool).tolist(),
+                    "dimensions": np.asarray(res[11], dtype=np.int64).tolist(),
+                    "is_closed": np.asarray(res[12], dtype=bool).tolist(),
+                    "failures": np.asarray(res[13], dtype=np.int64).tolist(),
+                }
+                if len(res) > 14 and len(res[14]) > 0:
+                    comp_keys = [np.asarray(x, dtype=np.int64).tolist() for x in res[14]]
+                    comp_vals = [list(x) for x in res[15]]
+                    payload["component_data"] = [dict(zip(k, v)) for k, v in zip(comp_keys, comp_vals)]
+                else:
+                    payload["component_data"] = None
+            else:
+                payload["manifold_data"] = None
+                payload["component_data"] = None
+
+            return payload
+        except Exception as e:
+            raise RuntimeError(f"{kernel_name} failed: {e!r}")
+
+    def compute_delaunay_rips_filtration(
+        self,
+        points: np.ndarray,
+        top_simplices: np.ndarray,
+        max_dim: int,
+        analyze_manifolds: bool = False,
+        n_samples: Optional[int] = None,
+        eps_max: Optional[float] = None,
+        verify_manifold_only_at_betti_change: bool = False,
+        track_connected_components: bool = False,
+    ) -> dict:
+        """Fused Delaunay-restricted Rips build + longest-edge values + Z2 persistence in Julia.
+
+        Structurally identical to ``compute_alpha_filtration`` (same Delaunay
+        face-enumeration step), but each face's appearance value is the longest
+        edge among its own vertices rather than a circumradius/Gabriel test --
+        so, unlike Alpha, no coface propagation is needed.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            top_simplices: (M, D + 1) array of Delaunay top simplices (vertex indices).
+            max_dim: Maximum simplex dimension to build.
+            analyze_manifolds: If True, run the per-threshold manifold analysis in Julia.
+            n_samples: If given, select this many thresholds from distinct values.
+            eps_max: If given, maximum filtration value to include.
+            verify_manifold_only_at_betti_change: If True, check manifold criteria only when Betti numbers change.
+            track_connected_components: If True, track connected components.
+
+        Returns:
+            A dict with the same keys as ``compute_alpha_filtration``'s payload.
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        return self._compute_delaunay_restricted_filtration(
+            "compute_delaunay_rips_filtration", points, top_simplices, max_dim,
+            analyze_manifolds, n_samples, eps_max,
+            verify_manifold_only_at_betti_change, track_connected_components,
+        )
+
+    def compute_delaunay_cech_filtration(
+        self,
+        points: np.ndarray,
+        top_simplices: np.ndarray,
+        max_dim: int,
+        analyze_manifolds: bool = False,
+        n_samples: Optional[int] = None,
+        eps_max: Optional[float] = None,
+        verify_manifold_only_at_betti_change: bool = False,
+        track_connected_components: bool = False,
+    ) -> dict:
+        """Fused Delaunay-restricted Cech build + min-enclosing-ball values + Z2 persistence in Julia.
+
+        Structurally identical to ``compute_alpha_filtration`` (same Delaunay
+        face-enumeration step), but each face's appearance value is its own
+        minimum-enclosing-ball radius (Welzl's algorithm) rather than a
+        circumradius/Gabriel test -- so, unlike Alpha, no coface propagation is
+        needed.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            top_simplices: (M, D + 1) array of Delaunay top simplices (vertex indices).
+            max_dim: Maximum simplex dimension to build.
+            analyze_manifolds: If True, run the per-threshold manifold analysis in Julia.
+            n_samples: If given, select this many thresholds from distinct values.
+            eps_max: If given, maximum filtration value to include.
+            verify_manifold_only_at_betti_change: If True, check manifold criteria only when Betti numbers change.
+            track_connected_components: If True, track connected components.
+
+        Returns:
+            A dict with the same keys as ``compute_alpha_filtration``'s payload.
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        return self._compute_delaunay_restricted_filtration(
+            "compute_delaunay_cech_filtration", points, top_simplices, max_dim,
+            analyze_manifolds, n_samples, eps_max,
+            verify_manifold_only_at_betti_change, track_connected_components,
+        )
+
+    def compute_delaunay_rips_simplices(
+        self, points: np.ndarray, top_simplices: np.ndarray, max_dim: int
+    ) -> dict:
+        """Delaunay-restricted Rips simplices and longest-edge values via Julia backend.
+
+        Lighter counterpart to ``compute_delaunay_rips_filtration``: returns every
+        face (up to ``max_dim``) of the Delaunay triangulation given by
+        ``top_simplices``, tagged with its Rips (longest-edge) appearance value,
+        without running persistence -- for callers building a ``.filtration`` map
+        directly (``SimplicialComplex.from_delaunay_rips``) rather than a barcode.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            top_simplices: (M, D + 1) array of Delaunay top simplices.
+            max_dim: Maximum simplex dimension to return.
+
+        Returns:
+            A dict mapping each simplex (sorted vertex tuple) to its Rips value.
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        self.require_julia()
+        try:
+            cliques, vals = self.backend.compute_delaunay_rips_simplices_jl(
+                np.ascontiguousarray(points, dtype=np.float64),
+                np.ascontiguousarray(top_simplices, dtype=np.int64),
+                int(max_dim),
+            )
+            simplices = [tuple(sorted(int(x) for x in s)) for s in cliques]
+            values = [float(v) for v in vals]
+            return dict(zip(simplices, values))
+        except Exception as e:
+            raise RuntimeError(f"compute_delaunay_rips_simplices failed: {e!r}")
+
+    def compute_delaunay_cech_simplices(
+        self, points: np.ndarray, top_simplices: np.ndarray, max_dim: int
+    ) -> dict:
+        """Delaunay-restricted Cech simplices and min-enclosing-ball values via Julia backend.
+
+        Lighter counterpart to ``compute_delaunay_cech_filtration``: returns every
+        face (up to ``max_dim``) of the Delaunay triangulation given by
+        ``top_simplices``, tagged with its Cech (min-enclosing-ball radius)
+        appearance value, without running persistence -- for callers building a
+        ``.filtration`` map directly (``SimplicialComplex.from_delaunay_cech``)
+        rather than a barcode.
+
+        Args:
+            points: (N, D) array of point coordinates.
+            top_simplices: (M, D + 1) array of Delaunay top simplices.
+            max_dim: Maximum simplex dimension to return.
+
+        Returns:
+            A dict mapping each simplex (sorted vertex tuple) to its Cech value.
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        self.require_julia()
+        try:
+            cliques, vals = self.backend.compute_delaunay_cech_simplices_jl(
+                np.ascontiguousarray(points, dtype=np.float64),
+                np.ascontiguousarray(top_simplices, dtype=np.int64),
+                int(max_dim),
+            )
+            simplices = [tuple(sorted(int(x) for x in s)) for s in cliques]
+            values = [float(v) for v in vals]
+            return dict(zip(simplices, values))
+        except Exception as e:
+            raise RuntimeError(f"compute_delaunay_cech_simplices failed: {e!r}")
+
     def compute_rips_cohomology(
         self,
         points: np.ndarray,
@@ -2602,6 +3128,8 @@ class JuliaBridge:
             max_dim: Maximum simplex dimension; H_d computed for d in 0..max_dim.
             analyze_manifolds: If True, run the per-threshold manifold analysis in Julia.
             n_samples: If given, select this many thresholds from distinct values.
+            verify_manifold_only_at_betti_change: If True, check manifold criteria only when Betti numbers change.
+            track_connected_components: If True, track connected components.
 
         Returns:
             The payload dict described above.
@@ -2721,6 +3249,145 @@ class JuliaBridge:
         except Exception as e:
             raise RuntimeError(f"compute_crust_simplices failed: {e!r}")
 
+    def compute_voronoi_poles(
+        self, points: np.ndarray, vor_vertices: np.ndarray, cell_vertex_lists: list
+    ) -> tuple:
+        """Per-point Voronoi pole selection (Amenta-Bern) via Julia backend.
+
+        Lighter counterpart wiring for ``estimate_voronoi_poles``: the Voronoi
+        diagram itself is computed by ``scipy.spatial.Voronoi`` in Python (no
+        Julia Voronoi implementation exists); only the per-point argmax-distance
+        positive-pole and opposite-side negative-pole numeric loop runs in Julia.
+
+        Args:
+            points: (N, 3) array of the original (unpadded) point coordinates.
+            vor_vertices: (V, 3) array, the full Voronoi diagram's vertex
+                coordinates (``scipy.spatial.Voronoi.vertices``).
+            cell_vertex_lists: Length-N list of lists; ``cell_vertex_lists[i]``
+                is the (already ``-1``-filtered) Voronoi vertex indices bounding
+                point ``i``'s cell.
+
+        Returns:
+            A tuple ``(positive_pole, negative_pole, has_negative_pole, normal,
+            pole_radius, status)`` of NumPy arrays, shapes ``(N, 3)``, ``(N, 3)``,
+            ``(N,)``, ``(N, 3)``, ``(N,)``, ``(N,)`` respectively. ``status`` is
+            0 (pole and opposite pole both found), 1 (empty cell), 2
+            (degenerate/zero-radius cell), or 3 (pole found, no opposite pole).
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        self.require_julia()
+        try:
+            flat, offsets = self._flatten_simplices(cell_vertex_lists)
+            pos, neg, has_neg, normal, radius, status = self.backend.compute_voronoi_poles_jl(
+                np.ascontiguousarray(points, dtype=np.float64),
+                np.ascontiguousarray(vor_vertices, dtype=np.float64),
+                flat,
+                offsets,
+            )
+            return (
+                np.asarray(pos, dtype=np.float64),
+                np.asarray(neg, dtype=np.float64),
+                np.asarray(has_neg, dtype=bool),
+                np.asarray(normal, dtype=np.float64),
+                np.asarray(radius, dtype=np.float64),
+                np.asarray(status, dtype=np.int8),
+            )
+        except Exception as e:
+            raise RuntimeError(f"compute_voronoi_poles failed: {e!r}")
+
+    def compute_cocone_filter(
+        self,
+        points: np.ndarray,
+        tetrahedra: np.ndarray,
+        normals: np.ndarray,
+        pole_radius: np.ndarray,
+        theta: float,
+        reach_fraction: float,
+    ) -> tuple:
+        """Cocone angle + pole-reach filter (Amenta-Choi-Dey-Leekha) via Julia backend.
+
+        Fused counterpart to ``cocone_filter``: builds the facet-to-tetrahedra
+        map, computes every tetrahedron's circumcenter, and runs the angle and
+        reach filters, all in one Julia call.
+
+        Args:
+            points: (N + S, 3) array of point coordinates (original points
+                followed by any sentinels), as in ``cocone_filter``.
+            tetrahedra: (M, 4) int array of Delaunay tetrahedra over ``points``.
+            normals: (N, 3) array of per-point pole normal estimates.
+            pole_radius: (N,) array of per-point pole radii.
+            theta: Cocone half-angle.
+            reach_fraction: Minimum pole-radius fraction the dual edge must reach.
+
+        Returns:
+            A tuple ``(surviving_triangles, n_candidates)``: a list of 0-based
+            ``(v0, v1, v2)`` vertex-index tuples, and the total number of
+            distinct all-original-vertex candidate facets considered.
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        self.require_julia()
+        try:
+            surviving, n_candidates = self.backend.compute_cocone_filter_jl(
+                np.ascontiguousarray(points, dtype=np.float64),
+                np.ascontiguousarray(tetrahedra, dtype=np.int64),
+                np.ascontiguousarray(normals, dtype=np.float64),
+                np.ascontiguousarray(pole_radius, dtype=np.float64),
+                float(theta),
+                float(reach_fraction),
+            )
+            triangles = [tuple(sorted(int(v) for v in s)) for s in surviving]
+            return triangles, int(n_candidates)
+        except Exception as e:
+            raise RuntimeError(f"compute_cocone_filter failed: {e!r}")
+
+    def compute_prune_and_walk(
+        self, points: np.ndarray, triangles: np.ndarray, normals: np.ndarray
+    ) -> tuple:
+        """Per-vertex prune-and-walk manifold-forcing step via Julia backend.
+
+        Fused, per-vertex-parallel counterpart to ``prune_and_walk``: each
+        vertex's local link graph, the fast-path single-path-or-cycle check,
+        and the tangent-plane angular walk, all in one (per-vertex threaded)
+        Julia call.
+
+        Args:
+            points: (N, 3) array of point coordinates.
+            triangles: (T, 3) int array of candidate triangles (0-based
+                vertex indices), typically ``cocone_filter``'s surviving
+                triangles.
+            normals: (N, 3) array of per-point pole normal estimates.
+
+        Returns:
+            A tuple ``(vertex_ids, status, n_kept_edges, kept_flat,
+            kept_offsets)`` -- see ``compute_prune_and_walk_jl``'s docstring
+            for the exact per-vertex status code meanings and the CSR
+            (``kept_flat``/``kept_offsets``) convention for each vertex's
+            locally-kept triangles.
+
+        Raises:
+            RuntimeError: If the Julia call fails.
+        """
+        self.require_julia()
+        try:
+            vertex_ids, status, n_kept_edges, kept_flat, kept_offsets = self.backend.compute_prune_and_walk_jl(
+                np.ascontiguousarray(points, dtype=np.float64),
+                np.ascontiguousarray(triangles, dtype=np.int64),
+                np.ascontiguousarray(normals, dtype=np.float64),
+            )
+            return (
+                np.asarray(vertex_ids, dtype=np.int64),
+                np.asarray(status, dtype=np.int8),
+                np.asarray(n_kept_edges, dtype=np.int64),
+                np.asarray(kept_flat, dtype=np.int64),
+                np.asarray(kept_offsets, dtype=np.int64),
+            )
+        except Exception as e:
+            raise RuntimeError(f"compute_prune_and_walk failed: {e!r}")
+
     def compute_witness_complex_simplices(self, points: np.ndarray, landmarks_idx: np.ndarray, alpha: float, max_dim: int) -> list[tuple[int, ...]]:
         """Compute Witness Complex 1-skeleton via Julia backend.
 
@@ -2766,6 +3433,36 @@ class JuliaBridge:
             return [tuple(sorted(int(v) for v in s)) for s in res]
         except Exception as e:
             raise RuntimeError(f"compute_vietoris_rips failed: {e!r}")
+
+    def compute_vietoris_rips_from_distance_matrix(
+        self, distance_matrix: np.ndarray, epsilon: float, max_dim: int
+    ) -> list[tuple[int, ...]]:
+        """Compute a Vietoris-Rips complex from a precomputed distance matrix via Julia backend.
+
+        Unlike ``compute_vietoris_rips`` (which computes pairwise distances from point
+        coordinates), this reads distances directly from an (N, N) matrix -- for a
+        precomputed or non-Euclidean distance matrix, or simply to avoid re-deriving
+        distances a caller already has, without paying the O(N^2) NumPy edge-extraction
+        cost of the pure-Python path on large N.
+
+        Args:
+            distance_matrix: (N, N) symmetric distance matrix.
+            epsilon: Distance threshold.
+            max_dim: Maximum dimension.
+
+        Returns:
+            A list of simplex tuples.
+        """
+        self.require_julia()
+        try:
+            res = self.backend.compute_vietoris_rips_from_distance_matrix(
+                np.ascontiguousarray(distance_matrix, dtype=np.float64),
+                float(epsilon),
+                int(max_dim)
+            )
+            return [tuple(sorted(int(v) for v in s)) for s in res]
+        except Exception as e:
+            raise RuntimeError(f"compute_vietoris_rips_from_distance_matrix failed: {e!r}")
 
     def is_homology_manifold_jl(self, simplices: list[list[int]], max_dim: int) -> tuple[bool, int, dict[int, str]]:
         """Accelerated manifold certification in Julia.
