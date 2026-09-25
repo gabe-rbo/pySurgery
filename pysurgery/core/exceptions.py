@@ -655,3 +655,48 @@ class ReconstructionRepairError(SurgeryError):
 
 
 
+
+
+class NoFundamentalClassError(SurgeryError):
+    """Raised when a complex has no (single) integer fundamental class.
+
+    Overview:
+        ``pysurgery.topology.fundamental_cycles`` extracts the fundamental cycle of a
+        closed orientable pseudomanifold by coherent orientation. It refuses -- rather
+        than return a cycle whose class is not the one the caller will assume -- when a
+        hypothesis fails, and the message names it: simplices above dimension p (the
+        sum of the p-simplices may then be a boundary), branching or boundary
+        (p-1)-faces, several strongly connected components (use
+        ``fundamental_cycles``), or non-orientability (no integer fundamental cycle;
+        over F_2 there still is one).
+    """
+
+    pass
+
+
+class UndefinedInvariantError(SurgeryError):
+    """Raised instead of returning a number the configuration does not support.
+
+    Overview:
+        A question with no answer gets a refusal, never a number: a linking number
+        outside the complementary-dimension window p + q = m - 1, the winding number
+        of a point lying on the cycle, Milnor's triple linking number when a pairwise
+        linking number is nonzero (it then lives only modulo their gcd).
+    """
+
+    pass
+
+
+class NonGenericConfigurationError(SurgeryError):
+    """Raised when no certified generic choice exists, or the objects (nearly) meet.
+
+    Overview:
+        Geometric invariants (linking and winding numbers, knot diagrams) are computed
+        from one ray, cone apex or projection that is CERTIFIED generic -- every
+        intersection transverse and interior by a relative margin. When the objects
+        themselves (numerically) intersect, no choice helps and the invariant is
+        undefined; when a fixed deterministic sequence of candidates is exhausted, the
+        computation refuses rather than vote over degenerate choices.
+    """
+
+    pass

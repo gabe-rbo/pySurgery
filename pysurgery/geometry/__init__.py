@@ -207,6 +207,65 @@ def __getattr__(name):
             SpaceBlock,
         )
         return locals()[name]
+    if name in [
+        "in_convex_hull",
+        "hull_fraction",
+        "integer_cycle_generators",
+        "winding_against_all",
+        "is_mod2_cycle",
+        "crossing_parity",
+        "EnclosureCertificate",
+        "enclosure_report",
+    ]:
+        from .enclosure import (  # noqa: F401
+            in_convex_hull,
+            hull_fraction,
+            integer_cycle_generators,
+            winding_against_all,
+            is_mod2_cycle,
+            crossing_parity,
+            EnclosureCertificate,
+            enclosure_report,
+        )
+        return locals()[name]
+    if name in [
+        "tangent_frames",
+        "transport",
+        "knn_graph",
+        "OrientationReport",
+        "orientation_report",
+        "holonomy_along",
+        "rotation_angles",
+        "rotation_angle",
+        "fundamental_loops",
+        "HolonomyReport",
+        "holonomy_report",
+    ]:
+        from .holonomy import (  # noqa: F401
+            tangent_frames,
+            transport,
+            knn_graph,
+            OrientationReport,
+            orientation_report,
+            holonomy_along,
+            rotation_angles,
+            rotation_angle,
+            fundamental_loops,
+            HolonomyReport,
+            holonomy_report,
+        )
+        return locals()[name]
+    if name in [
+        "connectivity_radius",
+        "federer_reach",
+        "ScaleWindow",
+    ]:
+        from .scale_window import (  # noqa: F401
+            connectivity_radius,
+            federer_reach,
+            ScaleWindow,
+        )
+        return locals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -284,4 +343,26 @@ __all__ = [
     "immersion_obstruction_analysis",
     "PointCloud",
     "SpaceBlock",
+    "in_convex_hull",
+    "hull_fraction",
+    "integer_cycle_generators",
+    "winding_against_all",
+    "is_mod2_cycle",
+    "crossing_parity",
+    "EnclosureCertificate",
+    "enclosure_report",
+    "tangent_frames",
+    "transport",
+    "knn_graph",
+    "OrientationReport",
+    "orientation_report",
+    "holonomy_along",
+    "rotation_angles",
+    "rotation_angle",
+    "fundamental_loops",
+    "HolonomyReport",
+    "holonomy_report",
+    "connectivity_radius",
+    "federer_reach",
+    "ScaleWindow",
 ]

@@ -191,6 +191,34 @@ result = lean_resolver.resolve_e_infinity_via_lean()
 ```
 
 
+### 6. Exact Invariants of Complexes and Embeddings
+Certificates checked at every simplex, and invariants that are integers or refusals.
+
+```python
+import numpy as np
+import pysurgery as ps
+
+# A triangulated torus: certify it at every simplex, then take its fundamental class
+K = ps.SimplicialComplex.from_simplices(torus_triangles)
+cert = K.certify_homology_manifold()          # closed homology 2-manifold => PL (n <= 3)
+z = ps.fundamental_cycle(K)                    # coherent orientation, d z = 0 verified
+assert not (K.boundary_matrix(2) @ z.as_chain(K)).any()
+
+# Contractibility certificates without homotopy groups
+print(K.is_strong_collapsible(), K.face_poset().is_contractible())
+
+# Morse theory of a height function: the Morse complex has the homology of K over Z
+V = ps.lower_star_gradient(K, heights)          # heights: one value per vertex
+print(V.morse_vector(), V.morse_homology())
+
+# Knots and links as polygons in R^3: exact integers from a certified projection
+t = np.linspace(0, 2 * np.pi, 300, endpoint=False)
+trefoil = np.c_[np.sin(t) + 2 * np.sin(2 * t), np.cos(t) - 2 * np.cos(2 * t), -np.sin(3 * t)]
+print(ps.casson_a2(trefoil))                                    # 1
+print(ps.link_group([trefoil]).count_homomorphisms(3).count)    # 12 (the unknot gives 6)
+print(ps.certify_knottedness(trefoil).verdict)                  # "knotted"
+```
+
 ### 7. Geometric Analysis & Immersion
 * **PL Embeddings:** High-performance $\mathcal{O}(N \log N)$ KDTree-bounded broad-phase and exact narrow-phase checks for piecewise-linear self-intersections and immersions.
 * **Intrinsic Dimension:** Hardware-accelerated manifold dimension estimators using Maximum Likelihood (Levina-Bickel), Two-NN, and Local PCA tangent-space approximations.
@@ -232,6 +260,18 @@ print(res.subcomplex(0.2).betti_numbers())       # Alpha(S, 0.2), no rebuild
 report = DualAlphaFiltrationReport(points, eps_max=0.5)
 print(report)                                    # barcode + Betti curve of the alpha filtration
 ```
+
+### 10. Exact Local, Combinatorial & Embedded Invariants
+Ported from TabularTopology. Every quantity below is exact (integers, or an explicit refusal), checked on every simplex / edge / pair with nothing sampled, and runs on both the Python and the Julia backend with identical results.
+* **Local Homology & Homology-Manifold Certificates:** $H_j(|K|, |K|-x) = \tilde H_{j-k-1}(\mathrm{lk}\,\sigma)$ at **every** simplex, each classified as sphere / acyclic / singular relative to $n$. `certify_homology_manifold` checks the definition everywhere (closed, or with a boundary that must itself be a closed homology $(n-1)$-manifold), finds pinch points, branching faces and dangling pieces that vertex-link checks miss, and returns the singular set and the boundary complex.
+* **Fundamental Cycles & Orientability:** Coherent orientation over the dual graph gives the integer fundamental class of every strong component of a closed pseudomanifold ($\partial z = 0$ verified exactly), a $\mathbb{Z}$-basis of $H_n$, the $\mathbb{F}_2$ classes, and named refusals (boundary, branching, simplices above dimension $n$, non-orientability). Plugs straight into the Poincaré-duality cap-product machinery.
+* **Finite Spaces & Strong Homotopy:** Finite $T_0$ spaces (face posets, order complexes), Stong cores (exact contractibility), weak points, quotients with $T_0$ reflection, McCord's fibre certificate, and Barmak-Minian strong collapses of complexes (dominated vertices) - a certificate that $|K|$ is contractible.
+* **Lower-Star Discrete Morse Theory:** Robins-Wood-Sheppard gradients from a vertex function (lower stars processed in parallel in Julia), the signed Morse complex as a `ChainComplex` (homology over $\mathbb{Z}$, torsion included), gradient-path counts, Forman / algebraic cancellation classes, and $\mathbb{Z}/2$ lower-star persistence with the creating and destroying simplices.
+* **Exact Geometric Linking & Enclosure:** Winding numbers of $(m-1)$-cycles and linking numbers of a $p$- and a $q$-cycle in any $\mathbb{R}^m$ ($p+q=m-1$) as intersection counts with a certified generic ray / cone - integers, not Riemann sums. Enclosure of point sets by codimension-1 complexes (Alexander duality) with the even-odd rule as an independent check.
+* **Certified Knot Diagrams & Link Complements:** Crossings of closed polygons in a certified generic projection; writhe, the Casson invariant $a_2$ (Polyak-Viro), diagrammatic linking matrices, Milnor's $\bar\mu(123)$ via the Magnus expansion; the Wirtinger presentation of $\pi_1(S^3 - L)$ as a `FundamentalGroup`, exact $|\mathrm{Hom}(G, S_n)|$ counts for any finitely presented group (`FundamentalGroup.count_homomorphisms`), and split / non-split / knotted / unknotted certificates that say "undetermined" rather than guess.
+* **Holonomy & Scale:** Discrete Levi-Civita transport of local-PCA frames, orientability of a sampled manifold decided over every cycle of the graph (orientation double cover, with a reliability flag per edge), holonomy angles (Gauss-Bonnet checked), Federer's reach over every pair and the Niyogi-Smale-Weinberger scale window.
+
+See `docs/topological_invariants.md` for the mathematics, conventions and refusals of each module.
 
 ---
 
@@ -411,6 +451,14 @@ The algorithms and constructs implemented in **pySurgery** are rigorously ground
 *   **Surface Classification:** Radó, T. (1925). Über den Begriff der Riemannschen Fläche. *Acta Litt. Sci. Szeged*, 2, 101-121.
 *   **Suspension Theorem:** Freudenthal, H. (1937). Über die Klassen von Abbildungen der $n$-dimensionalen Sphären auf die $k$-dimensionale Sphäre. *Compositio Mathematica*, 5, 299-314.
 *   **Toda Brackets:** Toda, H. (1962). *Composition methods in homotopy groups of spheres*. Princeton University Press.
+*   **Local Homology of Polyhedra:** Munkres, J. R. (1984). *Elements of algebraic topology*. Addison-Wesley (Lemma 63.1).
+*   **Boundaries of Homology Manifolds:** Mitchell, W. J. R. (1990). Defining the boundary of a homology manifold. *Proceedings of the American Mathematical Society*, 110(2), 509-513.
+*   **Finite Spaces:** Stong, R. E. (1966). Finite topological spaces. *Transactions of the American Mathematical Society*, 123(2), 325-340.
+*   **Weak Homotopy of Finite Spaces:** McCord, M. C. (1966). Singular homology groups and homotopy groups of finite topological spaces. *Duke Mathematical Journal*, 33(3), 465-474.
+*   **Strong Homotopy Types:** Barmak, J. A., & Minian, E. G. (2012). Strong homotopy types, nerves and collapses. *Discrete & Computational Geometry*, 47(2), 301-328.
+*   **Link Groups:** Milnor, J. (1954). Link groups. *Annals of Mathematics*, 59(2), 177-195.
+*   **Gauss Diagram Formulas:** Polyak, M., & Viro, O. (1994). Gauss diagram formulas for Vassiliev invariants. *International Mathematics Research Notices*, 1994(11), 445-453.
+*   **Reach of a Set:** Federer, H. (1959). Curvature measures. *Transactions of the American Mathematical Society*, 93(3), 418-491.
 
 ### Computational Implementation & Optimization
 
@@ -437,6 +485,9 @@ The algorithms and constructs implemented in **pySurgery** are rigorously ground
 *   **TwoNN Estimator:** Facco, E., d’Errico, M., Rodriguez, A., & Laio, A. (2017). Estimating the intrinsic dimension of datasets by a minimal neighborhood information. *Scientific Reports*, 7(1), 12140.
 *   **CkNN Graph:** Berry, T., & Sauer, T. (2016). Consistent manifold representation for topological data analysis. *Foundations of Data Science*, 1(1), 1-38.
 *   **QuickMapper:** Liu, Y., Xie, Z., & Yi, J. (2012). A fast algorithm for computing Mapper. *arXiv preprint arXiv:1209.4319*.
+*   **Lower-Star Discrete Gradients:** Robins, V., Wood, P. J., & Sheppard, A. P. (2011). Theory and algorithms for constructing discrete Morse complexes from grayscale digital images. *IEEE Transactions on Pattern Analysis and Machine Intelligence*, 33(8), 1646-1658.
+*   **Homology from Samples:** Niyogi, P., Smale, S., & Weinberger, S. (2008). Finding the homology of submanifolds with high confidence from random samples. *Discrete & Computational Geometry*, 39(1), 419-441.
+*   **Vector Diffusion Maps:** Singer, A., & Wu, H.-T. (2012). Vector diffusion maps and the connection Laplacian. *Communications on Pure and Applied Mathematics*, 65(8), 1067-1144.
 
 ---
 

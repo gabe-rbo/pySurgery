@@ -5287,6 +5287,11 @@ class SimplicialComplex(ChainComplex):
         fundamentally undecidable in general (ruling out exotic homology spheres such as the
         Poincare sphere needs more than homology, matching Novikov/Adian-Rabin).
 
+        See Also:
+            ``certify_homology_manifold`` checks the local homology of EVERY simplex (not
+            only vertex links) and the consistency of the boundary -- the definition of a
+            homology manifold, exactly, in every dimension.
+
         Args:
             backend: 'auto', 'julia', or 'python'.
 
@@ -5465,6 +5470,105 @@ class SimplicialComplex(ChainComplex):
             "Returning the underlying is_homology_manifold verdict with exact=False."
         )
         return PLManifoldCertificate(is_mani, detected_dim, diag, False)
+
+    def local_homology(self, simplex: Iterable[int], backend: str = "auto") -> Dict[int, Tuple[int, List[int]]]:
+        r"""Local homology :math:`H_j(|K|, |K| - x)` for x in the open simplex, exactly.
+
+        What is Being Computed?:
+            ``H_j(|K|, |K| - x) = H~_{j-k-1}(lk sigma)`` with ``k = dim sigma`` and the
+            convention ``H~_{-1}(empty) = Z``. See
+            :mod:`pysurgery.topology.local_homology`.
+
+        Args:
+            simplex: A simplex of the complex.
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            ``{j: (rank, torsion)}`` for the nonzero local homology groups.
+        """
+        from .local_homology import local_homology
+
+        return local_homology(self, simplex, backend=backend)
+
+    def certify_homology_manifold(self, n: int | None = None, backend: str = "auto"):
+        """Certify the complex is a homology n-manifold (closed or with boundary) at EVERY simplex.
+
+        What is Being Computed?:
+            The definition, checked everywhere: the link of every k-simplex must have the
+            reduced homology of S^(n-k-1) (interior) or be acyclic of dimension n-k-1
+            (boundary), and the boundary simplices must form a closed homology
+            (n-1)-manifold. Strictly stronger than :meth:`is_homology_manifold`, which
+            reads vertex links only: in dimension >= 3 a vertex link can have sphere
+            homology without being a homology manifold. See
+            :mod:`pysurgery.topology.local_homology`.
+
+        Args:
+            n: The dimension to certify against (default: the complex's dimension).
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            HomologyManifoldCertificate: The verdict, the singular simplices, the boundary
+            and the pseudomanifold conditions.
+        """
+        from .local_homology import certify_homology_manifold
+
+        return certify_homology_manifold(self, n, backend=backend)
+
+    def pseudomanifold_report(self, n: int | None = None):
+        """Pure, non-branching and strongly connected at dimension n.
+
+        Args:
+            n: The dimension (default: the complex's dimension).
+
+        Returns:
+            PseudomanifoldReport: The three combinatorial conditions and boundary counts.
+        """
+        from .local_homology import pseudomanifold_report
+
+        return pseudomanifold_report(self, n)
+
+    def face_poset(self):
+        """The face poset X(K) as a finite T0 space (McCord: X(K) is weakly equivalent to |K|).
+
+        Returns:
+            FiniteSpace: Simplices ordered by inclusion; see
+            :mod:`pysurgery.topology.finite_spaces`.
+        """
+        from .finite_spaces import FiniteSpace
+
+        return FiniteSpace.from_simplicial_complex(self)
+
+    def strong_collapse(self, backend: str = "auto"):
+        """Strong-collapse the complex to its strong core (Barmak-Minian).
+
+        What is Being Computed?:
+            Repeated deletion of dominated vertices (v is dominated by v' when every
+            maximal simplex through v contains v'). The strong core is unique up to
+            isomorphism; the complex is strong collapsible iff the core is a vertex iff
+            its face poset is contractible.
+
+        Args:
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            StrongCollapseResult: The core, the removal sequence and the verdict.
+        """
+        from .finite_spaces import strong_collapse
+
+        return strong_collapse(self, backend=backend)
+
+    def is_strong_collapsible(self, backend: str = "auto") -> bool:
+        """Whether the complex strong-collapses to a vertex (so |K| is contractible).
+
+        Args:
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            True iff the strong core is a single vertex.
+        """
+        from .finite_spaces import is_strong_collapsible
+
+        return is_strong_collapsible(self, backend=backend)
 
     def remove_simplices_impeding_manifold(self, backend: str = "auto", remove_vertices: bool = False) -> list[tuple[int, ...]]:
         """Remove simplices that prevent the complex from being a homology manifold.
