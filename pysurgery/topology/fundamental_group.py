@@ -1389,8 +1389,10 @@ def _pi1_raw_data_python(cw: CWComplex, backend: str = "auto"):
                     undirected_edge_path=[tuple(sorted(e)) for e in tr["undirected_edge_path"]]
                 ))
             
-            w1 = res.get("orientation_character", {g: 1 for g in res["generators"].values()})
-            return res["generators"], res["relations"], py_traces, {"generator_mode": "raw", "backend_used": "julia", "orientation_character": w1}
+            # Julia's Dict iterates in hash order; sort by edge index to match the Python path.
+            gen_map = dict(sorted(res["generators"].items()))
+            w1 = res.get("orientation_character", {g: 1 for g in gen_map.values()})
+            return gen_map, res["relations"], py_traces, {"generator_mode": "raw", "backend_used": "julia", "orientation_character": w1}
         except Exception as e:
             if backend == "julia":
                 raise e
@@ -1562,7 +1564,7 @@ def extract_pi_1_with_traces(
 
     Returns:
         Pi1PresentationWithTraces with fields:
-            - generators: List of generator symbols
+            - generators: List of generator symbols, ordered by 1-cell index (on every backend)
             - relations: List of relations (words)
             - traces: List of Pi1GeneratorTrace objects linking generators to 1-cells
             - mode_used, generator_mode: Records which mode was used
@@ -1659,7 +1661,8 @@ def extract_pi_1(
 
     Returns:
         FundamentalGroup: The presentation π₁(X) = ⟨generators | relations⟩ with orientation
-                         character (w₁) recording non-orientability info.
+                         character (w₁) recording non-orientability info. Generators are
+                         ordered by 1-cell index, independent of backend.
 
     Use When:
         - Need just the group structure, not spatial traces

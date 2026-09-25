@@ -3,8 +3,10 @@ import scipy.sparse as sp
 import pytest
 
 from discrete_surface_data import get_surfaces, get_3_manifolds, to_complex
+from pysurgery.bridge.julia_bridge import julia_engine
 from pysurgery.topology.fundamental_group import (
     extract_pi_1,
+    extract_pi_1_with_traces,
     simplify_presentation,
     infer_standard_group_descriptor,
     FundamentalGroup,
@@ -44,6 +46,33 @@ def test_extract_pi_1_rp2():
     assert len(pi.relations) == 1
     # generator 'a', relator 'aa'
     assert infer_standard_group_descriptor(pi) == "Z_2"
+
+
+@pytest.mark.parametrize(
+    "backend",
+    [
+        "python",
+        pytest.param(
+            "julia",
+            marks=pytest.mark.skipif(
+                not julia_engine.available, reason="Julia backend not available"
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("simplify", [False, True])
+def test_extract_pi_1_generators_in_edge_index_order(backend, simplify):
+    # Bouquet of 12 circles: every edge is a generator. n > 10 so a lexical
+    # sort ("g_10" < "g_2") would also fail. Julia returns a hash-ordered Dict.
+    n = 12
+    d1 = sp.csr_matrix(np.zeros((1, n), dtype=np.int64))
+    cw = CWComplex(cells={0: 1, 1: n}, attaching_maps={1: d1}, dimensions=[0, 1])
+    expected = [f"g_{i}" for i in range(n)]
+
+    pres = extract_pi_1_with_traces(cw, simplify=simplify, backend=backend)
+    assert pres.generators == expected
+    assert [t.generator for t in pres.traces] == expected
+    assert extract_pi_1(cw, simplify=simplify, backend=backend).generators == expected
 
 
 def test_simplify_presentation_trivial_loops():
