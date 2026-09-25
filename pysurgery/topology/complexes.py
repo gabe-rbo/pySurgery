@@ -66,6 +66,28 @@ def _parse_coefficient_ring(ring: str) -> tuple[str, int | None]:
     raise ValueError(f"Unsupported coefficient ring '{ring}'. Use 'Z', 'Q', or 'Z/pZ'.")
 
 
+def _gpu_backend_device(backend: Any) -> Optional[str]:
+    """Recognise the GPU homology backend label.
+
+    ``"gpu"`` selects :mod:`pysurgery.gpu.homology` on the automatically chosen
+    device; ``"gpu:<device>"`` (e.g. ``"gpu:cuda:1"``, ``"gpu:mps"``,
+    ``"gpu:cpu"``) pins the device.
+
+    Args:
+        backend: A backend label.
+
+    Returns:
+        ``None`` if ``backend`` is not a GPU label, ``""`` for automatic device
+        selection, or the device string.
+    """
+    b = str(backend).strip().lower()
+    if b == "gpu":
+        return ""
+    if b.startswith("gpu:"):
+        return b[4:].strip()
+    return None
+
+
 def _coerce_csr_matrix(matrix: csr_matrix | np.ndarray | list | tuple) -> csr_matrix:
     """Coerce sparse/dense matrix-like data to CSR with integer entries.
 
@@ -1492,6 +1514,30 @@ class ChainComplex(BaseModel):
         self._cache_set(key, out)
         return out
 
+    def _homology_gpu(self, n: int, device: Optional[str]) -> Tuple[int, List[int]]:
+        """Exact H_n on the GPU engine (:mod:`pysurgery.gpu.homology`).
+
+        Boundary-matrix invariants are memoised on the chain complex so that the
+        per-degree calls of ``homology()`` reduce every boundary matrix once.
+
+        Args:
+            n: Homological degree.
+            device: Device string, or None for automatic selection.
+
+        Returns:
+            A tuple (rank, torsion) over the complex's coefficient ring.
+        """
+        from pysurgery.gpu.homology import chain_complex_homology
+
+        key = ("chain", "gpu_boundary_invariants", device or "auto")
+        memo = self._cache_get(key) or {}
+        out = chain_complex_homology(
+            self.boundaries, self.cells, self.coefficient_ring, [int(n)],
+            device=device or None, _cache=memo,
+        )
+        self._cache_set(key, memo)  # the cache stores copies: write the memo back
+        return out[int(n)]
+
     def homology(
         self, n: int | None = None, backend: str = "auto"
     ) -> Tuple[int, List[int]] | Dict[int, Tuple[int, List[int]]]:
@@ -1517,7 +1563,9 @@ class ChainComplex(BaseModel):
         
         Args:
             n: Homological degree (int). If None, computes homology for all positive degrees.
-            backend: 'auto' (tries Julia, falls back to Python), 'julia', or 'python'.
+            backend: 'auto' (tries Julia, falls back to Python), 'julia', 'python', or
+                'gpu' / 'gpu:<device>' for the exact GPU engine of
+                :mod:`pysurgery.gpu.homology` (automatic or pinned device).
             approx: Whether to use approximate randomized SNF.
             n_primes: Number of primes for randomized SNF.
         
@@ -1553,6 +1601,12 @@ class ChainComplex(BaseModel):
             return cached
 
         ring_kind, p = _parse_coefficient_ring(self.coefficient_ring)
+
+        gpu_device = _gpu_backend_device(backend)
+        if gpu_device is not None:
+            out = self._homology_gpu(n, gpu_device)
+            self._cache_set(key, out)
+            return out
 
         if ring_kind == "ZMOD" and p is not None and not _is_prime(int(p)):
             r_n, t_n = self._homology_over_z(n, backend=backend)
@@ -2908,7 +2962,10 @@ class SimplicialComplex(ChainComplex):
             alpha: Distance threshold (circumradius).
             max_alpha_square: Squared distance threshold override.
             coefficient_ring: Coefficient ring label.
-            backend: 'auto', 'julia', or 'python'.
+            backend: 'auto', 'julia', 'python', or 'gpu' / 'gpu:<device>'. The GPU
+                backend builds the same complex without a Delaunay triangulation, by
+                the dual active-set QP (see ``from_dual_alpha_complex``), so it also
+                works in high ambient dimension.
 
         Returns:
             A SimplicialComplex instance.
@@ -2920,6 +2977,26 @@ class SimplicialComplex(ChainComplex):
         if pts.ndim != 2:
             raise ValueError("points must be a 2D array of coordinates.")
         n_pts, dim = pts.shape
+
+        gpu_device = _gpu_backend_device(backend)
+        if gpu_device is not None and n_pts <= 1:
+            sc = cls.from_simplices([[i] for i in range(n_pts)], coefficient_ring=coefficient_ring)
+            sc._coordinates = pts
+            return sc
+        if gpu_device is not None:
+            if max_alpha_square is not None:
+                radius = float(np.sqrt(float(max_alpha_square)))
+            elif alpha is not None:
+                radius = float(alpha)
+            else:
+                import warnings
+                from pysurgery.gpu.dual_alpha import connectivity_radius
+                radius = connectivity_radius(pts, device=gpu_device or None)
+                warnings.warn("No alpha provided. Defaulting to EMST maximum edge length to ensure "
+                              f"connectivity: radius {radius}.")
+            return cls.from_dual_alpha_complex(
+                points, radius, coefficient_ring=coefficient_ring, device=gpu_device or None
+            )
         if n_pts < dim + 1:
             sc = cls.from_simplices([[i] for i in range(n_pts)], coefficient_ring=coefficient_ring)
             sc._coordinates = pts
@@ -3000,6 +3077,77 @@ class SimplicialComplex(ChainComplex):
         sc._generate_point_cloud_mappings(pts)
         sc._link_point_cloud(points)
         return sc
+
+    @classmethod
+    def from_dual_alpha_complex(
+        cls,
+        points: Union[np.ndarray, "PointCloud"],
+        radius: float,
+        *,
+        max_dimension: Optional[int] = None,
+        power: Optional[np.ndarray] = None,
+        coefficient_ring: str = "Z",
+        device: Optional[str] = None,
+        max_simplices: Optional[int] = 2_000_000,
+        return_result: bool = False,
+        **kwargs: Any,
+    ) -> Union["SimplicialComplex", Any]:
+        """Alpha complex by the dual active-set QP on the GPU -- no Delaunay triangulation.
+
+        What is Being Computed?:
+            ``Alpha(S, radius)``: the nerve of the radius-restricted (power) Voronoi
+            diagram, with every simplex's alpha value stored on ``.filtration``
+            (radii), so the result is also the alpha *filtration* on ``[0, radius]``.
+            Membership is exact (gray-zone verdicts are decided in rational
+            arithmetic); see :mod:`pysurgery.gpu.dual_alpha`.
+
+        Algorithm:
+            Carlsson & Carlsson, arXiv:2310.00536, Algorithm 1: a certified Cech
+            graph on the device, then lazy candidates tested by batched dual
+            quadratic programs (one shared Gram matrix per vertex).
+
+        Preserved Invariants:
+            - Homotopy equivalent to the union of the radius-``radius`` balls
+              (nerve lemma), degenerate input included.
+            - Identical to the Delaunay-based alpha complex on points in general
+              position.
+
+        Args:
+            points: ``(N, m)`` coordinates (array or PointCloud); ``m`` may be large.
+            radius: The (cap) radius.
+            max_dimension: Top simplex dimension (``None``: until no candidate
+                survives -- a cap ``d`` makes ``beta_d`` an upper bound only).
+            power: Optional per-point weights (weighted alpha complex).
+            coefficient_ring: Coefficient ring label.
+            device: ``None`` for automatic GPU selection, or a device string.
+            max_simplices: Refuse beyond this many simplices (``None``: no guard).
+            return_result: Also return the full
+                :class:`~pysurgery.gpu.dual_alpha.DualAlphaResult` (weights,
+                witnesses, exact ``subcomplex(r)``) as ``(complex, result)``.
+            **kwargs: Forwarded to :func:`pysurgery.gpu.dual_alpha.dual_alpha_complex`
+                (``qp_device``, ``batch``, ``keep_witness``, ...).
+
+        Returns:
+            The SimplicialComplex, or ``(complex, result)`` with ``return_result``.
+
+        Use When:
+            - The ambient dimension is too high for a Delaunay triangulation.
+            - You need the alpha filtration values alongside the complex.
+
+        Example:
+            sc = SimplicialComplex.from_dual_alpha_complex(points, 0.4)
+            sc.homology(backend="gpu")
+        """
+        from pysurgery.gpu.dual_alpha import dual_alpha_complex
+
+        res = dual_alpha_complex(
+            points, radius, max_dimension, power=power, device=device,
+            max_simplices=max_simplices, coefficient_ring=coefficient_ring, **kwargs,
+        )
+        sc = res.complex
+        sc._generate_point_cloud_mappings(res.points)
+        sc._link_point_cloud(points)
+        return (sc, res) if return_result else sc
 
     @classmethod
     def from_crust_algorithm(
@@ -4754,7 +4902,8 @@ class SimplicialComplex(ChainComplex):
 
         Args:
             n: Optional homological degree to compute. If None, computes for all degrees.
-            backend: 'auto', 'julia', or 'python'.
+            backend: 'auto', 'julia', 'python', or 'gpu' / 'gpu:<device>' (exact
+                GPU engine, see :mod:`pysurgery.gpu.homology`).
 
         Returns:
             If n is provided: A tuple (rank, torsion).
