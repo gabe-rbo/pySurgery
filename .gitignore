@@ -197,3 +197,7 @@ experiments/
 .CondaPkg
 
 scratch
+
+# Design System
+pySurgery Design System/
+pySurgery Design System.zip

@@ -364,7 +364,7 @@ from .auto_surgery import (
 from . import integrations
 from . import gpu  # light: PyTorch is imported only when a GPU routine runs
 
-__version__ = "2.4.4"
+__version__ = "2.5.0"
                                 
 def __getattr__(name):
     if name == "JuliaBridge":

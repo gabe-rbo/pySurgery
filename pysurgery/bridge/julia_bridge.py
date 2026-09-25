@@ -1746,7 +1746,7 @@ class JuliaBridge:
         # Convert columns to list of vectors
         basis_py = []
         for j in range(basis_mat.shape[1]):
-            basis_py.append(basis_mat[:, j].astype(np.int64, copy=False))
+            basis_py.append(np.asarray(basis_mat[:, j], dtype=np.int64))
         return basis_py
 
     def compute_sparse_cohomology_basis_mod_p(
@@ -1799,7 +1799,7 @@ class JuliaBridge:
 
         basis_py = []
         for j in range(basis_mat.shape[1]):
-            basis_py.append(basis_mat[:, j].astype(np.int64, copy=False))
+            basis_py.append(np.asarray(basis_mat[:, j], dtype=np.int64))
         return basis_py
 
     def compute_boundary_payload_from_simplices(

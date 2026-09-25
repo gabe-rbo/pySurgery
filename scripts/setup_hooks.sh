@@ -7,8 +7,17 @@ git config push.followTags true
 # 2. Pre-commit Hook (Interactive Bump with Intent Tracking)
 cat << 'EOF' > .git/hooks/pre-commit
 #!/bin/bash
-exec < /dev/tty
-CUR_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+export PATH="$REPO_ROOT/.venv/bin:$HOME/.local/bin:$PATH"
+
+if [ -c /dev/tty ]; then
+    exec < /dev/tty 2>/dev/null || true
+fi
+
+CUR_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])" 2>/dev/null)
+if [ -z "$CUR_VERSION" ]; then
+    exit 0
+fi
 NEXT_PATCH=$(python3 -c "v = '$CUR_VERSION'.split('.'); v[2] = str(int(v[2]) + 1); print('.'.join(v))")
 NEXT_MINOR=$(python3 -c "v = '$CUR_VERSION'.split('.'); v[1] = str(int(v[1]) + 1); v[2] = '0'; print('.'.join(v))")
 NEXT_MAJOR=$(python3 -c "v = '$CUR_VERSION'.split('.'); v[0] = str(int(v[0]) + 1); v[1] = '0'; v[2] = '0'; print('.'.join(v))")
