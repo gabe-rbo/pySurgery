@@ -13,6 +13,7 @@ Use the concrete classes directly::
     RipsFiltrationReport(points)
     CknnFiltrationReport(points, k=8)
     AlphaFiltrationReport(points)
+    DualAlphaFiltrationReport(points, eps_max=0.5)   # GPU, no Delaunay
     DelaunayRipsFiltrationReport(points)
     DelaunayCechFiltrationReport(points)
     WitnessFiltrationReport(points, n_landmarks=50)
@@ -1735,6 +1736,86 @@ class AlphaFiltrationReport(_BaseFiltrationReport):
         return self._complex_from_values(SC, vals, pts, self.coefficient_ring), vals
 
 
+class DualAlphaFiltrationReport(_BaseFiltrationReport):
+    """Alpha filtration built on the GPU by the dual active-set QP (no Delaunay).
+
+    Overview:
+        The same filtration as :class:`AlphaFiltrationReport` -- every simplex enters
+        at its alpha value (a radius) -- but the maximal complex comes from
+        :func:`pysurgery.gpu.dual_alpha.dual_alpha_complex` instead of a Delaunay
+        triangulation, so the ambient dimension is not a direct cost (Delaunay stops
+        at about ``R^6``; this runs in ``R^192``). One build at the cap radius
+        ``eps_max`` yields the whole filtration on ``[0, eps_max]``; persistence,
+        Betti curves, manifold and torsion analysis then run on it exactly as for
+        every other report.
+
+    Key Concepts:
+        - **A cap is required**: the full alpha filtration of a finite set reaches
+          the whole Delaunay triangulation at large radii -- exactly what this method
+          avoids -- so the filtration is computed up to ``eps_max``. If ``eps_max``
+          is None, the cap is ``cap_factor`` (default 3) times the connectivity
+          radius (half the longest Euclidean-MST edge, at which the complex becomes
+          connected). Bars alive at the cap are reported as such.
+        - **Exact membership**: the QP's gray-zone verdicts are decided in rational
+          arithmetic; see :mod:`pysurgery.gpu.dual_alpha`.
+        - **Devices**: the QP runs on the automatically selected device (on Apple
+          MPS, the Cech graph runs on the GPU and the QP on the CPU in float64).
+
+    Args:
+        points: (N, D) array of point coordinates (D may be large).
+        epsilons: Explicit thresholds. If None, every distinct alpha value is used.
+        max_dimension: Maximum simplex dimension to build.
+        coefficient_ring: Coefficient ring (manifold/component path).
+        backend: 'auto', 'julia', 'python' (persistence reducer), or 'gpu' to also
+            route the exact integer homology of ``compute_torsion`` through
+            :mod:`pysurgery.gpu.homology`.
+        track_connected_components: Track per-component evolution.
+        n_samples: Number of evenly-spaced thresholds.
+        eps_max: The cap radius of the filtration.
+        analyze_manifolds: Run per-threshold homology-manifold check.
+        compute_torsion: Additionally compute exact integer homology.
+        manifold_analysis: Alias/override for analyze_manifolds.
+        **kwargs: ``device`` (compute device), ``cap_factor`` (default cap
+            multiplier), ``max_simplices`` (simplex budget, default 2,000,000),
+            ``batch`` and ``qp_device`` (forwarded to the solver).
+
+    Attributes:
+        radius_cap (float): The radius the filtration was built up to.
+        dual_alpha_result (DualAlphaResult): The solver's full result (weights,
+            witnesses, statistics, exact ``subcomplex(r)``).
+    """
+
+    param_label = "Alpha"
+    method_name = "Dual-Alpha"
+
+    def _build_maximal_and_values(self):
+        """Build the dual-alpha complex at the cap and read its alpha values (radii)."""
+        from pysurgery.gpu.dual_alpha import connectivity_radius, dual_alpha_complex
+        from pysurgery.topology.complexes import SimplicialComplex as SC
+
+        pts = self.points
+        device = self.kwargs.get("device")
+        if len(pts) <= 1:
+            vals = {(i,): 0.0 for i in range(len(pts))}
+            self.radius_cap = 0.0
+            self.dual_alpha_result = None
+            return self._complex_from_values(SC, vals, pts, self.coefficient_ring), vals
+        cap = self.eps_max
+        if cap is None:
+            r0 = connectivity_radius(pts, device=device)
+            cap = float(self.kwargs.get("cap_factor", 3.0)) * r0 if r0 > 0 else 1.0
+        solver_kw = {k: self.kwargs[k] for k in ("batch", "qp_device") if k in self.kwargs}
+        res = dual_alpha_complex(
+            pts, float(cap), self.max_dimension, device=device,
+            max_simplices=self.kwargs.get("max_simplices", 2_000_000),
+            keep_witness=False, coefficient_ring=self.coefficient_ring, **solver_kw,
+        )
+        self.radius_cap = float(cap)
+        self.dual_alpha_result = res
+        vals = res.filtration_values()
+        return self._complex_from_values(SC, vals, pts, self.coefficient_ring), vals
+
+
 class DelaunayRipsFiltrationReport(_BaseFiltrationReport):
     """Rips filtration restricted to Delaunay edges (longest-edge values).
 
@@ -1972,6 +2053,8 @@ _MODE_TO_CLASS = {
     "cknn": CknnFiltrationReport,
     "alpha": AlphaFiltrationReport,
     "delaunay": AlphaFiltrationReport,
+    "dual_alpha": DualAlphaFiltrationReport,
+    "gpu_alpha": DualAlphaFiltrationReport,
     "delaunay_rips": DelaunayRipsFiltrationReport,
     "delaunay_cech": DelaunayCechFiltrationReport,
     "witness": WitnessFiltrationReport,
@@ -2001,7 +2084,8 @@ def FiltrationReport(
         backend: 'auto', 'julia', or 'python'.
         track_connected_components: Track per-component evolution.
         mode: One of ``vietoris_rips``/``rips``, ``cknn``, ``alpha``/``delaunay``,
-            ``delaunay_rips``, ``delaunay_cech``, ``witness``.
+            ``dual_alpha``/``gpu_alpha`` (GPU, no Delaunay), ``delaunay_rips``,
+            ``delaunay_cech``, ``witness``.
         **kwargs: Method-specific options forwarded to the report class:
             - ``n_samples``: Number of evenly-spaced thresholds.
             - ``eps_max``: Cap for the parameter range.
@@ -2050,6 +2134,9 @@ def warm_all(points: Optional[Union[np.ndarray, "PointCloud"]] = None) -> Dict[s
         RipsFiltrationReport, CknnFiltrationReport, AlphaFiltrationReport,
         DelaunayRipsFiltrationReport, DelaunayCechFiltrationReport, WitnessFiltrationReport,
     ]
+    from pysurgery.gpu.device import HAS_TORCH
+    if HAS_TORCH:  # the GPU report needs the optional PyTorch dependency
+        report_classes.append(DualAlphaFiltrationReport)
     return {c.method_name: c.warmup(points) for c in report_classes}
 
 

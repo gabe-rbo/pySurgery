@@ -91,6 +91,7 @@ pySurgery features a flexible backend architecture that allows users to prioriti
 * **`backend='julia'`**: Native integration with the Julia engine. Recommended for massive SNF reductions and high-dimensional manifold classification.
 * **`backend='auto'` (Default)**: Automatically detects and leverages the most efficient engine available (Julia > Python).
 * **`backend='jax'`**: Specifically used for continuous metric evaluations and differentiable topological approximations.
+* **`backend='gpu'`** (or `'gpu:<device>'`): Exact homology on the GPU via PyTorch (`complex.homology(backend="gpu")`), and the Delaunay-free dual-alpha construction (`SimplicialComplex.from_alpha_complex(points, r, backend="gpu")`). The device is chosen automatically (CUDA → Apple MPS → Intel XPU → CPU); see [GPU Engines](#9-gpu-engines-pytorch).
 
 ---
 
@@ -203,6 +204,35 @@ result = lean_resolver.resolve_e_infinity_via_lean()
 * **PyTorch Geometric:** Bridging topological complexes to graph neural network (GNN) architectures.
 * **Trimesh:** Direct import of 3D asset geometries into rigorous CW/Simplicial complexes.
 
+### 9. GPU Engines (PyTorch)
+The `pysurgery.gpu` package is pure Python on top of PyTorch (optional: `pip install torch`, or `pip install "pysurgery[ml]"`). Every routine runs on the **automatically selected device** — CUDA (the GPU with the most free memory when there are several), then Apple-Silicon MPS, then Intel XPU, then the CPU. Pin it per call with `device="cuda:1"` / `backend="gpu:mps"`, or for a whole session with `export PYSURGERY_DEVICE=cuda:1`; `pysurgery.gpu.describe_device()` shows the choice. Importing pySurgery never imports torch.
+
+* **Dual-Alpha Complexes** (`pysurgery.gpu.dual_alpha`): the alpha complex by the dual active-set quadratic program of Carlsson & Carlsson (arXiv:2310.00536) — **no Delaunay triangulation**, so the ambient dimension is not a direct cost (Delaunay stops near $\mathbb{R}^6$; this runs in $\mathbb{R}^{192}$). Each candidate simplex is a small convex QP attacked through its Lagrangian dual, which only ever sees Gram matrices; candidates sharing a vertex share one Gram matrix and are solved as one batch on the GPU. Membership is **exact**: floating point decides only verdicts that clear a margin, and ties, degenerate or flat simplices are decided by the same active set in exact rational arithmetic (validated simplex for simplex against CGAL's exact alpha complex, and against pySurgery's Delaunay-based alpha complex). Weighted (power) alpha complexes are supported. On MPS — which has neither float64 nor `eigh` — the Cech graph runs on the GPU with a rigorously widened float32 threshold and the QP runs on the CPU in float64.
+* **Dual-Alpha Filtrations**: one build at a cap radius is the whole alpha filtration below it — every simplex carries its alpha value (`sc.filtration`, `result.filtration_values()`), `result.subcomplex(r)` returns $\mathrm{Alpha}(S, r)$ for any $r$ up to the cap (near-ties re-decided exactly), and `DualAlphaFiltrationReport` (`FiltrationReport(points, mode="dual_alpha")`) runs the full filtration report — barcode, Betti curves, manifold and torsion analysis — on it. Its barcode is identical to `AlphaFiltrationReport`'s wherever Delaunay can run.
+* **Exact Homology on the GPU** (`pysurgery.gpu.homology`): Betti numbers over $\mathbb{F}_p$ by modular Gaussian elimination in native integers (int32 for $p < 46341$, int64 for $p < 2^{31}$ — never floating point), and **integral homology with torsion** by *unimodular* elimination: exact unit-singleton peeling on the CPU, parallel rounds of unit pivots on the GPU under a rigorous int64 overflow guard, and an arbitrary-precision Smith-normal-form finish of whatever residual is left. Torsion is reported as invariant factors ($\mathbb{Z}/2 \oplus \mathbb{Z}/3$ is `[6]`). Reachable as `complex.homology(backend="gpu")`, `gpu_homology`, `gpu_betti_numbers`, `smith_invariant_factors`, `rank_mod_p`. `torsion_prime_screen` implements the fast modular screen (ranks modulo several primes; a rank drop *proves* $p$-torsion) and states what it cannot prove — it is a screen, not a replacement for the exact integral computation.
+* **Memory discipline**: dense GPU blocks are checked against the device's memory budget before allocation (`DenseBudgetExceeded` instead of an out-of-memory crash), and any operation an accelerator lacks is recomputed on the CPU with a warning — the answer is exact on every device.
+
+```python
+import numpy as np
+from pysurgery.gpu import dual_alpha_complex, gpu_homology, describe_device
+from pysurgery.topology.filtration_tools import DualAlphaFiltrationReport
+
+print(describe_device())                         # e.g. DeviceInfo(name='mps', ...)
+
+# A noisy circle in R^40: no Delaunay triangulation could be built here.
+rng = np.random.default_rng(0)
+Q, _ = np.linalg.qr(rng.normal(size=(40, 2)))
+t = np.linspace(0, 2 * np.pi, 60, endpoint=False)
+points = np.c_[np.cos(t), np.sin(t)] @ Q.T + 1e-3 * rng.normal(size=(60, 40))
+
+res = dual_alpha_complex(points, radius=0.5)     # Alpha(S, 0.5) and its filtration below 0.5
+print(res.complex.homology(backend="gpu"))       # {0: (1, []), 1: (1, []), ...}
+print(res.subcomplex(0.2).betti_numbers())       # Alpha(S, 0.2), no rebuild
+
+report = DualAlphaFiltrationReport(points, eps_max=0.5)
+print(report)                                    # barcode + Betti curve of the alpha filtration
+```
+
 ---
 
 ## v2.0.0 Development Status (Beta)
@@ -229,6 +259,12 @@ To enable the high-performance Julia backend, ensure Julia is installed and then
 
 ```bash
 pip install "pysurgery[all]"
+```
+
+The GPU engines (`pysurgery.gpu`) need only PyTorch — `pip install torch` (CUDA, Apple MPS or CPU builds all work):
+
+```bash
+pip install "pysurgery[ml]"
 ```
 
 ## Development Workflow
@@ -381,6 +417,9 @@ The algorithms and constructs implemented in **pySurgery** are rigorously ground
 *   **Computational Topology Foundations:** Edelsbrunner, H., & Harer, J. (2010). *Computational topology: An introduction*. American Mathematical Society.
 *   **Optimal Generators:** Dey, T. K., & Wang, Y. (2022). *Computational topology for data analysis*. Cambridge University Press.
 *   **Alpha Complexes:** Edelsbrunner, H. (1994). The weighted Delaunay triangulation or how to stabilize the radical axis. *Discrete & Computational Geometry*, 13, 371-390.
+*   **Dual-Alpha Complexes (GPU):** Carlsson, E., & Carlsson, J. (2023). Computing the alpha complex using dual active set quadratic programming. *arXiv preprint arXiv:2310.00536*.
+*   **Dual Active-Set QP:** Arnström, D., Bemporad, A., & Axehill, D. (2022). A dual active-set solver for embedded quadratic programming using recursive LDLᵀ updates. *IEEE Transactions on Automatic Control*, 67(8), 4362-4369.
+*   **Dual Active-Set (Goldfarb-Idnani):** Goldfarb, D., & Idnani, A. (1983). A numerically stable dual method for solving strictly convex quadratic programs. *Mathematical Programming*, 27(1), 1-33.
 *   **Delaunay-Čech/Delaunay-Rips Filtration:** Bauer, U., & Edelsbrunner, H. (2017). The Morse theory of Čech and Delaunay complexes. *Transactions of the American Mathematical Society*, 369(5), 3741-3762.
 *   **Minimum Enclosing Ball (Welzl's Algorithm):** Welzl, E. (1991). Smallest enclosing disks (balls and ellipsoids). *New Results and New Trends in Computer Science*, 359-370.
 *   **Vietoris-Rips Construction:** Zomorodian, A. (2010). Fast construction of the Vietoris-Rips complex. *Computers & Graphics*, 34(3), 263-271.
