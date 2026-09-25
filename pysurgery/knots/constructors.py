@@ -371,20 +371,22 @@ def trefoil_knot(handedness: str = "left") -> Tuple[SimplicialComplex, Simplicia
 
     The trefoil is the simplest non-trivial knot:
         Alexander polynomial: Δ(t) = t - 1 + t^{-1} (equivalently t^2 - t + 1)
-        Signature: ±2 (left: -2, right: +2)
+        Signature: ±2 (left: +2, right: −2; positive knots have negative
+        signature, see `knot_signature`)
         Genus: 1, Determinant: 3, Arf: 1
 
     Uses the classical 3-crossing trefoil parametrisation
 
         x(t) = sin(t) + 2 sin(2t)
         y(t) = cos(t) − 2 cos(2t)
-        z(t) = −sign · sin(3t)
+        z(t) = sign · sin(3t),   sign = −1 for "left", +1 for "right"
 
     sampled at 24 points so the projected diagram has exactly three same-sign
-    crossings.  The ambient triangulation is the Delaunay 3-ball of the polyline
-    plus a north-pole vertex (25 vertices, ~50 tetrahedra), and vertex
-    coordinates are attached so the Wirtinger Alexander polynomial returns the
-    exact trefoil invariant.
+    crossings (negative for "left", positive for "right").  The ambient
+    triangulation is the Delaunay 3-ball of the polyline plus a north-pole
+    vertex (25 vertices, 95 tetrahedra), and vertex coordinates are attached so
+    the Alexander polynomial and signature are read off the knot diagram
+    exactly.
 
     Args:
         handedness: "left" (default) or "right".
@@ -439,6 +441,12 @@ def torus_knot(p: int, q: int) -> Tuple[SimplicialComplex, SimplicialComplex]:
 
     Alexander polynomial: Δ_{T(p,q)}(t) = (t^{pq} - 1)(t - 1) / ((t^p - 1)(t^q - 1))
     Genus: (p-1)(q-1)/2
+
+    Chirality: this parametrisation (both angles increasing together) gives
+    the negative, left-handed torus knot, the mirror of the positive T(p, q)
+    that closes the braid (σ_1 ⋯ σ_{p−1})^q.  So torus_knot(2, 3) is the
+    left-handed trefoil, and σ > 0 in the convention of `knot_signature`,
+    e.g. σ = +2 for T(2, 3) and +4 for T(2, 5).
 
     Args:
         p: First winding number (≥ 2).
