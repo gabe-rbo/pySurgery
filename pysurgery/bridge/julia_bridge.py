@@ -1047,7 +1047,42 @@ class JuliaBridge:
             ("cocone_filter", _cocone_filter),
             ("prune_and_walk", _prune_and_walk),
             ("tangential_local_stars", _tangential_local_stars),
+            ("topological_invariants", self._topological_invariants_warmup),
         ]
+
+    def _topological_invariants_warmup(self) -> None:
+        """Compile the TopologicalInvariants.jl kernels on tiny exact inputs.
+
+        One call per kernel: link classification, coherent orientation, Stong core,
+        strong collapse, lower-star gradient, Z/2 persistence, winding numbers, the cone
+        count, crossings, homomorphism counts, edge transports and the Federer reach.
+        """
+        tri = [(0,), (1,), (2,), (0, 1), (0, 2), (1, 2), (0, 1, 2)]
+        flat, offs = self._flatten_simplices(tri)
+        self.classify_simplex_links(flat, offs, flat, offs)
+        self.coherent_orientation([(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)])
+        self.stong_core([[0], [1], [0, 1, 2]])
+        self.strong_collapse([(0, 1, 2)])
+        self.lower_star_gradient(tri, {0: 0.0, 1: 1.0, 2: 2.0})
+        self.z2_persistence_pairs(tri)
+        square = np.array([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]])
+        edges = np.array([[0, 1], [1, 2], [2, 3], [0, 3]], dtype=np.int64)
+        self.winding_numbers(np.zeros((1, 2)), edges, np.array([1, 1, 1, -1], dtype=np.int64),
+                             square, np.array([[0.6, 0.8]]), 1e-9)
+        VA = np.array([[[1.0, 0, 0], [0, 1.0, 0]]])
+        VB = np.array([[[0.2, 0.2, -1.0], [0.2, 0.2, 1.0]]])
+        self.cone_intersection_count(VA, np.array([1], dtype=np.int64), VB,
+                                     np.array([1], dtype=np.int64), np.zeros(3), 1e-9, 1.0)
+        tri3 = np.array([[1.0, 0, 0], [0, 1.0, 0.1], [-1.0, 0, 0.2]])
+        S = tri3
+        E = np.roll(tri3, -1, axis=0)
+        frame = (np.array([1.0, 0, 0]), np.array([0, 1.0, 0]), np.array([0, 0, 1.0]))
+        self.diagram_crossings(S, E, np.zeros(3, dtype=np.int64), np.arange(3, dtype=np.int64),
+                               np.full(3, 3, dtype=np.int64), frame, 1e-9, 1.0)
+        self.count_homomorphisms(3, 1, [[(0, 1), (0, 1)]], None)
+        F = np.tile(np.eye(3)[:, :2], (2, 1, 1))
+        self.edge_transport_data(F, np.array([[0, 1]], dtype=np.int64))
+        self.federer_reach(np.array([[0.0, 0, 0], [1.0, 0, 0], [0.0, 1.0, 0]]), F[[0, 1, 0]])
 
     def compute_normal_surface_residual_norms(
         self,
@@ -4000,6 +4035,315 @@ class JuliaBridge:
             np.array(beta, dtype=np.float64),
             np.array(h, dtype=np.float64),
         )
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Exact topological invariants of a complex (TopologicalInvariants.jl)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def classify_simplex_links(
+        self,
+        flat: np.ndarray,
+        offsets: np.ndarray,
+        target_flat: np.ndarray,
+        target_offsets: np.ndarray,
+    ) -> list[tuple[dict[int, tuple[int, list[int]]], int, bool]]:
+        """Exact reduced homology, dimension and purity of the links of many simplices.
+
+        Args:
+            flat: Flattened vertices of every simplex of the (face-closed) complex.
+            offsets: ``offsets[i]:offsets[i+1]`` delimits simplex i in ``flat``.
+            target_flat: Flattened vertices of the target simplices.
+            target_offsets: Offsets of the target simplices.
+
+        Returns:
+            One ``(reduced_homology, link_dimension, link_pure)`` per target, where
+            ``reduced_homology`` maps degree -> ``(rank, torsion)`` for the nonzero
+            groups (degree -1 present exactly for the empty link).
+        """
+        self.require_julia()
+        res = self.backend.classify_simplex_links_jl(
+            np.ascontiguousarray(flat, dtype=np.int64),
+            np.ascontiguousarray(offsets, dtype=np.int64),
+            np.ascontiguousarray(target_flat, dtype=np.int64),
+            np.ascontiguousarray(target_offsets, dtype=np.int64),
+        )
+        link_dim, link_pure, hom_ptr, hom_deg, hom_rank, tor_ptr, tor_vals = (
+            np.asarray(x) for x in res
+        )
+        out = []
+        for t in range(len(link_dim)):
+            red: dict[int, tuple[int, list[int]]] = {}
+            for e in range(int(hom_ptr[t]), int(hom_ptr[t + 1])):
+                tor = [int(v) for v in tor_vals[int(tor_ptr[e]):int(tor_ptr[e + 1])]]
+                red[int(hom_deg[e])] = (int(hom_rank[e]), tor)
+            out.append((red, int(link_dim[t]), bool(link_pure[t])))
+        return out
+
+    def coherent_orientation(
+        self, top_simplices: list[tuple[int, ...]]
+    ) -> tuple[list[int], list[int], list[bool]]:
+        """Coherent-sign propagation over the dual graph of a closed pseudomanifold.
+
+        Args:
+            top_simplices: The p-simplices (sorted vertex tuples).
+
+        Returns:
+            ``(signs, component, orientable)``: a +-1 sign and a zero-based strong
+            component index per simplex, and one orientability flag per component.
+        """
+        self.require_julia()
+        flat = np.fromiter((v for s in top_simplices for v in s), dtype=np.int64)
+        offsets = np.zeros(len(top_simplices) + 1, dtype=np.int64)
+        np.cumsum([len(s) for s in top_simplices], out=offsets[1:])
+        signs, comp, orientable = self.backend.coherent_orientation_jl(flat, offsets)
+        return (
+            [int(x) for x in np.asarray(signs)],
+            [int(x) for x in np.asarray(comp)],
+            [bool(x) for x in np.asarray(orientable)],
+        )
+
+    @staticmethod
+    def _flatten_simplices(simplices) -> tuple[np.ndarray, np.ndarray]:
+        """Flatten a list of vertex sequences into ``(flat, offsets)`` int64 arrays."""
+        flat = np.fromiter((int(v) for s in simplices for v in s), dtype=np.int64)
+        offsets = np.zeros(len(simplices) + 1, dtype=np.int64)
+        np.cumsum([len(s) for s in simplices], out=offsets[1:])
+        return flat, offsets
+
+    def stong_core(self, downs: list[list[int]]) -> tuple[set[int], dict[int, int]]:
+        """Stong core of a finite T0 space by beat-point removal.
+
+        Args:
+            downs: ``downs[x]`` is the down-set U(x) (zero-based point indices).
+
+        Returns:
+            ``(alive, redirect)``: the surviving points and, for every removed point, the
+            point it retracted onto.
+        """
+        self.require_julia()
+        flat, offsets = self._flatten_simplices(downs)
+        alive, rfrom, rto = self.backend.stong_core_jl(flat, offsets)
+        redirect = {int(a): int(b) for a, b in zip(np.asarray(rfrom), np.asarray(rto))}
+        return {int(x) for x in np.asarray(alive)}, redirect
+
+    def strong_collapse(
+        self, maximal_simplices: list[tuple[int, ...]]
+    ) -> tuple[list[tuple[int, ...]], list[tuple[int, int]]]:
+        """Strong collapse of a complex by deleting dominated vertices.
+
+        Args:
+            maximal_simplices: The maximal simplices of the complex.
+
+        Returns:
+            ``(core_maximal_simplices, removed)`` with ``removed`` the ``(v, dominator)``
+            pairs in removal order.
+        """
+        self.require_julia()
+        flat, offsets = self._flatten_simplices(maximal_simplices)
+        cflat, coff, rv, rw = self.backend.strong_collapse_jl(flat, offsets)
+        cflat = np.asarray(cflat)
+        coff = np.asarray(coff)
+        core = [tuple(int(v) for v in cflat[coff[k]:coff[k + 1]]) for k in range(len(coff) - 1)]
+        removed = [(int(a), int(b)) for a, b in zip(np.asarray(rv), np.asarray(rw))]
+        return core, removed
+
+    def lower_star_gradient(
+        self, cells: list[tuple[int, ...]], values: dict[int, float]
+    ) -> tuple[list[tuple[tuple[int, ...], tuple[int, ...]]], list[tuple[int, ...]]]:
+        """Robins-Wood-Sheppard lower-star gradient, lower stars in parallel threads.
+
+        Args:
+            cells: Every simplex, in canonical (dimension, vertices) order.
+            values: The vertex function ``{vertex: value}``.
+
+        Returns:
+            ``(pairs, critical)``: the arrows ``(low, high)`` and the critical cells.
+        """
+        self.require_julia()
+        flat, offsets = self._flatten_simplices(cells)
+        vids = np.array(sorted(values), dtype=np.int64)
+        vvals = np.array([values[int(v)] for v in vids], dtype=np.float64)
+        lo, hi, crit = self.backend.lower_star_gradient_jl(flat, offsets, vids, vvals)
+        pairs = [(cells[int(a)], cells[int(b)]) for a, b in zip(np.asarray(lo), np.asarray(hi))]
+        return pairs, [cells[int(c)] for c in np.asarray(crit)]
+
+    def z2_persistence_pairs(self, cells_in_filtration_order: list[tuple[int, ...]]) -> list[tuple[int, int]]:
+        """Z/2 persistence pairing of a filtration given in filtration order.
+
+        Args:
+            cells_in_filtration_order: Every simplex, faces before cofaces.
+
+        Returns:
+            ``(birth_position, death_position)`` pairs sorted by birth; death -1 marks an
+            essential class.
+        """
+        self.require_julia()
+        flat, offsets = self._flatten_simplices(cells_in_filtration_order)
+        b, d = self.backend.z2_persistence_pairs_jl(flat, offsets)
+        return [(int(x), int(y)) for x, y in zip(np.asarray(b), np.asarray(d))]
+
+    def winding_numbers(
+        self,
+        points: np.ndarray,
+        simplices: np.ndarray,
+        coefficients: np.ndarray,
+        coords: np.ndarray,
+        directions: np.ndarray,
+        tol: float,
+    ) -> list[tuple[int, int]]:
+        """Winding numbers by one certified generic ray per point (points in parallel).
+
+        Args:
+            points: ``(k, m)`` query points.
+            simplices: ``(n, m)`` zero-based vertex indices of the cycle's simplices.
+            coefficients: ``(n,)`` integer coefficients.
+            coords: Vertex coordinates.
+            directions: ``(r, m)`` candidate ray directions, tried in order.
+            tol: Relative genericity margin.
+
+        Returns:
+            ``(value, status)`` per point; status 0 ok, 1 on the cycle, 2 no generic ray.
+        """
+        self.require_julia()
+        vals, status = self.backend.winding_numbers_jl(
+            np.ascontiguousarray(points, dtype=np.float64),
+            np.ascontiguousarray(simplices, dtype=np.int64),
+            np.ascontiguousarray(coefficients, dtype=np.int64),
+            np.ascontiguousarray(coords, dtype=np.float64),
+            np.ascontiguousarray(directions, dtype=np.float64),
+            float(tol),
+        )
+        return [(int(v), int(st)) for v, st in zip(np.asarray(vals), np.asarray(status))]
+
+    def cone_intersection_count(
+        self,
+        VA: np.ndarray,
+        cA: np.ndarray,
+        VB: np.ndarray,
+        cB: np.ndarray,
+        apex: np.ndarray,
+        tol: float,
+        scale: float,
+    ) -> tuple[int, int]:
+        """Intersection number of the cone on A from ``apex`` with B (exact linking).
+
+        Args:
+            VA: ``(nA, p+1, m)`` coordinates of A's simplices.
+            cA: A's coefficients.
+            VB: ``(nB, q+1, m)`` coordinates of B's simplices.
+            cB: B's coefficients.
+            apex: The cone apex in R^m.
+            tol: Relative genericity margin.
+            scale: Size of the configuration.
+
+        Returns:
+            ``(total, status)``: status 0 ok, 1 degenerate apex, 2 B passes through A.
+        """
+        self.require_julia()
+        total, status = self.backend.cone_intersection_count_jl(
+            np.ascontiguousarray(VA, dtype=np.float64),
+            np.ascontiguousarray(cA, dtype=np.int64),
+            np.ascontiguousarray(VB, dtype=np.float64),
+            np.ascontiguousarray(cB, dtype=np.int64),
+            np.ascontiguousarray(apex, dtype=np.float64),
+            float(tol),
+            float(scale),
+        )
+        return int(total), int(status)
+
+    def diagram_crossings(self, S, E, comp, local, ncomp, frame, tol: float, scale: float):
+        """Crossings of closed polygons in one projection frame (segment pairs in parallel).
+
+        Args:
+            S: ``(N, 3)`` segment start points.
+            E: ``(N, 3)`` segment end points.
+            comp: Component of each segment.
+            local: Index of each segment within its component.
+            ncomp: Length of each segment's component.
+            frame: ``(e1, e2, u)``.
+            tol: Relative genericity margin.
+            scale: Size of the configuration.
+
+        Returns:
+            ``(rows, status, meet)`` exactly as the Python reference
+            ``knots.diagrams._crossing_records_python``.
+        """
+        self.require_julia()
+        e1, e2, u = (np.ascontiguousarray(x, dtype=np.float64) for x in frame)
+        res = self.backend.diagram_crossings_jl(
+            np.ascontiguousarray(S, dtype=np.float64), np.ascontiguousarray(E, dtype=np.float64),
+            np.ascontiguousarray(comp, dtype=np.int64), np.ascontiguousarray(local, dtype=np.int64),
+            np.ascontiguousarray(ncomp, dtype=np.int64), e1, e2, u, float(tol), float(scale),
+        )
+        a, b, t, w, da, db, status, ma, mb, mg = res
+        a, b, t, w, da, db = (np.asarray(x) for x in (a, b, t, w, da, db))
+        rows = [(int(a[k]), int(b[k]), float(t[k]), float(w[k]), float(da[k]), float(db[k]))
+                for k in range(len(a))]
+        status = int(status)
+        meet = (int(ma), int(mb), float(mg)) if status == 3 else None
+        return rows, status, meet
+
+    def count_homomorphisms(self, n: int, k: int, relators, budget):
+        """|Hom(G, S_n)| by compiled backtracking in the Python-prescribed order.
+
+        Args:
+            n: The symmetric group S_n.
+            k: Number of generators.
+            relators: Relators as lists of ``(generator_index, +-1)``.
+            budget: Optional assignment budget.
+
+        Returns:
+            ``(count, exact, tried)`` with the free generators' ``(n!)^free`` factor applied.
+        """
+        import math
+
+        from pysurgery.knots.link_complement import _search_order
+
+        self.require_julia()
+        constrained, free, relators_at = _search_order(k, relators)
+        rg = np.array([g for r in relators for g, _ in r], dtype=np.int64)
+        re_ = np.array([e for r in relators for _, e in r], dtype=np.int64)
+        ro = np.zeros(len(relators) + 1, dtype=np.int64)
+        np.cumsum([len(r) for r in relators], out=ro[1:])
+        af = np.array([ri for at in relators_at for ri in at], dtype=np.int64)
+        ao = np.zeros(len(relators_at) + 1, dtype=np.int64)
+        np.cumsum([len(at) for at in relators_at], out=ao[1:])
+        cnt, exact, tried = self.backend.count_homomorphisms_jl(
+            int(n), np.array(constrained, dtype=np.int64), rg, re_, ro, af, ao,
+            -1 if budget is None else int(budget),
+        )
+        return int(str(cnt)) * math.factorial(n) ** len(free), bool(exact), int(tried)
+
+    def edge_transport_data(self, F: np.ndarray, pairs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Orientation sign and reliability of the discrete Levi-Civita transport per edge.
+
+        Args:
+            F: ``(n, ambient, d)`` local-PCA frames.
+            pairs: ``(m, 2)`` directed pairs (i, j).
+
+        Returns:
+            ``(sign(det(F_j^T F_i)), min singular value of F_j^T F_i)`` per pair.
+        """
+        self.require_julia()
+        sg, mc = self.backend.edge_transport_data_jl(
+            np.ascontiguousarray(F, dtype=np.float64), np.ascontiguousarray(pairs, dtype=np.int64)
+        )
+        return np.asarray(sg, dtype=np.int64), np.asarray(mc, dtype=np.float64)
+
+    def federer_reach(self, X: np.ndarray, P: np.ndarray) -> float:
+        """Federer's reach estimate over all pairs, with the given tangent bases.
+
+        Args:
+            X: ``(n, ambient)`` sample.
+            P: ``(n, ambient, d)`` orthonormal tangent bases.
+
+        Returns:
+            The reach estimate (inf for a flat sample).
+        """
+        self.require_julia()
+        return float(self.backend.federer_reach_jl(
+            np.ascontiguousarray(X, dtype=np.float64), np.ascontiguousarray(P, dtype=np.float64)
+        ))
 
     # Singleton instance
 julia_engine = JuliaBridge()

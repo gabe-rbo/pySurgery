@@ -673,6 +673,42 @@ class FundamentalGroup(BaseModel):
             "presentations."
         )
 
+    # ── representation counts ─────────────────────────────────────────────────
+
+    def count_homomorphisms(self, n: int = 3, *, budget: int | None = None,
+                            backend: str = "auto"):
+        """Count the homomorphisms from this group to the symmetric group S_n, exactly.
+
+        What is Being Computed?:
+            ``|Hom(G, S_n)|``: assignments of permutations to the generators under which
+            every relator evaluates to the identity. A group invariant, decidable although
+            triviality and isomorphism of finitely presented groups are not: a count
+            above 1 proves G nontrivial, and two groups with different counts are not
+            isomorphic. See :func:`pysurgery.knots.link_complement.count_homomorphisms`.
+
+        Args:
+            n: The symmetric group S_n.
+            budget: Optional cap on the assignments examined; a truncated count is
+                reported with ``exact=False`` and must not be compared for inequality.
+            backend: 'auto', 'julia', or 'python'.
+
+        Returns:
+            HomCount: ``count``, ``exact``, ``n``, ``generators``, ``tried``.
+
+        Example:
+            pi1 = extract_pi_1(cw)
+            pi1.count_homomorphisms(3).count   # 6 for Z, 1 for the trivial group
+        """
+        from pysurgery.knots.link_complement import count_homomorphisms
+
+        key = ("hom_count", int(n), budget)
+        cached = self._cache_get(key)
+        if cached is not _CACHE_MISS:
+            return cached
+        out = count_homomorphisms(self, n, budget, backend=backend)
+        self._cache_set(key, out)
+        return out
+
     # ── covering spaces ───────────────────────────────────────────────────────
 
     def universal_cover(self, base: "CWComplex", *, max_index: int = 10_000,

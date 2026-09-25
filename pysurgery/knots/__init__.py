@@ -38,6 +38,46 @@ from .analysis import (
     ComponentKnotInfo,
 )
 
+from .geometric_linking import (
+    LinkingDefinedness,
+    linking_definedness,
+    chain_boundary,
+    is_cycle,
+    winding_number,
+    winding_numbers,
+    simplicial_linking,
+    polygon_cycle,
+    curve_linking,
+    gauss_linking_estimate,
+    curve_gauss_integral,
+)
+
+from .diagrams import (
+    Crossing,
+    KnotDiagram,
+    projection_frames,
+    knot_diagram,
+    diagram_linking_number,
+    diagram_linking_matrix,
+    writhe,
+    a2_from_diagram,
+    casson_a2,
+    diagram_milnor_mu123,
+)
+
+from .link_complement import (
+    wirtinger_presentation,
+    link_group,
+    alexander_check,
+    HomCount,
+    count_homomorphisms,
+    free_group_hom_count,
+    SplitnessCertificate,
+    separating_plane,
+    certify_splitness,
+    certify_knottedness,
+)
+
 __all__ = [
     # Linking invariants
     "simplices_to_chain",
@@ -71,4 +111,36 @@ __all__ = [
     "linking_report",
     "KnotAnalysisResult",
     "ComponentKnotInfo",
+    # Embedded-cycle linking, knot diagrams and link complements (exact)
+    "LinkingDefinedness",
+    "linking_definedness",
+    "chain_boundary",
+    "is_cycle",
+    "winding_number",
+    "winding_numbers",
+    "simplicial_linking",
+    "polygon_cycle",
+    "curve_linking",
+    "gauss_linking_estimate",
+    "curve_gauss_integral",
+    "Crossing",
+    "KnotDiagram",
+    "projection_frames",
+    "knot_diagram",
+    "diagram_linking_number",
+    "diagram_linking_matrix",
+    "writhe",
+    "a2_from_diagram",
+    "casson_a2",
+    "diagram_milnor_mu123",
+    "wirtinger_presentation",
+    "link_group",
+    "alexander_check",
+    "HomCount",
+    "count_homomorphisms",
+    "free_group_hom_count",
+    "SplitnessCertificate",
+    "separating_plane",
+    "certify_splitness",
+    "certify_knottedness",
 ]

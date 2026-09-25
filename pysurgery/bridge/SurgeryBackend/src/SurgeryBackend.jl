@@ -8458,5 +8458,9 @@ function compute_hodge_decomposition_jl(
     return alpha, beta, h
 end
 
+# Exact topological invariants of a complex (local homology, fundamental cycles,
+# finite spaces, lower-star Morse theory, geometric linking, knot diagrams).
+include("TopologicalInvariants.jl")
+
 end # module
 
