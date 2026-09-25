@@ -123,10 +123,13 @@ def build_s1():
     return SimplicialComplex.from_simplices([[0, 1], [1, 2], [2, 0]])
 
 def build_klein_bottle():
-    """Construct a minimal triangulation of the Klein Bottle.
+    """Construct a triangulation of the Klein Bottle.
 
     What is Being Computed?:
-        A non-orientable surface with Euler characteristic 0.
+        A 3x3 grid (vertex 3*i + j) whose columns wrap directly and whose last
+        row is glued back to the first with the column reversal j -> -j (mod 3).
+        This gives 9 vertices, 27 edges and 18 faces: a non-orientable surface
+        with Euler characteristic 0, H_1 = Z + Z/2 and H_2 = 0.
 
     Returns:
         SimplicialComplex: The Klein bottle.
@@ -134,7 +137,7 @@ def build_klein_bottle():
     faces = [
         [0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4], [2, 0, 3], [2, 3, 5],
         [3, 4, 7], [3, 7, 6], [4, 5, 8], [4, 8, 7], [5, 3, 6], [5, 6, 8],
-        [6, 7, 2], [6, 2, 1], [7, 8, 0], [7, 0, 2], [8, 6, 1], [8, 1, 0],
+        [6, 7, 2], [6, 2, 0], [7, 8, 1], [7, 1, 2], [8, 6, 0], [8, 0, 1],
     ]
     return SimplicialComplex.from_simplices(faces)
 

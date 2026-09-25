@@ -10,9 +10,13 @@ Key Concepts:
     - **Fundamental Group (π₁)**: Generators and relations representing surface loops.
     - **Torsion in Homology**: Z₂ torsion in H₁(Klein Bottle) and H₁(RP²).
 """
+from collections import defaultdict
+from itertools import combinations
+
 import numpy as np
 import scipy.sparse as sp
-from pysurgery.topology.complexes import ChainComplex
+from discrete_surface_data import build_klein_bottle, build_torus
+from pysurgery.topology.complexes import ChainComplex, SimplicialComplex
 from pysurgery.topology.fundamental_group import extract_pi_1
 from pysurgery.topology.complexes import CWComplex
 
@@ -53,6 +57,67 @@ def test_klein_bottle_homology():
         assert cc.homology(1)[0] == 1
 
     assert cc.homology(2) == (0, [])
+
+
+def _is_coherently_orientable(sc):
+    """Return whether the triangles of a connected closed surface admit a coherent orientation.
+
+    Orients one triangle, then propagates across shared edges: a neighbour must
+    traverse each shared edge in the opposite direction. A clash means the
+    surface is non-orientable.
+    """
+    faces = [tuple(f) for f in sc.n_simplices(2)]
+    edge_faces = defaultdict(list)
+    for idx, f in enumerate(faces):
+        for e in combinations(sorted(f), 2):
+            edge_faces[e].append(idx)
+
+    def directed(t):
+        return {(t[0], t[1]), (t[1], t[2]), (t[2], t[0])}
+
+    orient = {0: faces[0]}
+    stack = [0]
+    while stack:
+        i = stack.pop()
+        for u, v in directed(orient[i]):
+            for j in edge_faces[tuple(sorted((u, v)))]:
+                if j == i:
+                    continue
+                t = faces[j] if (v, u) in directed(faces[j]) else faces[j][::-1]
+                if j not in orient:
+                    orient[j] = t
+                    stack.append(j)
+                elif (v, u) not in directed(orient[j]):
+                    return False
+    assert len(orient) == len(faces)
+    return True
+
+
+def test_klein_bottle_fixture_homology_and_non_orientability():
+    """Verify the simplicial Klein bottle fixture is a Klein bottle, not a torus.
+
+    What is Being Computed?:
+        Integral and mod-p homology of ``build_klein_bottle()`` and a coherent
+        orientation attempt on its triangles.
+
+    Preserved Invariants:
+        - H_0 = Z, H_1 = Z + Z/2, H_2 = 0 and chi = 0.
+        - F_2 Betti numbers (1, 2, 1) but F_3 Betti numbers (1, 1, 0).
+        - No coherent orientation exists (the torus fixture has one).
+    """
+    kb = build_klein_bottle()
+    assert kb.is_closed_manifold
+    assert kb.euler_characteristic() == 0
+    assert kb.homology(backend="python") == {0: (1, []), 1: (1, [2]), 2: (0, [])}
+
+    faces = kb.n_simplices(2)
+    f2 = SimplicialComplex.from_simplices(faces, coefficient_ring="Z/2Z")
+    f3 = SimplicialComplex.from_simplices(faces, coefficient_ring="Z/3Z")
+    assert f2.betti_numbers(backend="python") == {0: 1, 1: 2, 2: 1}
+    assert f3.betti_numbers(backend="python") == {0: 1, 1: 1, 2: 0}
+
+    assert not _is_coherently_orientable(kb)
+    assert _is_coherently_orientable(build_torus())
 
 
 def test_genus_2_surface():
