@@ -15,6 +15,7 @@ from pysurgery.knots.invariants import (
     seifert_matrix, alexander_polynomial, conway_polynomial,
     knot_signature, arf_invariant, genus_bound, knot_determinant,
     is_unknot, classify_knot,
+    _conway_from_alexander, _find_crossings, _knot_polyline_coords,
 )
 from pysurgery.knots.analysis import find_knots_between_components, KnotAnalysisResult
 
@@ -176,9 +177,20 @@ def test_alexander_polynomial_trefoil():
 def test_alexander_polynomial_figure_eight():
     sc, K = figure_eight_knot()
     delta = alexander_polynomial(sc, K)
-    # Figure-eight: -t + 3 - t^{-1}, determinant = 5
-    delta_at_1 = sum(c for c in delta.values())
-    assert delta_at_1 == 1
+    # Figure-eight: -t + 3 - t^{-1}, normalised to -t^2 + 3t - 1
+    assert delta == {2: -1, 1: 3, 0: -1}
+    assert sum(delta.values()) == 1
+    # Determinant |Δ(-1)| = 5 (the trefoil's is 3, so this separates them)
+    assert abs(sum(c * (-1) ** d for d, c in delta.items())) == 5
+    assert knot_determinant(sc, K) == 5
+
+
+def test_alexander_polynomial_torus_knot_2_5():
+    sc, K = torus_knot(2, 5)
+    delta = alexander_polynomial(sc, K)
+    # T(2,5): t^4 - t^3 + t^2 - t + 1, determinant 5
+    assert delta == {4: 1, 3: -1, 2: 1, 1: -1, 0: 1}
+    assert knot_determinant(sc, K) == 5
 
 
 def test_conway_polynomial_unknot():
@@ -192,8 +204,47 @@ def test_conway_polynomial_trefoil():
     sc, K = trefoil_knot()
     nabla = conway_polynomial(sc, K)
     # ∇(0) = 1 for all knots (at z=0: t^{1/2} - t^{-1/2} = 0 → t = 1, Δ(1) = 1)
-    nabla_at_0 = nabla.get(0, 0)
-    assert nabla_at_0 == 1
+    assert nabla == {0: 1, 2: 1}
+
+
+def test_conway_polynomial_figure_eight():
+    sc, K = figure_eight_knot()
+    # ∇(z) = 1 - z^2; the z^2 coefficient is the Casson invariant a_2 = -1
+    assert conway_polynomial(sc, K) == {0: 1, 2: -1}
+
+
+def test_conway_polynomial_torus_knot_2_5():
+    sc, K = torus_knot(2, 5)
+    # ∇(z) = 1 + 3z^2 + z^4
+    assert conway_polynomial(sc, K) == {0: 1, 2: 3, 4: 1}
+
+
+def test_conway_from_alexander_normalises_units():
+    # Δ is only defined up to ±t^k: shifted and negated inputs agree.
+    for delta in ({0: -1, 1: 3, 2: -1}, {3: 1, 4: -3, 5: 1}, {-1: -1, 0: 3, 1: -1}):
+        assert _conway_from_alexander(delta) == {0: 1, 2: -1}
+    assert _conway_from_alexander({0: 1}) == {0: 1}
+    assert _conway_from_alexander({7: -1}) == {0: 1}
+
+
+def test_conway_from_alexander_rejects_non_knot_polynomials():
+    with pytest.raises(ValueError, match="symmetric"):
+        _conway_from_alexander({2: 1, 1: 1, 0: -1})  # t^2 + t - 1
+    with pytest.raises(ValueError, match="symmetric"):
+        _conway_from_alexander({1: 1, 0: -1})  # odd degree span
+    with pytest.raises(ValueError, match=r"\|Δ\(1\)\|"):
+        _conway_from_alexander({0: 3})
+    with pytest.raises(ValueError, match="zero"):
+        _conway_from_alexander({0: 0})
+
+
+@pytest.mark.parametrize("handedness, expected_sign", [("left", -1), ("right", 1)])
+def test_trefoil_crossing_signs(handedness, expected_sign):
+    # Standard convention: the left-handed trefoil has three negative crossings.
+    sc, K = trefoil_knot(handedness=handedness)
+    pts = _knot_polyline_coords(sc, K)
+    crossings = _find_crossings(pts, np.eye(3)[0], np.eye(3)[1], np.eye(3)[2])
+    assert [c["sign"] for c in crossings] == [expected_sign] * 3
 
 
 def test_knot_signature_unknot():
@@ -216,6 +267,12 @@ def test_arf_invariant_unknot():
 def test_arf_invariant_trefoil():
     # Trefoil has Δ(-1) = 3 ≡ 3 (mod 8) → Arf = 1
     sc, K = trefoil_knot()
+    assert arf_invariant(sc, K) == 1
+
+
+def test_arf_invariant_figure_eight():
+    # Figure-eight has Δ(-1) = -5 ≡ ±3 (mod 8) → Arf = 1 (a_2 = -1 is odd)
+    sc, K = figure_eight_knot()
     assert arf_invariant(sc, K) == 1
 
 

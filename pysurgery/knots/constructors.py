@@ -409,8 +409,9 @@ def figure_eight_knot() -> Tuple[SimplicialComplex, SimplicialComplex]:
 
     Properties:
         Alexander polynomial: Δ(t) = -t + 3 - t^{-1} (equiv. -t^2 + 3t - 1)
+        Conway polynomial: ∇(z) = 1 - z^2
         Signature: 0 (amphichiral — equal to its mirror image)
-        Genus: 1, Determinant: 5, Arf: 0
+        Genus: 1, Determinant: 5, Arf: 1 (a_2 = -1 is odd)
         It is the simplest hyperbolic knot.
 
     Uses the standard parametric figure-eight embedding sampled at 32 points;
