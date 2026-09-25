@@ -136,7 +136,10 @@ def _projection_basis(pts3: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndar
     for _ in range(64):
         A = rng.normal(size=(3, 3))
         Q, _ = np.linalg.qr(A)
-        ex, ey, ez = Q[:, 0], Q[:, 1], Q[:, 2]
+        # e_z = e_x × e_y keeps the frame right-handed; a left-handed frame
+        # would read off the mirror diagram and flip every crossing sign.
+        ex, ey = Q[:, 0], Q[:, 1]
+        ez = np.cross(ex, ey)
         if _is_generic_projection(pts3, ex, ey, ez):
             return ex, ey, ez
     raise _DiagramExtractionError("Could not find generic projection basis")
@@ -174,10 +177,13 @@ def _find_crossings(
         over_seg, under_seg, t_over, t_under (parameters along each segment),
         sign in {+1, -1}.
 
-    Crossing sign convention: at a positive (right-handed) crossing the
-    over-strand rotates CCW from the under-strand direction (i.e. the 2D cross
-    product of (over tangent, under tangent) is negative — verified against
-    the trefoil).
+    Crossing sign convention: the diagram is viewed from +e_z (the frame is
+    right-handed) and a crossing is positive (right-handed) iff
+    det(over tangent, under tangent) > 0, i.e. the under-strand passes from
+    the right of the over-strand to its left.  This is the standard
+    convention: half the sum of the inter-component crossing signs of a
+    two-component link is its Gauss linking number, and the left-handed
+    trefoil has three negative crossings.
     """
     n = pts3.shape[0]
     xy = pts3 @ np.column_stack([ex, ey])
@@ -215,9 +221,8 @@ def _find_crossings(
                 t_over, t_under = s, t
                 over_tan = p4 - p3
                 under_tan = p2 - p1
-            # Right-handed (positive) crossing: rotating under_tan by +90°
-            # (CCW) aligns it with over_tan; equivalently, det(under, over) > 0.
-            det = under_tan[0] * over_tan[1] - under_tan[1] * over_tan[0]
+            # Right-handed (positive) crossing: det(over, under) > 0.
+            det = over_tan[0] * under_tan[1] - over_tan[1] * under_tan[0]
             sign = 1 if det > 0 else -1
             crossings.append({
                 "over_seg": int(over_seg),
@@ -324,29 +329,53 @@ def _assign_arcs(n_segs: int, crossings: List[Dict]) -> Tuple[List[List[int]], L
     return arcs_list, crossings
 
 
+def _normalize_alexander(poly: Dict[int, int]) -> Dict[int, int]:
+    """Pick the canonical representative of a Laurent polynomial up to ±t^k.
+
+    Drops zero coefficients, shifts the lowest degree to 0 and flips the sign
+    so the value at t = 1 is non-negative (Δ(1) = 1 for a knot).  The zero
+    polynomial is returned as {0: 0}.
+    """
+    nz = {int(d): int(c) for d, c in poly.items() if c != 0}
+    if not nz:
+        return {0: 0}
+    lo = min(nz)
+    sign = -1 if sum(nz.values()) < 0 else 1
+    return {d - lo: sign * c for d, c in nz.items()}
+
+
 def _alexander_from_diagram(crossings: List[Dict]) -> Dict[int, int]:
     """Compute the Alexander polynomial of a knot from its Wirtinger diagram.
 
-    The Alexander matrix is the (#crossings) × (#arcs) matrix of Fox derivatives
-    abelianised at t.  For a positive crossing with over-arc x_k, under-arcs
-    x_i (incoming) → x_j (outgoing), the row contributes
+    The Alexander matrix is the (#crossings) × (#arcs) matrix of Fox
+    derivatives of the Wirtinger relations, abelianised by x_a ↦ t.  With
+    meridians oriented by the right-hand rule and paths composed left to
+    right, a crossing with over-arc x_k and under-arc x_i (incoming) → x_j
+    (outgoing) has the relation
 
-        column x_i: 1 − t,   column x_j: −1,   column x_k: t.
+        positive:  x_j = x_k^{-1} x_i x_k,    negative:  x_j = x_k x_i x_k^{-1},
 
-    For a negative crossing the row is
+    whose rows, scaled by units so the over-arc entry is 1 − t, are
 
-        column x_i: −1,      column x_j: 1 − t, column x_k: t.
+        positive:  column x_k: 1 − t,   column x_i: −1,   column x_j: t
+        negative:  column x_k: 1 − t,   column x_i: t,    column x_j: −1.
 
-    (Equivalent conventions related by Δ → ±t^k · Δ; this convention is
-    Murasugi/Kawauchi.)  The Alexander polynomial is the determinant of any
-    (n−1)×(n−1) minor obtained by deleting one row and one column.
+    (The opposite meridian convention swaps the two rows, which replaces
+    Δ(t) by Δ(t^{-1}) — the same polynomial up to ±t^k.)  Entries add when an
+    arc plays two roles at one crossing, e.g. at a kink.
+
+    Every first minor (delete any one row and any one column) equals Δ(t) up
+    to ±t^k, so a single minor is computed, exactly over ℤ[t], and the result
+    is normalised by `_normalize_alexander`.
+
+    Raises:
+        _DiagramExtractionError: if the diagram is inconsistent
+            (#arcs ≠ #crossings) or the minor violates |Δ(1)| = 1.
     """
     if not crossings:
         return {0: 1}
     n = len(crossings)
-    n_arcs = max(c["over_arc"] for c in crossings)
-    n_arcs = max(n_arcs, max(c["in_arc"] for c in crossings))
-    n_arcs = max(n_arcs, max(c["out_arc"] for c in crossings)) + 1
+    n_arcs = 1 + max(max(c["over_arc"], c["in_arc"], c["out_arc"]) for c in crossings)
     if n_arcs != n:
         # A valid Wirtinger diagram for a knot satisfies #arcs = #crossings.
         raise _DiagramExtractionError(
@@ -355,78 +384,32 @@ def _alexander_from_diagram(crossings: List[Dict]) -> Dict[int, int]:
 
     try:
         import sympy as sp
+        from sympy.polys.matrices import DomainMatrix
     except ImportError as exc:
         raise ImportError("sympy is required for Alexander polynomial computation") from exc
 
     t = sp.Symbol("t")
-    M = sp.zeros(n, n)
+    R = sp.ZZ[t]
+    one_minus_t, t_elt, minus_one = R.convert(1 - t), R.convert(t), R.convert(-1)
+    rows = [[R.zero] * n for _ in range(n)]
     for r, c in enumerate(crossings):
+        rows[r][c["over_arc"]] += one_minus_t
         if c["sign"] > 0:
-            M[r, c["in_arc"]] += 1 - t
-            M[r, c["out_arc"]] += -1
-            M[r, c["over_arc"]] += t
+            rows[r][c["in_arc"]] += minus_one
+            rows[r][c["out_arc"]] += t_elt
         else:
-            M[r, c["in_arc"]] += -1
-            M[r, c["out_arc"]] += 1 - t
-            M[r, c["over_arc"]] += t
+            rows[r][c["in_arc"]] += t_elt
+            rows[r][c["out_arc"]] += minus_one
 
-    # Delete the last row and column; det of the remaining minor is Δ(t).
-    minor = M[:-1, :-1]
-    det = sp.expand(minor.det())
-    if det == 0:
-        return {0: 0}
-    # Convert to Laurent-polynomial dict {degree: coeff}.
-    poly_obj = sp.Poly(det, t)
-    coeffs = poly_obj.all_coeffs()
-    deg = poly_obj.degree()
-    raw: Dict[int, int] = {}
-    for i, coef in enumerate(coeffs):
-        d = deg - i
-        v = int(coef)
-        if v != 0:
-            raw[d] = v
-    # Normalise to t^0 ≥ smallest power and positive leading sign;
-    # the standard normalisation makes Δ(1) = 1.
-    if not raw:
-        return {0: 1}
-    min_d = min(raw.keys())
-    normalised = {d - min_d: c for d, c in raw.items()}
-    delta_at_1 = sum(normalised.values())
-    if delta_at_1 < 0:
-        normalised = {d: -c for d, c in normalised.items()}
-        delta_at_1 = -delta_at_1
-    # Should be ±1 for a knot; if not, our minor choice was unlucky — try a
-    # different one (deleting a different row & column).
+    # Delete the last row and column; the minor's determinant is Δ(t) · ±t^k.
+    minor = DomainMatrix([row[:-1] for row in rows[:-1]], (n - 1, n - 1), R)
+    delta = _normalize_alexander({m[0]: c for m, c in minor.det().terms()})
+    delta_at_1 = sum(delta.values())
     if delta_at_1 != 1:
-        # Try every row/column deletion and accept the first that satisfies
-        # the knot normalisation.
-        for r_del in range(n):
-            for c_del in range(n):
-                rows = [i for i in range(n) if i != r_del]
-                cols = [j for j in range(n) if j != c_del]
-                minor2 = M[rows, cols]
-                det2 = sp.expand(minor2.det())
-                if det2 == 0:
-                    continue
-                p2 = sp.Poly(det2, t)
-                raw2: Dict[int, int] = {}
-                for i, coef in enumerate(p2.all_coeffs()):
-                    d = p2.degree() - i
-                    v = int(coef)
-                    if v != 0:
-                        raw2[d] = v
-                if not raw2:
-                    continue
-                md = min(raw2.keys())
-                norm2 = {d - md: c for d, c in raw2.items()}
-                val_at_1 = sum(norm2.values())
-                if val_at_1 < 0:
-                    norm2 = {d: -c for d, c in norm2.items()}
-                    val_at_1 = -val_at_1
-                if val_at_1 == 1:
-                    return norm2
-        # Fall through with original
-    return normalised
+        raise _DiagramExtractionError(
+            f"Wirtinger minor gives |Δ(1)| = {delta_at_1}; a knot has |Δ(1)| = 1"
+        )
+    return delta
 
 
 def _alexander_via_wirtinger(
@@ -643,38 +626,48 @@ def _alexander_from_seifert(V: np.ndarray) -> Dict[int, int]:
         if v != 0:
             result[d] = v
 
-    # Normalize so that the result evaluates to +1 at t=1 (Δ(1) = 1 for knots)
-    delta_1 = sum(c for c in result.values())
-    if delta_1 < 0:
-        result = {k: -v for k, v in result.items()}
-
-    return result
+    return _normalize_alexander(result)
 
 
 def _conway_from_alexander(alex_poly: Dict[int, int]) -> Dict[int, int]:
-    """Convert Alexander polynomial to Conway polynomial using the Chebyshev formula.
+    """Convert a knot's Alexander polynomial to its Conway polynomial.
 
-    For a symmetric Δ(t) = a_0 + Σ_{k=1}^g a_k (t^k + t^{-k}):
+    Δ is only defined up to ±t^k, so it is first brought to its symmetric
+    representative: centred so that Δ(t) = Δ(t^{-1}), with the sign fixed so
+    that Δ(1) = +1 (hence ∇(0) = 1).  Writing that representative as
+    Δ(t) = a_0 + Σ_{k=1}^g a_k (t^k + t^{-k}):
         ∇(z) = a_0 + Σ_{k=1}^g a_k * T_k(z)
 
     where T_k(z) = t^k + t^{-k} expressed via z = t^{1/2} - t^{-1/2}:
         T_0 = 2, T_1 = z^2 + 2, T_k = (z^2 + 2)*T_{k-1} - T_{k-2}
 
     This is the unique polynomial satisfying Δ(t) = ∇(t^{1/2} - t^{-1/2}).
+
+    Raises:
+        ValueError: if Δ is not ±t^k times a symmetric polynomial with
+            Δ(1) = ±1, i.e. cannot be the Alexander polynomial of a knot.
     """
-    if not alex_poly:
-        return {0: 1}
+    poly = {d: c for d, c in alex_poly.items() if c != 0}
+    if not poly:
+        raise ValueError(f"Δ(t) = {alex_poly} is zero; not the Alexander polynomial of a knot")
 
-    min_d = min(alex_poly.keys())
-    max_d = max(alex_poly.keys())
+    # Center the polynomial so it's symmetric around degree 0 (an odd degree
+    # span leaves it lopsided and fails the symmetry check below).
+    center = (min(poly) + max(poly)) // 2
+    sym = {d - center: c for d, c in poly.items()}
+    if any(sym.get(-k) != c for k, c in sym.items()):
+        raise ValueError(
+            f"Δ(t) = {alex_poly} is not symmetric up to ±t^k; "
+            "not the Alexander polynomial of a knot"
+        )
+    if sum(sym.values()) < 0:
+        sym = {k: -c for k, c in sym.items()}
+    if sum(sym.values()) != 1:
+        raise ValueError(
+            f"Δ(t) = {alex_poly} has |Δ(1)| = {sum(sym.values())}; a knot has |Δ(1)| = 1"
+        )
 
-    # Center the polynomial so it's symmetric around degree 0
-    center = (max_d + min_d) // 2
-    sym: Dict[int, int] = {}
-    for d, c in alex_poly.items():
-        sym[d - center] = sym.get(d - center, 0) + c
-
-    g = max(sym.keys()) if sym else 0
+    g = max(sym.keys())
 
     # Build T_k as polynomials in z^2: {power_of_z2: coeff}
     # T_k represents the polynomial T_k(z) = sum_j coef_j * (z^2)^j
@@ -721,7 +714,8 @@ def _conway_from_alexander(alex_poly: Dict[int, int]) -> Dict[int, int]:
             deg_z = 2 * z2_pow  # T_k gives z^{2*z2_pow} terms
             conway[deg_z] = conway.get(deg_z, 0) + a_k * c
 
-    return {k: v for k, v in conway.items() if v != 0} or {0: 1}
+    # Non-empty: the constant term is ∇(0) = Δ(1) = 1.
+    return {k: v for k, v in conway.items() if v != 0}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -857,12 +851,16 @@ def alexander_polynomial(
     """Compute the Alexander polynomial Δ_K(t) ∈ ℤ[t, t^{-1}].
 
     What is Being Computed?:
-        Δ_K(t) = det(tV - V^T) where V is the Seifert matrix of K.
-        Normalized so Δ_K(1) = 1.
+        Δ_K(t), defined up to units ±t^k.  When vertex coordinates are
+        attached, it is read off a knot diagram of K's polygonal embedding
+        (Fox calculus on the Wirtinger presentation); otherwise it is
+        det(tV - V^T) where V is the Seifert matrix of K.
+        Normalized so the lowest degree is 0 and Δ_K(1) = 1.
 
     Returns:
         dict mapping degree → integer coefficient. E.g. {2: 1, 1: -1, 0: 1} for
-        the trefoil (Δ = t^2 - t + 1, equivalently 1 - t + t^2).
+        the trefoil (Δ = t^2 - t + 1, equivalently 1 - t + t^2) and
+        {2: -1, 1: 3, 0: -1} for the figure-eight knot.
 
     Properties verified:
         - Δ_K(1) = 1 (knot determinant at t=1)
@@ -907,10 +905,11 @@ def _alexander_polynomial_julia(
     V = _seifert_matrix_julia(ambient_complex, K)
     if V.shape[0] == 0:
         return {0: 1}
-    # Use Julia for the determinant computation
+    # Use Julia for the determinant computation.  The Julia kernel only fixes
+    # the sign, so normalise the degree shift the same way as the Python path.
     result = julia_engine.alexander_from_seifert(V)
     if result is not None:
-        return result
+        return _normalize_alexander(result)
     return _alexander_from_seifert(V)
 
 
@@ -926,7 +925,11 @@ def conway_polynomial(
         For knots ∇_K(z) is a polynomial in z^2. ∇_K(0) = 1 for all knots.
 
     Returns:
-        dict mapping degree → coefficient. E.g. {2: 1, 0: 1} for trefoil (1 + z^2).
+        dict mapping degree → coefficient. E.g. {2: 1, 0: 1} for trefoil (1 + z^2)
+        and {2: -1, 0: 1} for the figure-eight knot (1 - z^2).
+
+    Raises:
+        ValueError: if the computed Δ_K is not symmetric with Δ_K(1) = ±1.
     """
     delta = alexander_polynomial(ambient_complex, K, backend=backend)
     return _conway_from_alexander(delta)
