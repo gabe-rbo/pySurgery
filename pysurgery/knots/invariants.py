@@ -8,7 +8,9 @@ Invariants implemented:
     `pysurgery.knots.seifert_surface`)
   - Alexander polynomial (det(tV - V^T))
   - Conway polynomial (Alexander change of variables)
-  - Knot signature (sig(V + V^T))
+  - Knot signature (sig(V + V^T); Gordon–Litherland on a knot diagram when
+    vertex coordinates are attached).  Sign convention: positive knots have
+    negative signature, e.g. σ = −2 for the right-handed trefoil.
   - Arf invariant (from Δ(-1) mod 8)
   - Seifert genus bound (half-degree of Alexander)
   - Unknotting number lower bound (|signature|/2)
@@ -17,6 +19,7 @@ All invariants have Julia-accelerated paths where beneficial with exact Python f
 """
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -427,6 +430,220 @@ def _alexander_via_wirtinger(
     return _alexander_from_diagram(annotated)
 
 
+# ── Gordon–Litherland signature from a knot diagram ──────────────────────────
+
+
+def _diagram_faces(crossings: List[Dict]) -> Tuple[List[Tuple[int, int, int, int]], List[int], int]:
+    """Trace the faces of a knot diagram's planar 4-valent graph.
+
+    The vertices are the crossings.  Walking along the knot, every crossing is
+    passed twice (once on the over-strand, once on the under-strand); edge e
+    runs from the e-th passage to the next.  Dart 2e traverses edge e forwards
+    and dart 2e + 1 backwards.  At each crossing the four darts leaving it are
+    ordered counterclockwise (viewed from +e_z) starting at the over-strand's
+    forward dart; since a crossing is positive iff det(over, under) > 0, the
+    under-strand's forward dart comes next at a positive crossing and its
+    backward dart at a negative one.
+
+    Returns:
+        corners:  corners[c] = (Q0, Q1, Q2, Q3), the faces of the four corners
+                  of crossing c in counterclockwise order, where Q_s is the
+                  sector from the s-th dart counterclockwise to the next.  Q0
+                  and Q2 are swept by rotating the over-strand counterclockwise
+                  onto the under-strand.
+        face_of:  face_of[d] is the face to the left of dart d.
+        n_faces:  number of faces.
+    """
+    passages = []
+    for k, c in enumerate(crossings):
+        passages.append((c["over_seg"], c["t_over"], k, True))
+        passages.append((c["under_seg"], c["t_under"], k, False))
+    passages.sort(key=lambda p: (p[0], p[1]))
+    m = len(passages)
+    slot = {(k, is_over): i for i, (_, _, k, is_over) in enumerate(passages)}
+
+    rotation: List[List[int]] = []
+    tail: Dict[int, Tuple[int, int]] = {}
+    for k, c in enumerate(crossings):
+        a, b = slot[(k, True)], slot[(k, False)]
+        o_fwd, o_bwd = 2 * a, 2 * ((a - 1) % m) + 1
+        u_fwd, u_bwd = 2 * b, 2 * ((b - 1) % m) + 1
+        if c["sign"] > 0:
+            rot = [o_fwd, u_fwd, o_bwd, u_bwd]
+        else:
+            rot = [o_fwd, u_bwd, o_bwd, u_fwd]
+        rotation.append(rot)
+        for s, d in enumerate(rot):
+            tail[d] = (k, s)
+
+    # Keeping the face on the left, arrive along d and leave along the dart
+    # clockwise-adjacent to d's reverse (d ^ 1) at the head crossing.  This
+    # map is a permutation of the darts, so every orbit closes up.
+    face_of = [-1] * (2 * m)
+    n_faces = 0
+    for start in range(2 * m):
+        if face_of[start] >= 0:
+            continue
+        d = start
+        while face_of[d] < 0:
+            face_of[d] = n_faces
+            k, s = tail[d ^ 1]
+            d = rotation[k][(s - 1) % 4]
+        n_faces += 1
+    corners = [(face_of[r[0]], face_of[r[1]], face_of[r[2]], face_of[r[3]]) for r in rotation]
+    return corners, face_of, n_faces
+
+
+def _goeritz_from_diagram(crossings: List[Dict], shade: int = 1) -> Tuple[List[List[int]], int]:
+    """Goeritz matrix and Gordon–Litherland correction term of a knot diagram.
+
+    The faces are coloured in checkerboard fashion and the faces of colour
+    `shade` are shaded; the unshaded (white) faces are X_0, ..., X_w.  At each
+    crossing c the incidence number is η(c) = +1 if the shaded corners are the
+    two swept by rotating the over-strand counterclockwise onto the
+    under-strand, and −1 otherwise.  Then
+
+        G'_ij = −Σ η(c)  over crossings where X_i and X_j meet (i ≠ j),
+        G'_ii = −Σ_{j≠i} G'_ij,
+
+    and the Goeritz matrix G is G' with the row and column of X_0 removed.
+    A crossing is of type II when its shaded corners lie between two incoming
+    or two outgoing strand ends (type I: between an incoming and an outgoing
+    end); with the convention above that happens exactly when η(c) equals the
+    crossing sign.  The correction term is μ = Σ_{c of type II} η(c).
+
+    Returns:
+        (G, μ) with G a list of integer rows.
+
+    Raises:
+        _DiagramExtractionError: if the traced faces are not those of a
+            connected planar diagram (#faces ≠ #crossings + 2, or the faces
+            are not 2-colourable), which happens when the projection is not
+            generic enough for `_find_crossings`.
+    """
+    n = len(crossings)
+    corners, face_of, n_faces = _diagram_faces(crossings)
+    if n_faces != n + 2:
+        raise _DiagramExtractionError(
+            f"Diagram is not planar: {n_faces} faces for {n} crossings (expected {n + 2})"
+        )
+
+    # Faces on either side of an edge get opposite colours.
+    neighbours: List[List[int]] = [[] for _ in range(n_faces)]
+    for e in range(2 * n):
+        f, g = face_of[2 * e], face_of[2 * e + 1]
+        neighbours[f].append(g)
+        neighbours[g].append(f)
+    colour = [-1] * n_faces
+    colour[0] = 0
+    stack = [0]
+    while stack:
+        f = stack.pop()
+        for g in neighbours[f]:
+            if colour[g] < 0:
+                colour[g] = 1 - colour[f]
+                stack.append(g)
+            elif colour[g] == colour[f]:
+                raise _DiagramExtractionError("Diagram faces are not 2-colourable")
+
+    white = [f for f in range(n_faces) if colour[f] != shade]
+    index = {f: i for i, f in enumerate(white)}
+    G = [[0] * len(white) for _ in white]
+    mu = 0
+    for c, (q0, q1, q2, q3) in zip(crossings, corners):
+        eta = 1 if colour[q0] == shade else -1
+        if eta == c["sign"]:
+            mu += eta
+        wi, wj = (q1, q3) if eta == 1 else (q0, q2)
+        if wi != wj:
+            i, j = index[wi], index[wj]
+            G[i][j] -= eta
+            G[j][i] -= eta
+            G[i][i] += eta
+            G[j][j] += eta
+    return [row[1:] for row in G[1:]], mu
+
+
+def _signature_and_det(M: List[List[int]]) -> Tuple[int, Fraction]:
+    """Exact signature and determinant of a symmetric integer matrix.
+
+    Diagonalises the form by congruence over ℚ.  When every remaining diagonal
+    entry is zero, a basis change e_i ↦ e_i + e_j (determinant 1) creates the
+    nonzero pivot 2·M_ij.
+    """
+    A = [[Fraction(x) for x in row] for row in M]
+    sig, det = 0, Fraction(1)
+    while A:
+        size = len(A)
+        p = next((i for i in range(size) if A[i][i] != 0), None)
+        if p is None:
+            pair = next(
+                ((i, j) for i in range(size) for j in range(i + 1, size) if A[i][j] != 0),
+                None,
+            )
+            if pair is None:
+                return sig, Fraction(0)
+            i, j = pair
+            for k in range(size):
+                A[i][k] += A[j][k]
+            for k in range(size):
+                A[k][i] += A[k][j]
+            p = i
+        d = A[p][p]
+        sig += 1 if d > 0 else -1
+        det *= d
+        rest = [k for k in range(size) if k != p]
+        A = [[A[r][s] - A[r][p] * A[p][s] / d for s in rest] for r in rest]
+    return sig, det
+
+
+def _signature_from_diagram(
+    pts3: np.ndarray,
+    ex: np.ndarray,
+    ey: np.ndarray,
+    ez: np.ndarray,
+    shade: int = 1,
+) -> int:
+    """Knot signature of a closed polyline, read off its projection.
+
+    Uses the Gordon–Litherland formula σ(K) = sign(G) − μ with the Goeritz
+    matrix G and correction term μ of `_goeritz_from_diagram`; the result does
+    not depend on the projection frame or on which colour is shaded.  The
+    convention is σ(K) = sig(V + V^T) for a Seifert matrix V, under which
+    positive knots have negative signature: the right-handed trefoil has
+    σ = −2.
+
+    Raises:
+        _DiagramExtractionError: if the projection is not a generic diagram.
+    """
+    crossings = _find_crossings(pts3, ex, ey, ez)
+    if not crossings:
+        return 0
+    G, mu = _goeritz_from_diagram(crossings, shade=shade)
+    sig, det = _signature_and_det(G)
+    if det == 0:
+        # A knot's Goeritz matrix has |det G| = |Δ(−1)|, which is odd.
+        raise _DiagramExtractionError("Goeritz matrix is singular")
+    return sig - mu
+
+
+def _signature_via_diagram(
+    ambient_complex: SimplicialComplex, K: SimplicialComplex
+) -> Optional[int]:
+    """Compute σ(K) from K's polygonal embedding in R^3 via Gordon–Litherland.
+
+    Returns None if no coordinates are attached.  Raises _DiagramExtractionError
+    if the polygon cannot be read off as a generic knot diagram.
+    """
+    pts = _knot_polyline_coords(ambient_complex, K)
+    if pts is None:
+        return None
+    if pts.shape[0] < 3:
+        return 0
+    ex, ey, ez = _projection_basis(pts)
+    return _signature_from_diagram(pts, ex, ey, ez)
+
+
 # ── Alexander polynomial helpers ──────────────────────────────────────────────
 
 
@@ -722,9 +939,18 @@ def knot_signature(
         σ(K) = sig(V + V^T), under which positive knots have negative
         signature (the usual convention, e.g. Rolfsen's and KnotInfo's): the
         right-handed trefoil, with three positive crossings, has σ = −2 and
-        the left-handed trefoil σ = +2.  Mirroring K negates σ.  Without
-        vertex coordinates the chirality, and with it the sign of σ, is fixed
-        only by the orientation convention of `seifert_matrix`.
+        the left-handed trefoil σ = +2.  Mirroring K negates σ.
+
+    Algorithm:
+        When vertex coordinates are attached, σ is read off a knot diagram of
+        K's polygonal embedding with the Gordon–Litherland formula
+        σ(K) = sign(G) − μ, where G is the Goeritz matrix of a checkerboard
+        colouring and μ the correction term from its type II crossings (see
+        `_goeritz_from_diagram`).  This is exact, independent of the ambient
+        triangulation and used for every `backend`.  Otherwise σ is computed
+        from the Seifert matrix of the triangulation (see `seifert_matrix`);
+        without vertex coordinates the chirality, and with it the sign of σ,
+        is fixed only by that function's orientation convention.
 
     Surgery relevance:
         σ(K) is a concordance invariant. |σ(K)|/2 is a lower bound for the
@@ -737,6 +963,16 @@ def knot_signature(
     # Planar polygons are unknots → σ = 0.
     if _is_planar_polygon(ambient_complex, K):
         return 0
+
+    # Canonical path: Gordon–Litherland on a diagram of the polygonal
+    # embedding, as for the Alexander polynomial.
+    if ambient_complex.simplices_to_point_cloud:
+        try:
+            sig = _signature_via_diagram(ambient_complex, K)
+            if sig is not None:
+                return sig
+        except _DiagramExtractionError:
+            pass
 
     V = seifert_matrix(ambient_complex, K, backend=backend)
     if V.shape[0] == 0:

@@ -18,6 +18,8 @@ from pysurgery.knots.invariants import (
     knot_signature, arf_invariant, genus_bound, knot_determinant,
     is_unknot, classify_knot, unknotting_number_lower_bound,
     _conway_from_alexander, _find_crossings, _knot_polyline_coords,
+    _goeritz_from_diagram, _is_generic_projection, _projection_basis,
+    _signature_and_det, _signature_from_diagram,
     _alexander_from_seifert,
 )
 from pysurgery.knots import seifert_surface
@@ -264,6 +266,64 @@ def test_knot_signature_is_int():
     assert isinstance(sig, int)
 
 
+@pytest.mark.parametrize("backend", ["python", "auto"])
+def test_knot_signature_trefoils(backend):
+    # σ = sig(V + V^T): positive knots have negative signature, so the
+    # right-handed trefoil (three positive crossings) has σ = −2.
+    assert knot_signature(*trefoil_knot(handedness="left"), backend=backend) == 2
+    assert knot_signature(*trefoil_knot(handedness="right"), backend=backend) == -2
+
+
+@pytest.mark.parametrize("backend", ["python", "auto"])
+def test_knot_signature_figure_eight(backend):
+    assert knot_signature(*figure_eight_knot(), backend=backend) == 0
+
+
+@pytest.mark.parametrize("backend", ["python", "auto"])
+def test_knot_signature_torus_knot_2_5(backend):
+    # torus_knot builds the left-handed (negative) T(2,5), so σ = +4
+    sc, K = torus_knot(2, 5)
+    assert knot_signature(sc, K, backend=backend) == 4
+    assert unknotting_number_lower_bound(sc, K, backend=backend) == 2
+
+
+def test_diagram_signature_is_projection_invariant():
+    # G and μ depend on the diagram, but sign(G) − μ does not: it is the same
+    # for every projection and either shading, and mirroring negates it.
+    sc, K = torus_knot(2, 5)
+    pts = _knot_polyline_coords(sc, K)
+    mirror = pts * np.array([1.0, 1.0, -1.0])
+    rng = np.random.default_rng(7)
+    sigs, n_frames = set(), 0
+    while n_frames < 4:
+        Q, _ = np.linalg.qr(rng.normal(size=(3, 3)))
+        ex, ey = Q[:, 0], Q[:, 1]
+        ez = np.cross(ex, ey)
+        if not (_is_generic_projection(pts, ex, ey, ez)
+                and _is_generic_projection(mirror, ex, ey, ez)):
+            continue
+        n_frames += 1
+        for shade in (0, 1):
+            sigs.add(_signature_from_diagram(pts, ex, ey, ez, shade=shade))
+            sigs.add(-_signature_from_diagram(mirror, ex, ey, ez, shade=shade))
+    assert sigs == {4}
+
+
+def test_goeritz_determinant_is_knot_determinant():
+    for sc, K in (trefoil_knot(), figure_eight_knot(), torus_knot(2, 5)):
+        pts = _knot_polyline_coords(sc, K)
+        G, _ = _goeritz_from_diagram(_find_crossings(pts, *_projection_basis(pts)))
+        assert abs(_signature_and_det(G)[1]) == knot_determinant(sc, K)
+
+
+def test_signature_and_det_exact():
+    assert _signature_and_det([[-2, 1], [1, -2]]) == (-2, 3)
+    # No nonzero diagonal entry: needs the e_i ↦ e_i + e_j pivot
+    assert _signature_and_det([[0, 1], [1, 0]]) == (0, -1)
+    assert _signature_and_det([[1, 1], [1, 1]]) == (1, 0)
+    assert _signature_and_det([]) == (0, 1)
+
+
 def test_arf_invariant_unknot():
     sc, K = unknot()
     assert arf_invariant(sc, K) == 0
@@ -360,15 +420,6 @@ def test_seifert_matrix_matches_diagram_invariants(name):
     assert _signature(V + V.T) == sigma
     # det(tV − Vᵀ) agrees with the Wirtinger polynomial of the knot diagram.
     assert _alexander_from_seifert(V) == delta == alexander_polynomial(sc, K)
-
-
-@pytest.mark.parametrize("backend", ["python", "auto"])
-@pytest.mark.parametrize("name", list(_DELAUNAY_KNOTS))
-def test_knot_signature_from_triangulation(name, backend):
-    make, sigma, _ = _DELAUNAY_KNOTS[name]
-    sc, K = make()
-    assert knot_signature(sc, K, backend=backend) == sigma
-    assert unknotting_number_lower_bound(sc, K, backend=backend) == abs(sigma) // 2
 
 
 @pytest.mark.parametrize("name", list(_DELAUNAY_KNOTS))

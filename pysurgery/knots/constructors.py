@@ -341,8 +341,8 @@ def trefoil_knot(handedness: str = "left") -> Tuple[SimplicialComplex, Simplicia
     crossings (negative for "left", positive for "right").  The ambient
     triangulation is the Delaunay 3-ball of the polyline plus a north-pole
     vertex (25 vertices, 95 tetrahedra), and vertex coordinates are attached so
-    the Alexander polynomial is read off the knot diagram exactly and the
-    signature has the chirality of R^3.
+    the Alexander polynomial and signature are read off the knot diagram
+    exactly.
 
     Args:
         handedness: "left" (default) or "right".
