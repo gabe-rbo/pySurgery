@@ -4,7 +4,8 @@ from typing import List, Optional, Tuple
 from pysurgery.core.exceptions import UndefinedInvariantError
 from pysurgery.topology.complexes import SimplicialComplex
 from pysurgery.manifolds.surgery import compute_linking_number
-from pysurgery.knots.triangulated_linking import triangulated_milnor_mu123
+from pysurgery.knots.seifert_surface import SeifertSurfaceError
+from pysurgery.knots.triangulated_linking import triangulated_milnor_mu123, triangulated_sato_levine
 
 class LinkType(Enum):
     """Enumeration of classified link types for multi-component links."""
@@ -12,7 +13,7 @@ class LinkType(Enum):
     UNLINKED = "Unlinked"
     HOPF = "Hopf"
     BORROMEAN = "Borromean"
-    WHITEHEAD = "Whitehead"        # lk=0, mu(1122) != 0; not produced by link_type yet
+    WHITEHEAD = "Whitehead"        # 2 components, lk = 0, Sato-Levine beta = -mu(1122) != 0
     TORUS_LINK = "TorusLink"       # T(p,q) with p,q sharing a factor
     UNLINKED_KNOTTED = "UnlinkedKnotted"  # components unlinked but individually knotted
     UNKNOWN = "Unknown"
@@ -116,6 +117,43 @@ def milnor_triple_invariant(
     return triangulated_milnor_mu123(ambient_complex, K_a, K_b, K_c)
 
 
+def sato_levine_invariant(
+    ambient_complex: SimplicialComplex,
+    K_a: SimplicialComplex,
+    K_b: SimplicialComplex,
+    backend: str = "auto",
+) -> int:
+    r"""Computes the Sato–Levine invariant β of a two-component link, β = −μ̄(1122).
+
+    What is Being Computed?:
+        For two disjoint knots with lk(K_a, K_b) = 0 in a triangulated rational homology
+        3-sphere or 3-ball, take embedded Seifert surfaces F_a, F_b with
+        F_a ∩ K_b = F_b ∩ K_a = ∅; β = lk(C, C⁺) for their intersection curve C and its
+        push-off along either surface. It is the first invariant beyond lk of a
+        two-component link: ±1 on the Whitehead link, 0 on split and boundary links,
+        symmetric in the components, unchanged by reversing one, negated by mirror
+        image. Computed exactly and intrinsically, with F_a PRIMAL and F_b DUAL so that
+        they are transverse; see ``pysurgery.knots.triangulated_linking``.
+
+    Args:
+        ambient_complex: The ambient triangulated 3-manifold.
+        K_a: First component (a simple closed curve in the 1-skeleton).
+        K_b: Second component, sharing no vertex with K_a.
+        backend: Accepted for API compatibility; the computation is exact.
+
+    Returns:
+        int: β(K_a ∪ K_b).
+
+    Raises:
+        UndefinedInvariantError: If lk(K_a, K_b) ≠ 0, or ``H_1(ambient; Q) != 0``.
+        SeifertSurfaceError: If no embedded surfaces are found even after refining.
+        NotAManifoldError: If the ambient is not an orientable combinatorial 3-manifold
+            whose boundary components are 2-spheres.
+        ValueError: If a component is not a simple closed curve disjoint from the other.
+    """
+    return triangulated_sato_levine(ambient_complex, K_a, K_b)
+
+
 def milnor_invariants(
     ambient_complex: SimplicialComplex,
     components: List[SimplicialComplex],
@@ -131,9 +169,11 @@ def milnor_invariants(
         (i, i, j), (i, j, i), (i, j, j), ... — length 3 with a repeated index. These
                      vanish whenever lk(K_i, K_j) = 0: by Milnor's shuffle relation
                      2 μ̄(iij) = 0 (the two shuffles of (i) with (i)) and
-                     μ̄(ijj) + μ̄(jij) = 0, and the rest follow by cyclic symmetry. For
-                     two components with lk = 0 the first possibly nonzero invariant is
-                     the length-4 μ̄(iijj) (Sato–Levine), which is not computed here.
+                     μ̄(ijj) + μ̄(jij) = 0, and the rest follow by cyclic symmetry.
+        (i, i, j, j) and its cyclic permutations — −β, the Sato–Levine invariant
+                     (sato_levine_invariant); (i, j, i, j) and (j, i, j, i) — 2β, by the
+                     shuffle relation μ̄(1212) + 2 μ̄(1122) = 0. Defined when
+                     lk(K_i, K_j) = 0.
 
     Args:
         ambient_complex: Ambient 3-manifold.
@@ -169,6 +209,23 @@ def milnor_invariants(
             )
             return 0 if lk and lk.exact and lk.value == 0 else None
 
+    if len(multi_index) == 4 and len(set(multi_index)) == 2:
+        i, j = sorted(set(multi_index))
+        seq = tuple(multi_index)
+        rotations = {seq[r:] + seq[:r] for r in range(4)}
+        if (i, j, i, j) in rotations:
+            factor = 2
+        elif (i, i, j, j) in rotations:
+            factor = -1
+        else:
+            return None
+        try:
+            return factor * sato_levine_invariant(
+                ambient_complex, components[i], components[j], backend=backend
+            )
+        except (UndefinedInvariantError, SeifertSurfaceError):
+            return None
+
     return None
 
 
@@ -181,14 +238,15 @@ def are_linked(
 
     Algorithm:
         1. Check all pairwise linking numbers lk(K_i, K_j) — detects most links.
-        2. For 3 components with all lk = 0: compute the Milnor triple invariant
+        2. For 2 components with lk = 0: compute the Sato–Levine invariant
+           β = −μ̄(1122) to detect Whitehead-type links.
+        3. For 3 components with all lk = 0: compute the Milnor triple invariant
            μ̄(123) to detect Borromean-type links.
 
-    True certifies that the components are linked. False means neither invariant
-    detects linking; it does not certify a split link. Not detected: two-component
-    links with lk = 0 that are linked (e.g. the Whitehead link, detected by the
-    Sato–Levine invariant μ̄(1122), not computed here), and three-component links with
-    lk = 0 and μ̄(123) = 0 that are linked at higher order.
+    True certifies that the components are linked. False means none of these invariants
+    detects linking; it does not certify a split link: linked two-component links with
+    lk = β = 0 and three-component links with lk = μ̄(123) = 0 exist (linked at higher
+    order), and β is skipped when no embedded Seifert surfaces are found.
 
     Args:
         ambient_complex: Ambient simplicial complex.
@@ -210,7 +268,15 @@ def are_linked(
             if lk_result and lk_result.exact and lk_result.value != 0:
                 return True
 
-    # Step 2: Milnor triple invariant for 3 components
+    # Step 2: Sato–Levine invariant for 2 components (Whitehead-type linking)
+    if n == 2:
+        try:
+            if sato_levine_invariant(ambient_complex, components[0], components[1], backend=backend):
+                return True
+        except (UndefinedInvariantError, SeifertSurfaceError):
+            pass
+
+    # Step 3: Milnor triple invariant for 3 components
     if n == 3:
         try:
             mu = milnor_triple_invariant(
@@ -232,16 +298,15 @@ def link_type(
     """Classify the link type of a set of components.
 
     Classification hierarchy:
-        UNLINKED          — no linking detected by the pairwise linking numbers or
-                            (for 3 components) μ̄(123); this does not certify a split
-                            link (see ``are_linked``)
+        UNLINKED          — no linking detected by the pairwise linking numbers, the
+                            Sato–Levine invariant (2 components) or μ̄(123)
+                            (3 components); this does not certify a split link (see
+                            ``are_linked``)
         HOPF              — 2 components with |lk| = 1
+        WHITEHEAD         — 2 components with lk = 0 and Sato–Levine β = −μ̄(1122) ≠ 0
         BORROMEAN         — 3 components, pairwise lk = 0, μ̄(123) ≠ 0
         UNLINKED_KNOTTED  — no linking detected, but a component is knotted
         UNKNOWN           — linked but not classified
-
-    ``LinkType.WHITEHEAD`` (lk = 0, μ̄(1122) ≠ 0) is not returned: the Sato–Levine
-    invariant μ̄(1122) is not computed.
 
     Args:
         ambient_complex: Ambient simplicial complex.
@@ -278,6 +343,11 @@ def link_type(
             return LinkType.HOPF
         if abs(lk_val) > 1:
             return LinkType.UNKNOWN
+        try:
+            if sato_levine_invariant(ambient_complex, components[0], components[1], backend=backend):
+                return LinkType.WHITEHEAD
+        except (UndefinedInvariantError, SeifertSurfaceError):
+            pass
 
     # ── 3-component classification ────────────────────────────────────────────
     if n == 3 and not any_nonzero_lk:

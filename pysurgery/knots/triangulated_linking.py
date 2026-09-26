@@ -1,14 +1,15 @@
-r"""Linking numbers and Milnor's triple linking number of links in a triangulated 3-manifold.
+r"""Linking numbers and Milnor invariants of links in a triangulated 3-manifold.
 
 Overview:
     Everything here is intrinsic to the triangulation -- no vertex coordinates are used --
-    and exact: rational linear algebra, integer answers (or a refusal).
+    and exact: rational or integer linear algebra, integer answers (or a refusal).
 
         triangulated_linking_number(M, J, K)      lk(J, K)
         triangulated_milnor_mu123(M, K1, K2, K3)  Milnor's mu-bar(123)
+        triangulated_sato_levine(M, K1, K2)       the Sato-Levine invariant beta = -mu-bar(1122)
         component_vertex_cycle(K)                 the orientation convention for components
 
-    Both invariants are intersection numbers, and an intersection number of simplicial
+    All of them are intersection numbers, and an intersection number of simplicial
     chains is only meaningful for chains in general position. Two primal chains of one
     triangulation never are (a primal curve lies inside the primal 2-chains it would have
     to cross; two primal 2-chains share edges), which is why the linking number cannot be
@@ -52,6 +53,17 @@ Key Concepts:
       AMS 427, 1990; Mellor-Melvin, AGT 3, 2003) -- and replacing K_2 by K_2* is a link
       homotopy, under which mu-bar(123) is invariant (Milnor, 1954). The minus sign is
       the Magnus-expansion convention of ``diagrams.diagram_milnor_mu123``.
+    - **Sato-Levine invariant.** For two components with lk = 0, ``beta = lk(C, C+)``
+      with C = F_1 cap G_2 as above, but now F_1 and G_2 must be EMBEDDED surfaces: C+
+      is the push-off of C along their normals, which chains with multiplicities or
+      branching do not have. F_1 is a minimal-area 2-chain with coefficients +-1 whose
+      support is a surface, G_2 a 1-cochain with values +-1 (its dual 2-cells then form a
+      surface), both found by integer programs whose constraints enforce embedding
+      along every edge. At the midpoint of an edge e the normal of G_2 points along e,
+      so C+ slides, off C, onto the primal path P through the endpoint of e it points
+      to, and ``beta = lk(C, P)``. Where the triangulation leaves no room for the
+      surfaces it is refined first (stellar subdivisions separating the components,
+      then a barycentric subdivision), which changes no invariant.
     - **Push-offs.** K* follows K through the open star of K: for consecutive edges
       ``[x_{j-1}, x_j]``, ``[x_j, x_{j+1}]`` it walks among the tetrahedra around x_j
       from one containing the first edge to one containing the second. Stellar
@@ -89,14 +101,18 @@ from itertools import combinations
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
+from scipy.optimize import Bounds, LinearConstraint, milp
+from scipy.sparse import csr_matrix, hstack, identity
 
 from ..core.exceptions import NotAManifoldError, UndefinedInvariantError
 from ..topology.complexes import SimplicialComplex
+from .seifert_surface import SeifertSurfaceError
 
 __all__ = [
     "component_vertex_cycle",
     "triangulated_linking_number",
     "triangulated_milnor_mu123",
+    "triangulated_sato_levine",
 ]
 
 Tet = Tuple[int, int, int, int]
@@ -110,6 +126,16 @@ Step = Tuple[Tet, Tet, Tri]
 _MU123_SIGN = -1
 
 _RANK_PRIME = 2_147_483_647
+
+_REWEIGHT_ROUNDS = 3  # re-solves penalising vertices where a surface touches itself
+
+
+class _NoRoom(SeifertSurfaceError):
+    """The integer program for a surface is infeasible in this triangulation."""
+
+
+class _NotFound(SeifertSurfaceError):
+    """No embedded surface found (it may exist): e.g. the minimal-area ones touch themselves."""
 
 
 def _faces(simplex: Tuple[int, ...]) -> List[Tuple[Tuple[int, ...], int]]:
@@ -371,6 +397,84 @@ def _coherent_orientation(tets: List[Tet]) -> Dict[Tet, int]:
     return orient
 
 
+def _check_rational_homology_sphere(tets: Sequence[Tet]) -> None:
+    """``H_1(M; Q) = 0`` (hence ``H_2(M; Q) = 0``): rank d_2 = #edges - #vertices + 1."""
+    tris = sorted({tri for tet in tets for tri, _ in _faces(tet)})
+    edges = sorted({e for tri in tris for e, _ in _faces(tri)})
+    target = len(edges) - len({v for tet in tets for v in tet}) + 1
+    column = {e: k for k, e in enumerate(edges)}
+
+    def rank(modulus: Optional[int]) -> int:
+        ech = _SparseEchelon(modulus)
+        for tri in tris:
+            ech.add({column[e]: s for e, s in _faces(tri)})
+            if ech.rank == target:
+                break
+        return ech.rank
+
+    # rank over F_p never exceeds rank over Q, so a full F_p rank certifies it.
+    if rank(_RANK_PRIME) < target and rank(None) < target:
+        raise UndefinedInvariantError(
+            "the ambient 3-manifold has H_1(M; Q) != 0: linking numbers need a rational "
+            "homology sphere (or ball)"
+        )
+
+
+def _separate(orient: Dict[Tet, int], cycles: Sequence[List[int]]) -> Dict[Tet, int]:
+    """Stellar-subdivide every edge joining two different cycles.
+
+    Afterwards no simplex has vertices on two cycles, so their open stars are disjoint
+    and surfaces avoiding one cycle have room near the other. Every new edge contains
+    the new vertex, so the joining edges can be collected once.
+    """
+    owner = {v: k for k, cycle in enumerate(cycles) for v in cycle}
+    joining = sorted({e for tet in orient for e in combinations(tet, 2)
+                      if e[0] in owner and e[1] in owner and owner[e[0]] != owner[e[1]]})
+    fresh = max(v for tet in orient for v in tet) + 1
+    for e in joining:
+        orient = _stellar(orient, e, fresh)
+        fresh += 1
+    return orient
+
+
+def _barycentric(orient: Dict[Tet, int], cycles: Sequence[List[int]]) -> Tuple[Dict[Tet, int], List[List[int]]]:
+    """Barycentric subdivision of oriented tetrahedra, and of the cycles in it.
+
+    Vertices keep their labels; the barycentre of every edge, triangle and tetrahedron
+    gets a new one. The simplex ``[b(v0), b(v0 v1), b(v0 v1 v2), b(v0 v1 v2 v3)]`` is
+    positively oriented relative to ``[v0, v1, v2, v3]`` (the affine map between them
+    is triangular with positive diagonal), which carries the orientation over.
+    """
+    from itertools import permutations
+
+    fresh = max(v for tet in orient for v in tet) + 1
+    label: Dict[Tuple[int, ...], int] = {}
+
+    def b(simplex: Tuple[int, ...]) -> int:
+        nonlocal fresh
+        if len(simplex) == 1:
+            return simplex[0]
+        if simplex not in label:
+            label[simplex] = fresh
+            fresh += 1
+        return label[simplex]
+
+    out: Dict[Tet, int] = {}
+    for tet, o in orient.items():
+        for order in permutations(tet):
+            _, parity = _sort_sign(order)
+            flag = [b(tuple(sorted(order[: k + 1]))) for k in range(4)]
+            piece, sign = _sort_sign(flag)
+            out[piece] = o * parity * sign
+    new_cycles = []
+    for cycle in cycles:
+        walk: List[int] = []
+        for i, v in enumerate(cycle):
+            walk += [v, b(tuple(sorted((v, cycle[(i + 1) % len(cycle)]))))]
+        new_cycles.append(walk)
+    return out, new_cycles
+
+
 def _stellar(orient: Dict[Tet, int], simplex: Tuple[int, ...], w: int) -> Dict[Tet, int]:
     """Stellar subdivision of ``simplex`` (an edge or a triangle) at a new vertex w.
 
@@ -423,7 +527,8 @@ def _make_full(orient: Dict[Tet, int], cycles: Sequence[List[int]]) -> Dict[Tet,
 class _TriangulatedLink:
     """A closed oriented combinatorial 3-manifold with link components in its 1-skeleton."""
 
-    def __init__(self, ambient: SimplicialComplex, components: Sequence[SimplicialComplex]):
+    def __init__(self, ambient: SimplicialComplex, components: Sequence[SimplicialComplex],
+                 refinement: int = 0):
         if ambient.dimension != 3:
             raise ValueError(
                 f"the ambient must be a 3-dimensional complex, got dimension {ambient.dimension}"
@@ -447,7 +552,15 @@ class _TriangulatedLink:
         orient = _coherent_orientation(capped)
         if self._geometric_vote(ambient, original, orient) < 0:
             orient = {tet: -o for tet, o in orient.items()}
-        self.orient: Dict[Tet, int] = _make_full(orient, self.cycles)
+        _check_rational_homology_sphere(capped)
+        # Refinement for embedded surfaces: 1 separates the components, 2 subdivides
+        # barycentrically first (which also separates them). Both are PL homeomorphisms.
+        if refinement >= 2:
+            orient, self.cycles = _barycentric(orient, self.cycles)
+        orient = _make_full(orient, self.cycles)
+        if refinement >= 1:
+            orient = _separate(orient, self.cycles)
+        self.orient: Dict[Tet, int] = orient
         self.tets: List[Tet] = sorted(self.orient)
 
         self.tri_tets: Dict[Tri, List[Tet]] = defaultdict(list)
@@ -471,9 +584,9 @@ class _TriangulatedLink:
         self.edges = sorted(self.edge_tris)
 
         self._check_coherent()
-        self._check_rational_homology_sphere()
         self._primal_tree_edges = self._spanning_tree_edges()
         self._dual_tree_tris = self._dual_spanning_tree_triangles()
+        self._tree_cotree_lu: Optional[Tuple[List[Edge], List[Tri], object]] = None
 
     @staticmethod
     def _cycle_edges(cycle: List[int]) -> List[Edge]:
@@ -507,26 +620,6 @@ class _TriangulatedLink:
         for tri, (a, b) in self.tri_tets.items():
             if self.orient[a] * _incidence(a, tri) + self.orient[b] * _incidence(b, tri):
                 raise RuntimeError(f"incoherent orientation across triangle {tri}")
-
-    def _check_rational_homology_sphere(self) -> None:
-        """``H_1(M; Q) = 0`` (hence ``H_2(M; Q) = 0``): rank d_2 = #edges - #vertices + 1."""
-        target = len(self.edges) - len(self.vertices) + 1
-        column = {e: k for k, e in enumerate(self.edges)}
-
-        def rank(modulus: Optional[int]) -> int:
-            ech = _SparseEchelon(modulus)
-            for tri in self.tri_tets:
-                ech.add({column[e]: s for e, s in _faces(tri)})
-                if ech.rank == target:
-                    break
-            return ech.rank
-
-        # rank over F_p never exceeds rank over Q, so a full F_p rank certifies it.
-        if rank(_RANK_PRIME) < target and rank(None) < target:
-            raise UndefinedInvariantError(
-                "the ambient 3-manifold has H_1(M; Q) != 0: linking numbers need a rational "
-                "homology sphere (or ball)"
-            )
 
     def _spanning_tree_edges(self) -> Set[Edge]:
         adjacent: Dict[int, List[int]] = defaultdict(list)
@@ -575,7 +668,14 @@ class _TriangulatedLink:
 
         Only the equations on edges outside a spanning tree are imposed: the residual
         ``dF - boundary`` is a 1-cycle, and a 1-cycle vanishing off a tree vanishes.
+        Without ``avoid`` an integral solution is tried first: restricted further to the
+        triangles outside a dual spanning tree the system is square, and unimodular when
+        ``H_1(M; Z) = 0``, so a floating-point LU solve rounds to it (checked exactly).
         """
+        if not avoid:
+            F = self._integral_seifert_chain(boundary)
+            if F is not None:
+                return F
         avoid = set(avoid)
         index = {tri: k for k, tri in enumerate(t for t in self.tri_tets if t not in avoid)}
         tris = list(index)
@@ -589,6 +689,37 @@ class _TriangulatedLink:
                     "a component bounds no 2-chain in the complement of the others' push-offs"
                 )
         return {tris[c]: v for c, v in ech.solution().items()}
+
+    def _integral_seifert_chain(self, boundary: Dict[Edge, int]) -> Optional[Dict[Tri, Fraction]]:
+        from scipy.sparse.linalg import splu
+
+        if self._tree_cotree_lu is None:
+            rows = [e for e in self.edges if e not in self._primal_tree_edges]
+            cols = [t for t in self.tri_tets if t not in self._dual_tree_tris]
+            r_of, c_of = {e: i for i, e in enumerate(rows)}, {t: j for j, t in enumerate(cols)}
+            entries = [(r_of[e], c_of[t], s) for t in cols for e, s in _faces(t) if e in r_of]
+            r, c, v = zip(*entries)
+            M = csr_matrix((np.array(v, float), (r, c)), shape=(len(rows), len(cols)))
+            try:
+                lu = splu(M.tocsc()) if len(rows) == len(cols) else None
+            except RuntimeError:
+                lu = None
+            self._tree_cotree_lu = (rows, cols, lu)
+        rows, cols, lu = self._tree_cotree_lu
+        if lu is None:
+            return None
+        x = lu.solve(np.array([boundary.get(e, 0) for e in rows], dtype=np.float64))
+        xi = np.rint(x).astype(np.int64)
+        if np.max(np.abs(x - xi), initial=0.0) > 1e-6:
+            return None
+        F = {cols[j]: int(xi[j]) for j in np.nonzero(xi)[0]}
+        residual: Dict[Edge, int] = defaultdict(int)
+        for t, f in F.items():
+            for e, s in _faces(t):
+                residual[e] += s * f
+        if any(residual.get(e, 0) != boundary.get(e, 0) for e in set(residual) | set(boundary)):
+            return None
+        return {t: Fraction(f) for t, f in F.items()}
 
     def bounding_cochain(self, beta: Dict[Tri, int], vanish_on: Iterable[Edge] = ()) -> Dict[Edge, Fraction]:
         """A rational 1-cochain g with ``delta g = beta`` vanishing on ``vanish_on``.
@@ -674,6 +805,139 @@ class _TriangulatedLink:
         for a, _, tri in steps:
             beta[tri] += self.orient[a] * _incidence(a, tri)
         return {t: v for t, v in beta.items() if v}
+
+    # ── embedded surfaces ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _min_area(A: csr_matrix, b: np.ndarray, groups: Sequence[Tuple[List[int], int, int]],
+                  singular: Callable[[np.ndarray], Set[int]], what: str,
+                  rounds: int = _REWEIGHT_ROUNDS) -> np.ndarray:
+        """Integral x with ``A x = b``, ``|x| <= 1`` and local embedding, of minimal area.
+
+        An integer program (HiGHS; its LP relaxation is tried first and is usually
+        integral already): x = p - n with p, n binary and ``p + n <= 1``,
+        ``lo <= sum_{j in cols} |x_j| <= hi`` for each ``(cols, lo, hi)`` in ``groups``,
+        minimising ``sum w |x|`` for weights w near 1 (tie-breaking perturbation). The
+        solution is checked exactly. ``singular(x)`` names the columns where the support
+        still fails to be embedded (conditions that are not linear); their weights are
+        doubled and the program solved again.
+        """
+        n = A.shape[1]
+        I = identity(n, format="csr", dtype=np.int64)
+        constraints = [LinearConstraint(hstack([A, -A]).tocsr(), b, b),
+                       LinearConstraint(hstack([I, I]).tocsr(), 0, 1)]
+        if groups:
+            rows, cols = [], []
+            for i, (js, _, _) in enumerate(groups):
+                rows.extend([i] * len(js))
+                cols.extend(js)
+            G = csr_matrix((np.ones(len(cols)), (rows, cols)), shape=(len(groups), n))
+            constraints.append(LinearConstraint(hstack([G, G]).tocsr(),
+                                                [lo for _, lo, _ in groups], [hi for _, _, hi in groups]))
+        w = 1.0 + 1e-3 * np.random.default_rng(0).random(n)
+
+        def solve(integral: bool) -> Optional[np.ndarray]:
+            res = milp(np.concatenate([w, w]), constraints=constraints,
+                       integrality=np.full(2 * n, 1 if integral else 0), bounds=Bounds(0, 1))
+            if res.status == 2:
+                raise _NoRoom(f"no {what} exists in this triangulation; a finer triangulation may help")
+            if res.x is None or np.max(np.abs(res.x - np.rint(res.x)), initial=0.0) > 1e-6:
+                return None
+            pn = np.rint(res.x).astype(np.int64)
+            x = pn[:n] - pn[n:]
+            if not np.array_equal(A @ x, b.astype(np.int64)) or any(
+                not lo <= int(np.count_nonzero(x[js])) <= hi for js, lo, hi in groups
+            ):
+                return None
+            return x
+
+        for _ in range(rounds):
+            # The LP relaxation first: usually integral already, and infeasible exactly
+            # when the integer program is.
+            x = solve(integral=False)
+            if x is None:
+                x = solve(integral=True)
+            if x is None:
+                raise _NotFound(f"the integer program gave no verified {what}")
+            bad = singular(x)
+            if not bad:
+                return x
+            w[list(bad)] *= 2.0
+        raise _NotFound(
+            f"no embedded {what} found: the minimal-area solutions keep touching themselves "
+            "at a vertex; a finer triangulation may help"
+        )
+
+    def embedded_seifert_surface(self, boundary: Dict[Edge, int], avoid: Iterable[Tri] = (),
+                                 rounds: int = _REWEIGHT_ROUNDS) -> Dict[Tri, int]:
+        """An embedded Seifert surface of a component, as a 2-chain with coefficients +-1.
+
+        Minimal-area integral F with ``dF = boundary`` using no triangle of ``avoid``,
+        whose support is an embedded surface with boundary the component: every edge in
+        none or two of its triangles (exactly one for boundary edges, constraints of the
+        integer program), every vertex link connected (checked, then penalised).
+        """
+        avoid = set(avoid)
+        tris = [t for t in self.tri_tets if t not in avoid]
+        row = {e: i for i, e in enumerate(self.edges)}
+        entries = [(row[e], j, sign) for j, t in enumerate(tris) for e, sign in _faces(t)]
+        rows, cols, vals = zip(*entries)
+        A = csr_matrix((vals, (rows, cols)), shape=(len(self.edges), len(tris)), dtype=np.int64)
+        b = np.array([boundary.get(e, 0) for e in self.edges], dtype=np.float64)
+
+        at_edge: Dict[Edge, List[int]] = defaultdict(list)
+        for j, t in enumerate(tris):
+            for e, _ in _faces(t):
+                at_edge[e].append(j)
+        # Along the boundary one sheet, elsewhere none or two.
+        groups = [(js, 1, 1) if boundary.get(e) else (js, 0, 2) for e, js in at_edge.items()]
+
+        def singular(F: np.ndarray) -> Set[int]:
+            support = [j for j in np.nonzero(F)[0]]
+            bad: Set[int] = set()
+            link: Dict[int, List[Tuple[Edge, int]]] = defaultdict(list)
+            for j in support:
+                t = tris[j]
+                for i, v in enumerate(t):
+                    link[v].append((t[:i] + t[i + 1:], j))
+            for pieces in link.values():
+                seen = {pieces[0][0][0]}
+                grew = True
+                while grew:
+                    grew = False
+                    for (a, c), _ in pieces:
+                        if (a in seen) != (c in seen):
+                            seen.update((a, c))
+                            grew = True
+                if any(a not in seen for (a, _), _ in pieces):
+                    bad.update(j for _, j in pieces)
+            return bad
+
+        F = self._min_area(A, b, groups, singular, "Seifert surface avoiding the other components", rounds)
+        return {tris[j]: int(F[j]) for j in np.nonzero(F)[0]}
+
+    def embedded_dual_surface(self, beta: Dict[Tri, int], vanish_on: Iterable[Edge] = ()) -> Dict[Edge, int]:
+        """An embedded dual Seifert surface of a dual push-off, as a 1-cochain with values +-1.
+
+        Minimal-area integral g with ``delta g = beta`` vanishing on ``vanish_on``. With
+        ``|g| <= 1`` the dual 2-cells of its support form an embedded surface away from the
+        push-off (around a triangle with ``delta g = 0`` an even number, 0 or 2, of its
+        edges carry g; around a tetrahedron the pieces are triangles or quadrilaterals),
+        and along the push-off it is embedded exactly when every crossed triangle has
+        one edge in the support (a constraint of the integer program).
+        """
+        vanish_on = set(vanish_on)
+        edges = [e for e in self.edges if e not in vanish_on]
+        col = {e: j for j, e in enumerate(edges)}
+        tris = list(self.tri_tets)
+        entries = [(i, col[e], sign) for i, t in enumerate(tris) for e, sign in _faces(t) if e in col]
+        rows, cols, vals = zip(*entries)
+        A = csr_matrix((vals, (rows, cols)), shape=(len(tris), len(edges)), dtype=np.int64)
+        b = np.array([beta.get(t, 0) for t in tris], dtype=np.float64)
+        # Along the push-off one sheet: exactly one edge of each crossed triangle.
+        groups = [([col[e] for e, _ in _faces(t) if e in col], 1, 1) for t in tris if beta.get(t)]
+        g = self._min_area(A, b, groups, lambda g: set(), "dual Seifert surface avoiding the other components")
+        return {edges[j]: int(g[j]) for j in np.nonzero(g)[0]}
 
     # ── invariants ──────────────────────────────────────────────────────────
 
@@ -821,3 +1085,113 @@ def triangulated_milnor_mu123(
         betas[1], vanish_on=L._cycle_edges(L.cycles[0]) + L._cycle_edges(L.cycles[2])
     )
     return _MU123_SIGN * _as_integer(L.triple(F1, g2, F3), "mu-bar(123)")
+
+
+def triangulated_sato_levine(
+    ambient_complex: SimplicialComplex,
+    K_1: SimplicialComplex,
+    K_2: SimplicialComplex,
+) -> int:
+    r"""The Sato-Levine invariant beta of a two-component link in a triangulated 3-manifold.
+
+    What is Being Computed?:
+        For a link with ``lk(K_1, K_2) = 0`` take embedded Seifert surfaces F_1, F_2 with
+        ``F_1 cap K_2 = F_2 cap K_1 = empty``. Their intersection C is a closed curve,
+        framed by either surface, and ``beta = lk(C, C+)`` for the framed push-off C+
+        (Sato, 1984). It does not depend on the surfaces, is an isotopy invariant, equals
+        ``-mu-bar(1122)`` (Cochran, *Derivatives of links*, Mem. AMS 427, 1990), is +-1 on
+        the Whitehead link and 0 on split links and boundary links, changes sign under
+        mirror image and not under reversing a component.
+
+    Algorithm:
+        1. As for ``triangulated_milnor_mu123``: cap boundary spheres, check the
+           ambient, make the components full, push K_1 and K_2 off to dual cycles, and
+           require ``lk(K_1, K_2) = 0``.
+        2. F_1: a minimal-area PRIMAL surface with ``dF_1 = K_1`` using no triangle
+           crossed by K_2*. G_2: a minimal-area DUAL surface (a 1-cochain g with
+           ``delta g = beta(K_2*)``, ``|g| <= 1``) vanishing on K_1. Both are integer
+           programs whose constraints make the surfaces embedded along every edge;
+           vertices where F_1 touches itself are penalised and the program re-solved.
+        3. ``C = F_1 cap G_2 = sum F_1[t] g(e) [t:e] (midpoint(e) -> barycentre(t))``.
+           At the midpoint of e the normal of G_2 is ``+-e``, so C+ (pushed along it,
+           inside F_1) runs parallel to C on the side of the vertex ``e[1]`` or ``e[0]``
+           (as g(e) is +1 or -1), and slides within F_1, off C, onto the primal path P
+           through those vertices: in each triangle of F_1 met by C, from the vertex of
+           the edge C enters by to the vertex of the edge it leaves by.
+        4. ``beta = lk(C, P)``, as in the triple linking number: C pushed into the rings
+           of tetrahedra around its edges, against a 2-chain bounded by P.
+        If the triangulation has no room for the surfaces with K_1 carrying the primal
+        one (e.g. every tetrahedron near K_1 reaches K_2), the roles are swapped; failing
+        that, both are tried again after stellar-subdividing every edge that joins the
+        components, and then after a barycentric subdivision (slow). beta is a
+        topological invariant, so none of this changes it.
+
+    Args:
+        ambient_complex: A triangulated rational homology 3-sphere or 3-ball.
+        K_1: First component (a simple closed curve in the 1-skeleton).
+        K_2: Second component, sharing no vertex with K_1.
+
+    Returns:
+        beta(K_1 u K_2), an integer; symmetric in the two components.
+
+    Raises:
+        ValueError: If the dimensions or components are invalid.
+        NotAManifoldError: If the ambient is not an orientable combinatorial 3-manifold
+            whose boundary components are 2-spheres.
+        UndefinedInvariantError: If ``lk(K_1, K_2) != 0``, or ``H_1(ambient; Q) != 0``.
+        SeifertSurfaceError: If even the refined triangulations have no room for the
+            embedded surfaces (the integer programs are infeasible or keep touching
+            themselves at a vertex); a finer triangulation may help.
+    """
+    first_error: Optional[SeifertSurfaceError] = None
+    no_room: Set[Tuple[int, int]] = set()
+    for refinement in (0, 1, 2):
+        links: Dict[int, _TriangulatedLink] = {}
+        for rounds in (1, _REWEIGHT_ROUNDS):
+            for order, pair in enumerate(((K_1, K_2), (K_2, K_1))):  # beta is symmetric
+                if (refinement, order) in no_room:
+                    continue
+                if order not in links:
+                    links[order] = _TriangulatedLink(ambient_complex, list(pair), refinement)
+                try:
+                    return _sato_levine(links[order], rounds)
+                except _NoRoom as err:
+                    no_room.add((refinement, order))
+                    first_error = first_error or err
+                except _NotFound as err:
+                    first_error = first_error or err
+    raise first_error
+
+
+def _sato_levine(L: _TriangulatedLink, rounds: int = _REWEIGHT_ROUNDS) -> int:
+    """The Sato-Levine invariant lk(C, C+), C = F_1 cap G_2, with the components of L in order."""
+    push1, push2 = L.dual_pushoff(0), L.dual_pushoff(1)
+    beta1, beta2 = L.crossing_cochain(push1), L.crossing_cochain(push2)
+    F2 = L.seifert_chain(L.cycle_vector(1))
+    lk = _as_integer(sum(v * F2.get(t, 0) for t, v in beta1.items()), "lk")
+    if lk:
+        raise UndefinedInvariantError(
+            f"the Sato-Levine invariant needs lk(K_1, K_2) = 0, got lk = {lk}"
+        )
+    on_K1 = set(L._cycle_edges(L.cycles[0]))
+    F1 = L.embedded_seifert_surface(L.cycle_vector(0), avoid={tri for _, _, tri in push2}, rounds=rounds)
+    g2 = L.embedded_dual_surface(beta2, vanish_on=on_K1)
+
+    P: Dict[Edge, int] = defaultdict(int)
+    for t, f in F1.items():
+        through = sorted(((f * g2[e] * s, e) for e, s in _faces(t) if g2.get(e)), reverse=True)
+        if not through:
+            continue
+        if [c for c, _ in through] != [1, -1]:
+            raise RuntimeError(f"F_1 cap G_2 is not a closed 1-manifold at triangle {t}")
+        (_, e_in), (_, e_out) = through
+        v_in = e_in[1] if g2[e_in] > 0 else e_in[0]
+        v_out = e_out[1] if g2[e_out] > 0 else e_out[0]
+        corner = set(e_in) & set(e_out)
+        if (v_in in corner) != (v_out in corner):
+            raise RuntimeError(f"the dual surface is not coherently oriented at triangle {t}")
+        if v_in != v_out:
+            P[(min(v_in, v_out), max(v_in, v_out))] += 1 if v_in < v_out else -1
+    P = {e: c for e, c in P.items() if c}
+    F_P = L.seifert_chain(P) if P else {}
+    return _as_integer(L.triple(F1, g2, F_P), "the Sato-Levine invariant")
