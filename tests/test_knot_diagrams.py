@@ -6,6 +6,8 @@ Overview:
     exact cone-intersection linking number of ``knots.geometric_linking`` (a different
     piece of mathematics, same sign), and Python against Julia.
 """
+import itertools
+
 import numpy as np
 import pytest
 
@@ -77,6 +79,35 @@ def test_milnor_triple_linking_of_the_borromean_rings(backend):
     assert KD.diagram_milnor_mu123(C, A, B, backend=backend) == mu
     assert KD.diagram_milnor_mu123(B, A, C, backend=backend) == -mu
     assert KD.diagram_milnor_mu123(A[::-1], B, C, backend=backend) == -mu
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_milnor_invariants_of_any_length(backend):
+    """Milnor's algorithm against the invariants computed differently, and the symmetries
+    that make the numbers invariants."""
+    H = S.hopf_link(120)
+    assert KD.diagram_milnor_mu(H, (0, 1), backend=backend) == KD.diagram_linking_number(*H, backend=backend)
+    B = S.borromean_rings(200)
+    for perm in itertools.permutations(range(3)):
+        assert KD.diagram_milnor_mu(B, perm, backend=backend) == \
+            KD.diagram_milnor_mu123(*[B[i] for i in perm], backend=backend)
+    mirror = [c * np.array([1, 1, -1]) for c in B]   # odd length: mirror-invariant
+    assert KD.diagram_milnor_mu(mirror, (0, 1, 2), backend=backend) == KD.diagram_milnor_mu(B, (0, 1, 2), backend=backend)
+
+    W = S.whitehead_link()
+    mu = KD.diagram_milnor_mu(W, (0, 0, 1, 1), backend=backend)
+    assert abs(mu) == 1
+    for fr in KD.projection_frames(6):
+        assert KD.diagram_milnor_mu(W, (0, 0, 1, 1), D=KD.knot_diagram(W, frame=fr)) == mu
+    assert KD.diagram_milnor_mu(W, (1, 1, 0, 0), backend=backend) == mu
+    assert KD.diagram_milnor_mu(W, (0, 1, 0, 1), backend=backend) == -2 * mu   # shuffle relation
+    assert KD.diagram_milnor_mu([W[0][::-1], W[1]], (0, 0, 1, 1), backend=backend) == mu
+    mirror = [c * np.array([1, 1, -1]) for c in W]   # even length: negated
+    assert KD.diagram_milnor_mu(mirror, (0, 0, 1, 1), backend=backend) == -mu
+    assert KD.diagram_milnor_mu(S.unlink(2, 80), (0, 0, 1, 1), backend=backend) == 0
+    assert KD.diagram_milnor_mu(B[:2], (0, 0, 1, 1), backend=backend) == 0
+    with pytest.raises(UndefinedInvariantError):   # lk = -1: mu(1122) is only defined mod 1
+        KD.diagram_milnor_mu(H, (0, 0, 1, 1), backend=backend)
 
 
 def test_milnor_vanishes_on_the_unlink_and_is_refused_when_undefined():

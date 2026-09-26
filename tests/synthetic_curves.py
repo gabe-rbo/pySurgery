@@ -5,7 +5,8 @@ Closed polygons in R^3 and sampled surfaces, ported from TabularTopology's
 invariant) is 1 on the trefoil, -1 on the figure-eight, (p^2-1)(q^2-1)/24 on the
 (p, q) torus knot; the Hopf link has linking number -1 as built here; the (2, 2k)
 torus link has linking number k in absolute value; the Borromean rings are pairwise
-unlinked with Milnor invariant mu(123) = +-1.
+unlinked with Milnor invariant mu(123) = +-1; the Whitehead link has lk = 0 and
+mu(1122) = +-1.
 """
 import numpy as np
 
@@ -57,6 +58,21 @@ def borromean_rings(n=400, a=1.618, b=1.0):
     return [np.stack([z, b * np.cos(t), a * np.sin(t)], 1),
             np.stack([a * np.sin(t), z, b * np.cos(t)], 1),
             np.stack([b * np.cos(t), a * np.sin(t), z], 1)]
+
+
+# The Whitehead link of ``knots.constructors.whitehead_link``: a square weaving over and
+# under the two lobes of a figure-eight curve (corner polygons, integer coordinates).
+WHITEHEAD_CORNERS = (
+    [(4, -4, 2), (4, 4, 2), (4, 4, -2), (-4, 4, -2), (-4, 4, 2), (-4, -4, 2), (-4, -4, -2),
+     (4, -4, -2)],
+    [(-2, 0, 2), (2, 0, 2), (2, 0, 0), (8, 0, 0), (8, 6, 0), (0, 6, 0), (0, 2, 0), (0, 2, -2),
+     (0, -2, -2), (0, -2, 0), (0, -6, 0), (-8, -6, 0), (-8, 0, 0), (-2, 0, 0)],
+)
+
+
+def whitehead_link():
+    """The Whitehead link: lk = 0, Sato-Levine invariant beta = -mu-bar(1122) = +-1."""
+    return [np.array(c, dtype=float) for c in WHITEHEAD_CORNERS]
 
 
 def unlink(k=2, n=200, sep=3.0):
