@@ -20,7 +20,7 @@ export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomolo
     BarcodeResult, compute_persistence_barcodes, compute_filtration_persistence, compute_rips_filtration, compute_rips_cohomology, compute_alpha_filtration,
     surgery_relative_boundary_sparse, linking_seifert_solve_z,
     surgery_handle_attach, sphere_recognition_pl,
-    compute_cohomology_basis_jl, linking_intersect_2chains,
+    compute_cohomology_basis_jl,
     alexander_from_seifert_jl, knot_signature_jl, linking_gauss_riemann_jl,
     compute_hodge_harmonics_jl, compute_hodge_decomposition_jl
 
@@ -6232,57 +6232,6 @@ function linking_seifert_solve_z(B_raw, b_raw)
             return (zeros(Int64, n), false, :not_in_image)
         end
     end
-end
-
-function linking_intersect_2chains(
-    F_a_raw,
-    F_b_raw,
-    simplices_1_raw,
-    simplices_2_raw,
-    simplices_3_raw
-)
-    F_a = pyconvert(Vector{Int64}, F_a_raw)
-    F_b = pyconvert(Vector{Int64}, F_b_raw)
-    simplices_1 = [pyconvert(Vector{Int}, s) for s in simplices_1_raw]
-    simplices_2 = [pyconvert(Vector{Int}, s) for s in simplices_2_raw]
-    simplices_3 = [pyconvert(Vector{Int}, s) for s in simplices_3_raw]
-
-    n_1simplices = length(simplices_1)
-    intersection_chain = zeros(Int64, n_1simplices)
-
-    idx_1 = Dict{Tuple{Int, Int}, Int}()
-    for (i, s) in enumerate(simplices_1)
-        idx_1[(s[1], s[2])] = i
-    end
-
-    idx_2 = Dict{Tuple{Int, Int, Int}, Int}()
-    for (i, s) in enumerate(simplices_2)
-        idx_2[(s[1], s[2], s[3])] = i
-    end
-
-    for s3 in simplices_3
-        v0, v1, v2, v3 = s3[1], s3[2], s3[3], s3[4]
-        
-        f_face = (v0, v1, v2)
-        b_face = (v1, v2, v3)
-        m_edge = (v1, v2)
-        
-        if haskey(idx_2, f_face) && haskey(idx_2, b_face) && haskey(idx_1, m_edge)
-            i_f = idx_2[f_face]
-            i_b = idx_2[b_face]
-            i_m = idx_1[m_edge]
-            
-            c_a_f = i_f <= length(F_a) ? F_a[i_f] : 0
-            c_b_b = i_b <= length(F_b) ? F_b[i_b] : 0
-            c_b_f = i_f <= length(F_b) ? F_b[i_f] : 0
-            c_a_b = i_b <= length(F_a) ? F_a[i_b] : 0
-            
-            val = c_a_f * c_b_b - c_b_f * c_a_b
-            intersection_chain[i_m] += val
-        end
-    end
-    
-    return intersection_chain
 end
 
 """
