@@ -228,11 +228,21 @@ def test_milnor_triple_invariant_refuses_what_it_cannot_define():
         milnor_triple_invariant(sc, *comps)
     assert milnor_invariants(sc, comps, (0, 1, 2)) is None
 
-    grid, idx_map = _build_s3_grid(size=6)   # overlapping tetrahedra: not a 3-manifold
+    grid, idx_map = _build_s3_grid(size=6)
     squares = [[(2, 2, z), (3, 2, z), (3, 3, z), (2, 3, z)] for z in (2, 4)]
     squares.append([(4, 4, 4), (5, 4, 4), (5, 5, 4), (4, 5, 4)])
+    # A triangle shared by 3 tetrahedra is not a 3-manifold:
+    tri_tets = Counter(
+        tuple(sorted(t[:i] + t[i + 1:]))
+        for t in grid.n_simplices(3)
+        for i in range(4)
+    )
+    interior_tri = next(tri for tri, count in tri_tets.items() if count == 2)
+    non_manifold = SimplicialComplex.from_simplices(
+        list(grid.n_simplices(3)) + [interior_tri + (99999,)]
+    )
     with pytest.raises(NotAManifoldError):
-        milnor_triple_invariant(grid, *[_extract_cycle(idx_map, s) for s in squares])
+        milnor_triple_invariant(non_manifold, *[_extract_cycle(idx_map, s) for s in squares])
 
     sc, comps = borromean_rings()
     with pytest.raises(ValueError, match="share vertex"):
