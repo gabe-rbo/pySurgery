@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from pysurgery.core.exceptions import UndefinedInvariantError
 from pysurgery.topology.complexes import SimplicialComplex
 from pysurgery.knots.linking import linking_matrix, link_type, LinkType, milnor_triple_invariant
 from pysurgery.knots.invariants import (
@@ -151,7 +152,8 @@ def find_knots_between_components(
         Given a simplicial complex sc (or explicit components), this function:
         1. Extracts the connected 1-cycle components (if not provided).
         2. Computes the full linking matrix (pairwise linking numbers).
-        3. Checks for higher-order Milnor linking (Borromean-type, Whitehead-type).
+        3. For three pairwise unlinked components, computes Milnor's μ̄(123)
+           (Borromean-type linking).
         4. Computes per-component knot invariants (Alexander polynomial, signature, Arf).
         5. Classifies each pair and the overall link type.
 
@@ -205,7 +207,7 @@ def find_knots_between_components(
             result.milnor_triple = mu
             if mu != 0:
                 result.are_linked = True
-        except ValueError:
+        except UndefinedInvariantError:
             pass
 
     if not result.are_linked and n >= 4:

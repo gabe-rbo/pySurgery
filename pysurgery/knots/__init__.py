@@ -8,6 +8,12 @@ from .linking import (
     LinkType,
 )
 
+from .triangulated_linking import (
+    component_vertex_cycle,
+    triangulated_linking_number,
+    triangulated_milnor_mu123,
+)
+
 from .constructors import (
     hopf_link,
     borromean_rings,
@@ -87,6 +93,10 @@ __all__ = [
     "are_linked",
     "link_type",
     "LinkType",
+    # Linking invariants of links in a triangulated 3-manifold (exact, intrinsic)
+    "component_vertex_cycle",
+    "triangulated_linking_number",
+    "triangulated_milnor_mu123",
     # Constructors
     "hopf_link",
     "borromean_rings",

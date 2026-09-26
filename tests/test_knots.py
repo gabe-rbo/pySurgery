@@ -1,9 +1,12 @@
 """Tests for the pysurgery.knots module: linking, invariants, constructors, analysis."""
 from collections import Counter
+import itertools
 
 import pytest
 import numpy as np
 
+from pysurgery.core.exceptions import NotAManifoldError, UndefinedInvariantError
+from pysurgery.topology.complexes import SimplicialComplex
 from pysurgery.knots.linking import (
     linking_matrix, milnor_triple_invariant, milnor_invariants,
     are_linked, link_type, LinkType,
@@ -12,6 +15,11 @@ from pysurgery.knots.constructors import (
     hopf_link, borromean_rings,
     unknot, trefoil_knot, figure_eight_knot, torus_knot, whitehead_link,
     _build_s3_grid, _extract_cycle,
+    _subdivided_polyline, _delaunay_s3_from_points, _ring_cycle,
+)
+from pysurgery.knots.diagrams import diagram_linking_number, diagram_milnor_mu123
+from pysurgery.knots.triangulated_linking import (
+    component_vertex_cycle, triangulated_linking_number,
 )
 from pysurgery.knots.invariants import (
     seifert_matrix, alexander_polynomial, conway_polynomial,
@@ -54,7 +62,7 @@ def test_borromean_rings():
             assert L[i, j] == 0
 
     mu = milnor_triple_invariant(sc, components[0], components[1], components[2])
-    assert mu != 0
+    assert abs(mu) == 1
 
     assert are_linked(sc, components) is True
     assert link_type(sc, components) == LinkType.BORROMEAN
@@ -86,7 +94,163 @@ def test_milnor_invariants_triple_borromean():
     sc, components = borromean_rings()
     mu_012 = milnor_invariants(sc, components, (0, 1, 2))
     assert mu_012 is not None
-    assert mu_012 != 0
+    assert abs(mu_012) == 1
+    # Length-3 invariants with a repeated index vanish when the linking number does.
+    assert milnor_invariants(sc, components, (0, 0, 1)) == 0
+    assert milnor_invariants(sc, components, (0, 1, 1)) == 0
+
+
+# ── Milnor's triple linking number in a triangulation ────────────────────────
+#
+# Links are built as unit-step polygons on the integer grid inside the Delaunay
+# 3-ball of their vertices plus a pole (as `borromean_rings` does), so the same
+# polygons can be handed to the diagram formula `diagram_milnor_mu123`, a
+# different piece of mathematics (Magnus expansion of a longitude).
+
+
+def _grid_link(corner_lists, extent=12.0):
+    rings = [_subdivided_polyline(c) for c in corner_lists]
+    sc, idx = _delaunay_s3_from_points([p for r in rings for p in r], bbox_extent=extent)
+    return sc, [_ring_cycle(r, idx) for r in rings]
+
+
+def _polygons(sc, components):
+    """The components as polygons in R^3, in the orientation the triangulation uses."""
+    cloud = sc.simplices_to_point_cloud
+    return [np.array([cloud[(v,)][0] for v in component_vertex_cycle(c)]) for c in components]
+
+
+def _relabelled(sc, components, seed, mirror=False, coordinates=True):
+    """The same link with shuffled vertex labels (which changes the canonical
+    orientation of the components), optionally mirrored or without coordinates."""
+    n = sc.count_simplices(0)
+    perm = np.random.default_rng(seed).permutation(n)
+    new = SimplicialComplex.from_maximal_simplices(
+        [tuple(sorted(int(perm[v]) for v in t)) for t in sc.n_simplices(3)]
+    )
+    if coordinates:
+        cloud = sc.simplices_to_point_cloud
+        pts = np.zeros((n, 3))
+        for v in range(n):
+            pts[perm[v]] = cloud[(v,)][0]
+        if mirror:
+            pts[:, 2] *= -1
+        new._generate_point_cloud_mappings(pts)
+    comps = [
+        SimplicialComplex.from_simplices([tuple(sorted(int(perm[v]) for v in e)) for e in c.n_simplices(1)])
+        for c in components
+    ]
+    return new, comps
+
+
+def _perm_sign(perm):
+    return (-1) ** sum(1 for a, b in itertools.combinations(perm, 2) if a > b)
+
+
+# The Borromean rings of `borromean_rings`, scaled by 2, and a component that runs
+# twice around the third ring: in the group of the unlink formed by the first two it
+# is the square of their commutator, so mu-bar(123) doubles.
+_R1 = [(-2, -4, 0), (2, -4, 0), (2, 4, 0), (-2, 4, 0)]
+_R2 = [(0, -2, -4), (0, 2, -4), (0, 2, 4), (0, -2, 4)]
+_R3 = [(-4, 0, -2), (4, 0, -2), (4, 0, 2), (-4, 0, 2)]
+_R3_TWICE = [(-4, 0, -2), (4, 0, -2), (4, 0, 2), (-4, 0, 2), (-4, 0, -1), (-4, 1, -1), (-4, 1, -2),
+             (4, 1, -2), (4, 1, 2), (-4, 1, 2), (-5, 1, 2), (-5, 1, -3), (-5, 0, -3), (-4, 0, -3)]
+
+
+def _shifted(corners, dx):
+    return [(x + dx, y, z) for x, y, z in corners]
+
+
+def test_milnor_triple_invariant_is_cyclic_and_alternating():
+    sc, comps = borromean_rings()
+    mu = milnor_triple_invariant(sc, *comps)
+    assert abs(mu) == 1
+    for perm in itertools.permutations(range(3)):
+        assert milnor_triple_invariant(sc, *[comps[i] for i in perm]) == _perm_sign(perm) * mu
+
+
+def test_milnor_triple_invariant_agrees_with_the_diagram():
+    sc, comps = borromean_rings()
+    polys = _polygons(sc, comps)
+    for perm in itertools.permutations(range(3)):
+        assert milnor_triple_invariant(sc, *[comps[i] for i in perm]) == \
+            diagram_milnor_mu123(*[polys[i] for i in perm], backend="python")
+    # Relabelling the vertices reverses some components; the mirror image has the
+    # same mu-bar(123) (an invariant of odd length), and so does the triangulation,
+    # which never looks at coordinates.
+    signs = set()
+    for seed, mirror in itertools.product(range(4), (False, True)):
+        new, cs = _relabelled(sc, comps, seed, mirror=mirror)
+        mu = milnor_triple_invariant(new, *cs)
+        assert mu == diagram_milnor_mu123(*_polygons(new, cs), backend="python")
+        signs.add(mu)
+    assert signs == {-1, 1}
+
+
+def test_milnor_triple_invariant_needs_no_coordinates():
+    sc, comps = borromean_rings()
+    new, cs = _relabelled(sc, comps, seed=7, coordinates=False)
+    assert not new.simplices_to_point_cloud
+    with_coordinates, cs2 = _relabelled(sc, comps, seed=7)
+    assert milnor_triple_invariant(new, *cs) == milnor_triple_invariant(with_coordinates, *cs2)
+
+
+def test_milnor_triple_invariant_counts_with_multiplicity():
+    sc, comps = _grid_link([_R1, _R2, _R3])
+    assert abs(milnor_triple_invariant(sc, *comps)) == 1
+    sc, comps = _grid_link([_R1, _R2, _R3_TWICE])
+    mu = milnor_triple_invariant(sc, *comps)
+    assert abs(mu) == 2
+    assert mu == diagram_milnor_mu123(*_polygons(sc, comps), backend="python")
+    assert milnor_triple_invariant(sc, comps[2], comps[0], comps[1]) == mu
+
+
+@pytest.mark.parametrize("corners", [
+    # the first two rings are the (unlinked) pair from the Borromean rings, interleaved
+    [_R1, _R2, _shifted(_R3, 12)],
+    [_shifted(_R1, -12), _R2, _shifted(_R3, 12)],
+], ids=["interleaved", "separated"])
+def test_milnor_triple_invariant_vanishes_on_the_unlink(corners):
+    sc, comps = _grid_link(corners, extent=20.0)
+    for perm in ((0, 1, 2), (1, 0, 2), (2, 1, 0)):
+        assert milnor_triple_invariant(sc, *[comps[i] for i in perm]) == 0
+    assert diagram_milnor_mu123(*_polygons(sc, comps), backend="python") == 0
+    assert link_type(sc, comps) == LinkType.UNLINKED
+
+
+def test_milnor_triple_invariant_refuses_what_it_cannot_define():
+    hopf = [(0, 0, -1), (3, 0, -1), (3, 0, 1), (0, 0, 1)]   # through R1's disk once
+    sc, comps = _grid_link([[(x // 2, y // 2, z) for x, y, z in _R1], hopf, _shifted(_R3, 14)], extent=20.0)
+    with pytest.raises(UndefinedInvariantError, match="lk12 = -?1,"):
+        milnor_triple_invariant(sc, *comps)
+    assert milnor_invariants(sc, comps, (0, 1, 2)) is None
+
+    grid, idx_map = _build_s3_grid(size=6)   # overlapping tetrahedra: not a 3-manifold
+    squares = [[(2, 2, z), (3, 2, z), (3, 3, z), (2, 3, z)] for z in (2, 4)]
+    squares.append([(4, 4, 4), (5, 4, 4), (5, 5, 4), (4, 5, 4)])
+    with pytest.raises(NotAManifoldError):
+        milnor_triple_invariant(grid, *[_extract_cycle(idx_map, s) for s in squares])
+
+    sc, comps = borromean_rings()
+    with pytest.raises(ValueError, match="share vertex"):
+        milnor_triple_invariant(sc, comps[0], comps[1], comps[0])
+
+
+def test_triangulated_linking_number_agrees_with_the_diagram():
+    ring = [(-1, -2, 0), (1, -2, 0), (1, 2, 0), (-1, 2, 0)]
+    through = [(0, 0, -1), (2, 0, -1), (2, 0, 1), (0, 0, 1)]
+    sc, comps = _grid_link([ring, through])
+    values = set()
+    for seed, mirror in itertools.product(range(3), (False, True)):
+        new, cs = _relabelled(sc, comps, seed, mirror=mirror)
+        lk = triangulated_linking_number(new, *cs)
+        assert lk == triangulated_linking_number(new, cs[1], cs[0])
+        assert lk == diagram_linking_number(*_polygons(new, cs), backend="python")
+        values.add(lk)
+    assert values == {-1, 1}
+    sc, comps = borromean_rings()
+    for a, b in itertools.combinations(comps, 2):
+        assert triangulated_linking_number(sc, a, b) == 0
 
 
 # ── Constructor tests ─────────────────────────────────────────────────────────
