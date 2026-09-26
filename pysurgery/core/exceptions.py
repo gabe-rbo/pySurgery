@@ -444,6 +444,9 @@ class LinkingComputationError(HandleSurgeryError):
           - K_a ∩ K_b ≠ ∅ (not disjoint)
           - dim K_a + dim K_b ≠ n − 1 (Lefschetz pairing dimension mismatch)
           - [K_b] ≠ 0 in H_q(K) — no Seifert chain F with ∂F = K_b exists
+          - [K_a] ≠ 0 in H_p(K) while b_1(K) > 0, so lk depends on F
+          - every Seifert chain of K_b meets K_a, and K_a cannot be pushed off
+            transversally (only 1-cycles in a combinatorial 3-manifold can)
           - SNF solvability check failed
 
     Attributes:
@@ -451,7 +454,8 @@ class LinkingComputationError(HandleSurgeryError):
         dim_b (int): Dimension of K_b.
         ambient_dim (int): Ambient dimension n.
         reason (str): One of "not_disjoint", "not_a_cycle_a", "not_a_cycle_b",
-            "dim_mismatch", "kb_not_null_homologous", "snf_not_solvable".
+            "dim_mismatch", "kb_not_null_homologous", "ka_not_null_homologous",
+            "no_transverse_pushoff", "snf_not_solvable".
         coefficient_ring (str): Ring used in computation.
         complex_info (dict | None): Optional structured diagnostic payload.
     """

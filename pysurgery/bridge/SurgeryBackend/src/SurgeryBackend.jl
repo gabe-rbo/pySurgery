@@ -18,9 +18,9 @@ export simplify_jl, hermitian_signature, exact_snf_sparse, exact_sparse_cohomolo
     todd_coxeter_index_jl, cayley_table_jl, cayley_convolve_jl, lift_boundary_to_cover_jl,
     fox_derivative_block_real_jl, fox_derivative_block_complex_jl, twisted_alexander_whitney_jl,
     BarcodeResult, compute_persistence_barcodes, compute_filtration_persistence, compute_rips_filtration, compute_rips_cohomology, compute_alpha_filtration,
-    surgery_relative_boundary_sparse, linking_seifert_solve_z, linking_intersection_pairing,
+    surgery_relative_boundary_sparse, linking_seifert_solve_z,
     surgery_handle_attach, sphere_recognition_pl,
-    linking_intersection_batch, compute_cohomology_basis_jl, linking_intersect_2chains,
+    compute_cohomology_basis_jl, linking_intersect_2chains,
     alexander_from_seifert_jl, knot_signature_jl, linking_gauss_riemann_jl,
     compute_hodge_harmonics_jl, compute_hodge_decomposition_jl
 
@@ -6234,63 +6234,6 @@ function linking_seifert_solve_z(B_raw, b_raw)
     end
 end
 
-"""
-    linking_intersection_pairing(a, f, K_p_simplices, K_qplus1_simplices, n)
-
-Compute the simplicial intersection number ⟨K_a, F⟩ over ℤ.
-`a` encodes K_a in Z^{|C_p|}, `f` encodes the Seifert chain in Z^{|C_{q+1}|}.
-p + (q+1) = n (ambient dimension).
-
-Returns:
-    Int64 — the signed linking number.
-
-Called by: exact path of compute_linking_number.
-"""
-function linking_intersection_pairing(
-    a_raw,
-    f_raw,
-    K_p_simplices_raw,
-    K_qplus1_simplices_raw,
-    n::Int,
-)
-    a = pyconvert(Vector{Int64}, a_raw)
-    f = pyconvert(Vector{Int64}, f_raw)
-    K_p = [pyconvert(Vector{Int}, s) for s in K_p_simplices_raw]
-    K_qp1 = [pyconvert(Vector{Int}, s) for s in K_qplus1_simplices_raw]
-
-    intersection = Int64(0)
-
-    for (i, sigma) in enumerate(K_p)
-        a_i = i <= length(a) ? a[i] : Int64(0)
-        if a_i == 0
-            continue
-        end
-        sigma_set = Set(sigma)
-        for (j, tau) in enumerate(K_qp1)
-            f_j = j <= length(f) ? f[j] : Int64(0)
-            if f_j == 0
-                continue
-            end
-            # Check sigma ⊂ tau
-            if !issubset(sigma_set, Set(tau))
-                continue
-            end
-            # Find extra vertex in tau not in sigma
-            tau_sorted = sort(tau)
-            extra = [v for v in tau_sorted if !(v in sigma_set)]
-            if length(extra) != 1
-                continue
-            end
-            v_extra = extra[1]
-            pos = findfirst(==(v_extra), tau_sorted)
-            eps = Int64((-1)^(pos - 1))
-            intersection += a_i * f_j * eps
-        end
-    end
-
-    return intersection
-end
-
 function linking_intersect_2chains(
     F_a_raw,
     F_b_raw,
@@ -6622,67 +6565,6 @@ function exhaustive_e_inf(
     end
 
     return e_min, e_max, e_sum, explored
-end
-
-
-# ── Acceleration 1: Batch intersection pairings ───────────────────────────────
-
-"""
-    linking_intersection_batch(a_series, f, K_p_simplices, K_qplus1_simplices, n)
-
-Compute ⟨K_a_i, F⟩ for every a-vector in `a_series`, reusing the same Seifert chain `f`.
-This eliminates the repeated SNF solve across unlink passes when K_b is fixed.
-
-Args:
-    a_series_raw: Python list of a-vectors (each Vector{Int64}).
-    f_raw:        Seifert chain f, precomputed by linking_seifert_solve_z.
-    K_p_simplices_raw: top-dimensional simplices of K_a (p-cells), Python list.
-    K_qplus1_simplices_raw: (q+1)-cells of ambient K, Python list.
-    n:            Ambient dimension.
-
-Returns:
-    Vector{Int64} — one linking number per a-vector, computed in parallel.
-
-Called by: compute_linking_from_chain (Python, surgery.py).
-"""
-function linking_intersection_batch(
-    a_series_raw,
-    f_raw,
-    K_p_simplices_raw,
-    K_qplus1_simplices_raw,
-    n_raw,
-)
-    f    = pyconvert(Vector{Int64}, f_raw)
-    K_p  = [pyconvert(Vector{Int}, s) for s in K_p_simplices_raw]
-    K_qp1 = [pyconvert(Vector{Int}, s) for s in K_qplus1_simplices_raw]
-    n    = Int(n_raw)
-
-    # Build fast lookup: for each (q+1)-simplex, record non-zero f_j and its sigma_set
-    # to avoid redundant set construction inside the a-loop.
-    nonzero_f = [(j, f[j], Set(K_qp1[j]), sort(K_qp1[j])) for j in 1:length(K_qp1) if j <= length(f) && f[j] != 0]
-
-    # Convert a_series in one shot to avoid repeated pyconvert inside the parallel loop
-    a_list = [pyconvert(Vector{Int64}, a) for a in a_series_raw]
-    results = zeros(Int64, length(a_list))
-
-    Threads.@threads for idx in 1:length(a_list)
-        a = a_list[idx]
-        lk = Int64(0)
-        for (i, sigma) in enumerate(K_p)
-            a_i = i <= length(a) ? a[i] : Int64(0)
-            a_i == 0 && continue
-            sigma_set = Set(sigma)
-            for (j, f_j, tau_set, tau_sorted) in nonzero_f
-                issubset(sigma_set, tau_set) || continue
-                extra = [v for v in tau_sorted if !(v in sigma_set)]
-                length(extra) == 1 || continue
-                pos = findfirst(==(extra[1]), tau_sorted)
-                lk += a_i * f_j * Int64((-1)^(pos - 1))
-            end
-        end
-        results[idx] = lk
-    end
-    return results
 end
 
 
