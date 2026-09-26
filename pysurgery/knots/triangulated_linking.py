@@ -68,10 +68,11 @@ Conventions:
     A component is oriented by traversing its lexicographically largest edge ``(u, v)``,
     ``u < v``, from u to v (``component_vertex_cycle`` lists its vertices in that order);
     this is the orientation ``manifolds.surgery.compute_linking_number`` uses. The
-    ambient is oriented coherently; when vertex coordinates are attached and realize the
-    tetrahedra with a consistent sign, positively (so ``lk`` agrees with the Gauss
-    integral and with ``diagrams.diagram_linking_number``), otherwise so that the first
-    tetrahedron (in sorted order, after capping and subdividing) is positive. ``mu-bar(123)`` does not depend on the
+    ambient is oriented coherently, with the convention of ``manifolds.simplicial_linking``:
+    when vertex coordinates are attached, as the majority of the input tetrahedra orient
+    R^3 (so ``lk`` agrees with the Gauss integral and with
+    ``diagrams.diagram_linking_number``), otherwise so that the lexicographically first
+    input tetrahedron, with its vertices in increasing order, is positive. ``mu-bar(123)`` does not depend on the
     orientation of the ambient (it is unchanged by mirror image), changes sign when one
     component is reversed or two components are swapped, and is normalised to agree with
     ``diagrams.diagram_milnor_mu123`` (the Magnus-expansion convention) on polygons.
@@ -333,34 +334,77 @@ def _check_vertex_links(tets: List[Tet]) -> None:
             raise NotAManifoldError(f"the link of vertex {v} is not a 2-sphere")
 
 
-def _stellar(tets: List[Tet], simplex: Tuple[int, ...], w: int) -> List[Tet]:
-    """Stellar subdivision of ``simplex`` (an edge or a triangle) at a new vertex w."""
-    s = set(simplex)
-    out: List[Tet] = []
+def _sort_sign(vertices: Sequence[int]) -> Tuple[Tet, int]:
+    """The sorted simplex and the sign of the permutation that sorts ``vertices``."""
+    v = list(vertices)
+    sign = 1
+    for i in range(len(v)):
+        for j in range(len(v) - 1 - i):
+            if v[j] > v[j + 1]:
+                v[j], v[j + 1] = v[j + 1], v[j]
+                sign = -sign
+    return tuple(v), sign
+
+
+def _coherent_orientation(tets: List[Tet]) -> Dict[Tet, int]:
+    """``o(tet)`` with ``o(a)[a:t] + o(b)[b:t] = 0`` on every triangle t, ``o(tets[0]) = +1``."""
+    tri_tets: Dict[Tri, List[Tet]] = defaultdict(list)
     for tet in tets:
+        for tri, _ in _faces(tet):
+            tri_tets[tri].append(tet)
+    orient = {tets[0]: 1}
+    queue = deque([tets[0]])
+    while queue:
+        a = queue.popleft()
+        for tri, _ in _faces(a):
+            for b in tri_tets[tri]:
+                if b == a:
+                    continue
+                want = -orient[a] * _incidence(a, tri) * _incidence(b, tri)
+                if b not in orient:
+                    orient[b] = want
+                    queue.append(b)
+                elif orient[b] != want:
+                    raise NotAManifoldError("the ambient 3-manifold is not orientable")
+    if len(orient) != len(tets):
+        raise NotAManifoldError("the ambient 3-manifold is not connected")
+    return orient
+
+
+def _stellar(orient: Dict[Tet, int], simplex: Tuple[int, ...], w: int) -> Dict[Tet, int]:
+    """Stellar subdivision of ``simplex`` (an edge or a triangle) at a new vertex w.
+
+    A tetrahedron containing the simplex is replaced by the pieces obtained by
+    putting w in the place of one vertex of the simplex; a piece keeps the
+    orientation of its tetrahedron with w in that place, so the orientation stays
+    coherent.
+    """
+    s = set(simplex)
+    out: Dict[Tet, int] = {}
+    for tet, o in orient.items():
         if s.issubset(tet):
             for v in simplex:
-                out.append(tuple(sorted(w if u == v else u for u in tet)))
+                piece, sign = _sort_sign([w if u == v else u for u in tet])
+                out[piece] = o * sign
         else:
-            out.append(tet)
+            out[tet] = o
     return out
 
 
-def _make_full(tets: List[Tet], cycles: Sequence[List[int]]) -> List[Tet]:
+def _make_full(orient: Dict[Tet, int], cycles: Sequence[List[int]]) -> Dict[Tet, int]:
     """Subdivide until every cycle is a full subcomplex (spans no other simplex).
 
     A chord (an edge joining two non-consecutive vertices of a cycle) or, for a 3-cycle,
     the triangle it spans, is removed by a stellar subdivision, which introduces no new
-    simplex spanned by vertices of any cycle.
+    simplex spanned by vertices of any cycle. Takes and returns oriented tetrahedra.
     """
-    tets = list(tets)
-    fresh = max(v for tet in tets for v in tet) + 1
+    fresh = max(v for tet in orient for v in tet) + 1
     for cycle in cycles:
         on = set(cycle)
         own = {tuple(sorted((cycle[i], cycle[(i + 1) % len(cycle)]))) for i in range(len(cycle))}
         while True:
             bad: Optional[Tuple[int, ...]] = None
-            for tet in tets:
+            for tet in orient:
                 inside = tuple(v for v in tet if v in on)
                 if len(inside) < 2:
                     continue
@@ -371,9 +415,9 @@ def _make_full(tets: List[Tet], cycles: Sequence[List[int]]) -> List[Tet]:
                     break
             if bad is None:
                 break
-            tets = _stellar(tets, bad, fresh)
+            orient = _stellar(orient, bad, fresh)
             fresh += 1
-    return tets
+    return orient
 
 
 class _TriangulatedLink:
@@ -384,7 +428,7 @@ class _TriangulatedLink:
             raise ValueError(
                 f"the ambient must be a 3-dimensional complex, got dimension {ambient.dimension}"
             )
-        original = [tuple(sorted(t)) for t in ambient.n_simplices(3)]
+        original = sorted({tuple(sorted(t)) for t in ambient.n_simplices(3)})
         ambient_edges = {e for tet in original for e in combinations(tet, 2)}
         self.cycles = [component_vertex_cycle(c) for c in components]
         for k, cycle in enumerate(self.cycles):
@@ -398,10 +442,13 @@ class _TriangulatedLink:
             if shared:
                 raise ValueError(f"components {i} and {j} share vertex {min(shared)}")
 
-        tets = _cone_off_boundary(original)
-        _check_vertex_links(tets)
-        tets = _make_full(tets, self.cycles)
-        self.tets: List[Tet] = sorted(tets)
+        capped = _cone_off_boundary(original)
+        _check_vertex_links(capped)
+        orient = _coherent_orientation(capped)
+        if self._geometric_vote(ambient, original, orient) < 0:
+            orient = {tet: -o for tet, o in orient.items()}
+        self.orient: Dict[Tet, int] = _make_full(orient, self.cycles)
+        self.tets: List[Tet] = sorted(self.orient)
 
         self.tri_tets: Dict[Tri, List[Tet]] = defaultdict(list)
         self.vertex_tets: Dict[int, List[Tet]] = defaultdict(list)
@@ -423,7 +470,7 @@ class _TriangulatedLink:
         self.vertices = sorted(self.vertex_tets)
         self.edges = sorted(self.edge_tris)
 
-        self._orient(ambient, set(original))
+        self._check_coherent()
         self._check_rational_homology_sphere()
         self._primal_tree_edges = self._spanning_tree_edges()
         self._dual_tree_tris = self._dual_spanning_tree_triangles()
@@ -434,49 +481,32 @@ class _TriangulatedLink:
 
     # ── orientation and homology ────────────────────────────────────────────
 
-    def _orient(self, ambient: SimplicialComplex, original: Set[Tet]) -> None:
-        """Coherent orientation ``o(tet)``: ``o(a)[a:t] + o(b)[b:t] = 0`` on every triangle t."""
-        self.orient: Dict[Tet, int] = {self.tets[0]: 1}
-        queue = deque([self.tets[0]])
-        while queue:
-            a = queue.popleft()
-            for tri, b in self.neighbours[a]:
-                want = -self.orient[a] * _incidence(a, tri) * _incidence(b, tri)
-                if b not in self.orient:
-                    self.orient[b] = want
-                    queue.append(b)
-                elif self.orient[b] != want:
-                    raise NotAManifoldError("the ambient 3-manifold is not orientable")
-        if len(self.orient) != len(self.tets):
-            raise NotAManifoldError("the ambient 3-manifold is not connected")
-        if self._geometric_sign(ambient, original) < 0:
-            self.orient = {tet: -o for tet, o in self.orient.items()}
+    @staticmethod
+    def _geometric_vote(ambient: SimplicialComplex, original: List[Tet], orient: Dict[Tet, int]) -> int:
+        """Sum over the input tetrahedra of ``o(tet)`` times the sign of its coordinate volume.
 
-    def _geometric_sign(self, ambient: SimplicialComplex, original: Set[Tet]) -> int:
-        """-1 iff coordinates give every non-flat surviving input tetrahedron sign -o(tet).
-
-        Flat tetrahedra (Delaunay triangulations of coplanar grid points have some)
-        carry no orientation and are skipped; inconsistent signs mean the coordinates
-        do not realize the triangulation, and the combinatorial convention is kept.
+        The ambient is flipped when it is negative, so that with coordinates it carries
+        the orientation of R^3 (flat tetrahedra vote 0), as in
+        ``manifolds.simplicial_linking``; without coordinates the first input
+        tetrahedron stays positive.
         """
         cloud = ambient.simplices_to_point_cloud
         if not cloud:
-            return 1
-        tets = [tet for tet in self.tets if tet in original]
-        try:
-            P = np.array([[cloud[(v,)][0] for v in tet] for tet in tets], dtype=np.float64)
-        except (KeyError, IndexError):
-            return 1
-        if P.ndim != 3 or P.shape[2] != 3 or not len(P):
-            return 1
-        det = np.linalg.det(P[:, 1:, :] - P[:, :1, :])
-        scale = float(np.ptp(P.reshape(-1, 3), axis=0).max()) or 1.0
-        signs = {
-            int(np.sign(d)) * self.orient[tet]
-            for d, tet in zip(det, tets)
-            if abs(d) > 1e-12 * scale ** 3
-        }
-        return signs.pop() if len(signs) == 1 else 1
+            return 0
+        vote = 0
+        for tet in original:
+            try:
+                P = np.array([cloud[(v,)][0] for v in tet], dtype=np.float64)
+            except (KeyError, IndexError):
+                continue
+            if P.shape == (4, 3):
+                vote += orient[tet] * int(np.sign(np.linalg.det(P[1:] - P[0])))
+        return vote
+
+    def _check_coherent(self) -> None:
+        for tri, (a, b) in self.tri_tets.items():
+            if self.orient[a] * _incidence(a, tri) + self.orient[b] * _incidence(b, tri):
+                raise RuntimeError(f"incoherent orientation across triangle {tri}")
 
     def _check_rational_homology_sphere(self) -> None:
         """``H_1(M; Q) = 0`` (hence ``H_2(M; Q) = 0``): rank d_2 = #edges - #vertices + 1."""
