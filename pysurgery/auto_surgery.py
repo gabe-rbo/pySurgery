@@ -1026,19 +1026,8 @@ def auto_unlink_pair(
     resample_after_close: bool = False,
     backend: str = "auto",
 ) -> UnlinkReport:
-    """Unlink components a and b in the session while preserving topology via cancelling pairs.
-
-    Julia acceleration: the Seifert chain f (solution to B·f = K_b's cycle) is
-    precomputed once before the loop.  Per-pass linking number checks then call
-    linking_intersection_batch (O(|K_a|×|F|)) instead of a fresh SNF (O(n³)).
-    When K's (q+1)-cells change during surgery on K_a, the cache is invalidated
-    and a full recompute is triggered automatically.
-    """
-    from pysurgery.manifolds.surgery import (
-        compute_linking_number,
-        compute_linking_seifert_chain,
-        compute_linking_from_chain,
-    )
+    """Unlink components a and b in the session while preserving topology via cancelling pairs."""
+    from pysurgery.manifolds.surgery import compute_linking_number
     from pysurgery.core.exceptions import TopologyNotRestoredError
     from pysurgery.core.foundations import CONTRACT_VERSION
 
@@ -1067,29 +1056,6 @@ def auto_unlink_pair(
             theorem_tag="auto.surgery.unlink",
             contract_version=CONTRACT_VERSION,
         )
-
-    # ── Precompute Seifert chain f for K_b once (Acceleration 1) ─────────────
-    # f satisfies ∂f = K_b in C_{q+1}(K).  It depends only on K_b and K's
-    # (q+1)-skeleton — neither changes while we surgery K_a.
-    # If precomputation fails (no (q+1)-cells, or unsolvable), fall back to
-    # full recompute each pass via _full_lk().
-    _f_cached, _Cqp1_cached, _Cp_cached, _n_ambient = compute_linking_seifert_chain(
-        _lk_ambient if not isinstance(_lk_ambient, str) else K_a,
-        K_b,
-        backend=backend,
-    )
-    _seifert_cache_valid = _f_cached is not None and len(_f_cached) > 0
-
-    def _fast_lk(K_a_curr: Any) -> int:
-        """Return lk using cached f if available, else full SNF recompute."""
-        if _seifert_cache_valid:
-            try:
-                return compute_linking_from_chain(
-                    K_a_curr, _f_cached, _Cqp1_cached, _n_ambient, backend=backend
-                )
-            except Exception:
-                pass
-        return compute_linking_number(_lk_ambient, K_a_curr, K_b, backend=backend).value
 
     passes = []
     cut_history = []
@@ -1149,8 +1115,9 @@ def auto_unlink_pair(
                     cancelling_of=open_step_idx,
                 )
 
-                # lk check: O(|K_a|×|F|) with cache, O(n³) SNF without
-                lk_after_slide = _fast_lk(session.objects[a].data)
+                lk_after_slide = compute_linking_number(
+                    _lk_ambient, session.objects[a].data, K_b, backend=backend
+                ).value
 
                 # VERIFY
                 post = _snapshot_topology(session.objects[a].data, backend=backend)

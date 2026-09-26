@@ -15,12 +15,15 @@ from pysurgery.knots.constructors import (
     hopf_link, borromean_rings,
     unknot, trefoil_knot, figure_eight_knot, torus_knot, whitehead_link,
     _build_s3_grid, _extract_cycle,
-    _subdivided_polyline, _delaunay_s3_from_points, _ring_cycle,
+    _delaunay_s3_from_points, _ring_cycle, _subdivided_polyline,
 )
 from pysurgery.knots.diagrams import diagram_linking_number, diagram_milnor_mu123
 from pysurgery.knots.triangulated_linking import (
     component_vertex_cycle, triangulated_linking_number,
 )
+from pysurgery.manifolds.surgery import compute_linking_number
+from pysurgery.topology.complexes import SimplicialComplex
+from pysurgery.bridge.julia_bridge import julia_engine
 from pysurgery.knots.invariants import (
     seifert_matrix, alexander_polynomial, conway_polynomial,
     knot_signature, arf_invariant, genus_bound, knot_determinant,
@@ -251,6 +254,103 @@ def test_triangulated_linking_number_agrees_with_the_diagram():
     sc, comps = borromean_rings()
     for a, b in itertools.combinations(comps, 2):
         assert triangulated_linking_number(sc, a, b) == 0
+
+
+# ── Linking numbers from the triangulation alone ──────────────────────────────
+
+
+def _bare(sc):
+    """The same triangulation with its vertex coordinates dropped."""
+    return SimplicialComplex.from_maximal_simplices(sc.n_simplices(3))
+
+
+def _mirrored(sc):
+    """The same triangulation with its coordinates reflected in the xy-plane."""
+    pc = sc.simplices_to_point_cloud
+    pts = np.array([pc[(v,)][0] for v in range(len(sc.n_simplices(0)))])
+    pts[:, 2] *= -1
+    out = _bare(sc)
+    out._generate_point_cloud_mappings(pts)
+    return out
+
+
+def _double_clasp():
+    """Two rectangles with linking number ±2.
+
+    The second passes up through the first's disk at x = −2 and x = 2 and
+    returns around the outside of the first each time.
+    """
+    C1 = _subdivided_polyline([(-4, -1, 0), (4, -1, 0), (4, 1, 0), (-4, 1, 0)])
+    C2 = _subdivided_polyline([
+        (-2, 0, -2), (-2, 0, 2), (-2, 3, 2), (-2, 3, -2), (2, 3, -2), (2, 0, -2),
+        (2, 0, 2), (2, 4, 2), (2, 4, -3), (-2, 4, -3), (-2, 0, -3),
+    ])
+    sc, idx_map = _delaunay_s3_from_points(C1 + C2, bbox_extent=12.0)
+    return sc, [_ring_cycle(C1, idx_map), _ring_cycle(C2, idx_map)]
+
+
+# Linking numbers by the Gauss integral in each constructor's coordinates.
+_LINKS = {
+    "hopf": (hopf_link, -1),
+    "whitehead": (whitehead_link, 0),
+    "borromean": (borromean_rings, 0),
+    "double_clasp": (_double_clasp, 2),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_LINKS))
+def test_simplicial_linking_number_matches_gauss(name):
+    """backend="python" skips the Gauss integral; with coordinates attached, the
+    triangulation is oriented like R^3 and the two methods agree, sign included."""
+    build, expected = _LINKS[name]
+    sc, components = build()
+    for i in range(len(components)):
+        for j in range(i + 1, len(components)):
+            gauss = compute_linking_number(sc, components[i], components[j])
+            simplicial = compute_linking_number(sc, components[i], components[j], backend="python")
+            assert gauss.seifert_chain_size == 0 < simplicial.seifert_chain_size
+            assert gauss.value == simplicial.value == expected
+
+
+@pytest.mark.parametrize("name", ["hopf", "double_clasp"])
+def test_simplicial_linking_number_flips_under_reflection(name):
+    build, expected = _LINKS[name]
+    sc, (a, b) = build()
+    mirrored = _mirrored(sc)
+    assert compute_linking_number(mirrored, a, b).value == -expected
+    assert compute_linking_number(mirrored, a, b, backend="python").value == -expected
+
+
+@pytest.mark.parametrize("backend", ["python", "julia", "auto"])
+def test_linking_number_without_coordinates(backend):
+    """Every backend used to return 0 for linked cycles once coordinates were dropped."""
+    if backend == "julia" and not julia_engine.available:
+        pytest.skip("Julia not available")
+    sc, (a, b) = hopf_link()
+    bare = _bare(sc)
+    # Without coordinates the first tetrahedron, (0, 1, 3, 4) in increasing
+    # vertex order, is positive.  hopf_link()'s coordinates orient it
+    # negatively, so the sign is opposite to the Gauss value −1.
+    assert compute_linking_number(bare, a, b, backend=backend).value == 1
+    assert compute_linking_number(bare, b, a, backend=backend).value == 1
+    assert compute_linking_number(bare, a, b, "F2", backend=backend).value == 1
+
+    sc, (a, b) = _double_clasp()
+    assert abs(compute_linking_number(_bare(sc), a, b, backend=backend).value) == 2
+
+    for build in (whitehead_link, borromean_rings):
+        sc, components = build()
+        bare = _bare(sc)
+        for i in range(len(components)):
+            for j in range(i + 1, len(components)):
+                assert compute_linking_number(bare, components[i], components[j], backend=backend).value == 0
+
+
+def test_link_type_without_coordinates():
+    sc, components = hopf_link()
+    bare = _bare(sc)
+    assert abs(linking_matrix(bare, components)[0, 1]) == 1
+    assert link_type(bare, components) == LinkType.HOPF
 
 
 # ── Constructor tests ─────────────────────────────────────────────────────────

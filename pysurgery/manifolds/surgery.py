@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Sequence, Union
 
 import numpy as np
+from scipy.sparse import coo_matrix, csr_matrix
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from pysurgery.topology.complexes import SimplicialComplex
@@ -17,7 +18,6 @@ from pysurgery.algebra.exact_algebra import coerce_int_matrix
 from pysurgery.core.foundations import CONTRACT_VERSION
 from pysurgery.core.exceptions import (
     AttachmentSphereError,
-    DelinkingImpossibleError,
     DimensionError,
     HandleSurgeryError,
     KirbyMoveError,
@@ -34,6 +34,11 @@ from pysurgery.core.theorem_tags import (
     SURGERY_VERIFY_SNF_BETTI_TORSION,
 )
 from pysurgery.bridge.julia_bridge import julia_engine
+from pysurgery.manifolds.simplicial_linking import (
+    NotAClosable3ManifoldError,
+    Oriented3Manifold,
+    component_tets,
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -85,6 +90,12 @@ def _get_cycle_coefficients(K: SimplicialComplex, simplices: List[Tuple[int, ...
     """Find a Z-cycle representative supported on the given simplices.
 
     Returns the coefficients as an int64 array if a cycle exists, else None.
+
+    For d ≥ 1 the cycle is primitive and oriented so that its coefficient on
+    the lexicographically largest simplex of its support is positive.  For a
+    triangulated circle this is the unique primitive cycle it carries, with
+    its largest edge (u, w), u < w, traversed from u to w.  Linking numbers
+    of unoriented inputs follow this convention.
     """
     if not simplices:
         return None
@@ -118,9 +129,10 @@ def _get_cycle_coefficients(K: SimplicialComplex, simplices: List[Tuple[int, ...
     if not sub_indices:
         return None
 
-    # Solve B_sub * x = 0 over Z
+    # Solve B_sub * x = 0 over Z; zero rows do not constrain x.
     import sympy
     B_sub = bm[:, sub_indices].toarray()
+    B_sub = B_sub[np.any(B_sub != 0, axis=1)]
     M = sympy.Matrix(B_sub)
     ns = M.nullspace()
     if not ns:
@@ -139,11 +151,17 @@ def _get_cycle_coefficients(K: SimplicialComplex, simplices: List[Tuple[int, ...
         lcm = (lcm * int(den)) // math.gcd(lcm, int(den))
     
     res_sub = np.array([int(x * lcm) for x in vec_sp], dtype=np.int64)
-    
+
     vec = np.zeros(bm.shape[1], dtype=np.int64)
     for i, val in zip(sub_indices, res_sub):
         vec[i] = val
-    return vec
+
+    # Canonical sign and scale, independent of sympy's choice of basis vector.
+    support = np.nonzero(vec)[0]
+    all_simplices = K.n_simplices(d)
+    top = max(support, key=lambda i: tuple(sorted(all_simplices[i])))
+    g = int(np.gcd.reduce(np.abs(vec[support])))
+    return vec // (g if vec[top] > 0 else -g)
 
 
 def _is_cycle(K: SimplicialComplex, simplices: List[Tuple[int, ...]], d: int) -> bool:
@@ -563,13 +581,15 @@ class LinkingNumberResult(BaseModel):
     """Result of compute_linking_number. Always exact=True when no exception raised.
 
     Overview:
-        Encodes the integer linking number lk(K_a, K_b) ∈ ℤ, computed via the
-        Seifert chain F with ∂F = K_b and simplicial intersection ⟨K_a, F⟩.
+        Encodes the integer linking number lk(K_a, K_b) ∈ ℤ: the intersection
+        number of K_a, pushed off transversally, with a Seifert chain F with
+        ∂F = K_b.
 
     Key Concepts:
         - Linking number: integer topological invariant of disjoint cycles.
         - Seifert chain: F ∈ C_{q+1}(K) with ∂F = K_b (back-solved over ℤ).
-        - Exactness: guaranteed for coefficient_ring="Z"; F2 path exact over F₂.
+        - Exactness: guaranteed for coefficient_ring="Z"; the F2 value is the
+          integral linking number mod 2.
 
     Preserved Invariants:
         - dim_a + dim_b == ambient_dim − 1 (Lefschetz pairing constraint).
@@ -837,30 +857,154 @@ class DelinkingResult(BaseModel):
         return self.exact
 
 
-# ── Linking Number — Python Backend ──────────────────────────────────────────
+# ── Linking Number — Simplicial Method ───────────────────────────────────────
 
 
-def _compute_linking_number_python(
+def _boundary_matrix_between(
+    Cq: Sequence[Tuple[int, ...]], Cqp1: Sequence[Tuple[int, ...]]
+) -> csr_matrix:
+    """Sparse ∂: C_{q+1} → C_q restricted to the given (sorted) simplices."""
+    row = {tuple(s): i for i, s in enumerate(Cq)}
+    rows, cols, vals = [], [], []
+    for j, tau in enumerate(Cqp1):
+        tau = tuple(tau)
+        for i in range(len(tau)):
+            r = row.get(tau[:i] + tau[i + 1:])
+            if r is not None:
+                rows.append(r)
+                cols.append(j)
+                vals.append(-1 if i % 2 else 1)
+    return csr_matrix(
+        coo_matrix((vals, (rows, cols)), shape=(len(Cq), len(Cqp1)), dtype=np.int64)
+    )
+
+
+def _solve_boundary_z(
+    Cq: Sequence[Tuple[int, ...]],
+    Cqp1: Sequence[Tuple[int, ...]],
+    b: np.ndarray,
+    backend: str = "auto",
+) -> Optional[np.ndarray]:
+    """An integral chain f over Cqp1 with ∂f = b, or None if there is none.
+
+    Exact, by Smith normal form: the Julia kernel when available, else Python.
+    """
+    b = np.asarray(b, dtype=np.int64)
+    if not len(Cqp1):
+        return np.zeros(0, dtype=np.int64) if not np.any(b) else None
+    B = _boundary_matrix_between(Cq, Cqp1)
+
+    use_julia = (backend == "julia") or (backend == "auto" and julia_engine.available)
+    if use_julia:
+        try:
+            B_jl = julia_engine.surgery_relative_boundary_sparse(
+                [list(s) for s in Cq], [list(s) for s in Cqp1], []
+            )
+            f, success, _ = julia_engine.linking_seifert_solve_z(B_jl, b)
+            if not success:
+                return None
+            f = np.asarray(f, dtype=np.int64)
+            if np.array_equal(B @ f, b):
+                return f
+            warnings.warn("Julia Seifert-chain solve returned a wrong chain; using Python.")
+        except Exception as e:
+            if backend == "julia":
+                raise
+            warnings.warn(f"Julia Seifert-chain solve failed; using Python: {e!r}")
+
+    B_dense = B.toarray()
+    U, D_diag, V = _snf_with_transforms_python(B_dense)
+    r = int(np.sum(D_diag != 0))
+    u = U @ b
+    if np.any(u[r:] != 0):
+        return None
+    w = np.zeros(B_dense.shape[1], dtype=np.int64)
+    for i in range(r):
+        if u[i] % D_diag[i] != 0:
+            return None
+        w[i] = u[i] // D_diag[i]
+    f = V @ w
+    return f if np.array_equal(B_dense @ f, b) else None
+
+
+def _linking_in_3manifold(
+    K: SimplicialComplex,
+    a_vec: np.ndarray,
+    b_vec: np.ndarray,
+    backend: str,
+    failure,
+) -> Tuple[int, np.ndarray]:
+    """Linking number of vertex-disjoint 1-cycles a, b in a 3-dimensional K, by a dual push-off.
+
+    See pysurgery.manifolds.simplicial_linking.  Returns (lk, G) with ∂G = b.
+    Raises NotAClosable3ManifoldError unless K is pure and the component
+    carrying a, with its boundary 2-spheres coned off, is an orientable
+    combinatorial 3-manifold that also carries b.
+    """
+    tets = K.n_simplices(3)
+    if len({t for T in tets for t in _simplex_faces(T)}) != len(K.n_simplices(2)):
+        raise NotAClosable3ManifoldError("K has triangles outside its tetrahedra")
+    edges = K.n_simplices(1)
+    a = {tuple(edges[i]): int(a_vec[i]) for i in np.nonzero(a_vec)[0]}
+    b = {tuple(edges[i]): int(b_vec[i]) for i in np.nonzero(b_vec)[0]}
+    pc = K.simplices_to_point_cloud
+    coords = {s[0]: np.asarray(pc[s][0]) for s in K.n_simplices(0) if s in pc} if pc else None
+    M = Oriented3Manifold(
+        component_tets(tets, next(iter(a))[0]),
+        coords,
+        apex_base=max(s[0] for s in K.n_simplices(0)),
+    )
+    b_M = M.edge_vector(b)
+    G = M.bounding_chain(b_M)
+    if G is None:
+        # H_1(M) ≠ 0: solve exactly.  If b_1(M) > 0, lk is well defined only
+        # when a bounds too.
+        G = _solve_boundary_z(M.edges, M.tris, b_M, backend)
+        if G is None:
+            raise failure("K_b is not null-homologous in K", "kb_not_null_homologous")
+        if not M.is_rational_homology_sphere and (
+            _solve_boundary_z(M.edges, M.tris, M.edge_vector(a), backend) is None
+        ):
+            raise failure(
+                "K_a is not null-homologous in K, so lk(K_a, K_b) depends on the Seifert chain",
+                "ka_not_null_homologous",
+            )
+    return int(M.dual_cycle(a) @ G), G
+
+
+def _compute_linking_number_simplicial(
     K: SimplicialComplex,
     K_a: SimplicialComplex,
     K_b: SimplicialComplex,
     coefficient_ring: str = "Z",
+    backend: str = "auto",
 ) -> LinkingNumberResult:
-    """Compute lk(K_a, K_b) over ℤ via Seifert chain F with ∂F = K_b.
+    """Compute lk(K_a, K_b) from the triangulation; coordinates, if any, only orient it.
 
-    Implements the Seifert-pairing definition: find F ∈ C_{q+1}(K) with
-    ∂F = K_b (over ℤ), then compute the simplicial intersection ⟨K_a, F⟩.
+    lk(K_a, K_b) is the intersection number of K_a, pushed off transversally,
+    with a Seifert chain G, ∂G = K_b.  A primal p-cycle and a primal
+    (q+1)-chain are never transverse (summing K_a[σ]·G[τ]·[τ:σ] over faces
+    σ ⊂ τ gives ⟨K_a, ∂G⟩ = 0), so K_a is replaced as follows.
+
+    - 1-cycles in a 3-dimensional K whose component carrying K_a is a
+      combinatorial 3-manifold (boundary 2-spheres coned off): K_a becomes a
+      dual 1-cycle, a closed path of tetrahedra in the open star of K_a, and
+      lk = Σ_t (signed crossings of triangle t)·G[t].
+    - Otherwise lk = 0 is certified when K_b bounds a chain whose support
+      shares no vertex with K_a.  Failing that, LinkingComputationError is
+      raised rather than a guess.
+
+    Over F2 the value is the integral linking number mod 2.
     """
     n = K.dimension
     p = K_a.dimension
     q = K_b.dimension
-
     sig = _complex_hash(K)
 
-    if p + q != n - 1:
-        raise LinkingComputationError(
-            f"dim_a + dim_b = {p + q} ≠ n − 1 = {n - 1}",
-            reason="dim_mismatch",
+    def failure(message: str, reason: str) -> LinkingComputationError:
+        return LinkingComputationError(
+            message,
+            reason=reason,
             dim_a=p,
             dim_b=q,
             ambient_dim=n,
@@ -868,243 +1012,54 @@ def _compute_linking_number_python(
             complex_signature=sig,
         )
 
-    Ka_simplices = K_a.n_simplices(p)
-    Kb_simplices = K_b.n_simplices(q)
+    if p + q != n - 1:
+        raise failure(f"dim_a + dim_b = {p + q} ≠ n − 1 = {n - 1}", "dim_mismatch")
 
     # Disjointness check across all dimensions
     Ka_all = set(_all_simplices(K_a))
-    Kb_all = set(_all_simplices(K_b))
-    if Ka_all & Kb_all:
-        raise LinkingComputationError(
-            "K_a and K_b share a simplex",
-            reason="not_disjoint",
-            dim_a=p,
-            dim_b=q,
-            ambient_dim=n,
-            coefficient_ring=coefficient_ring,
-            complex_signature=sig,
-        )
+    if Ka_all & set(_all_simplices(K_b)):
+        raise failure("K_a and K_b share a simplex", "not_disjoint")
 
-    # Cycle checks
-    if not _is_cycle(K, Ka_simplices, p):
-        raise LinkingComputationError(
-            "K_a is not a cycle (∂K_a ≠ 0)",
-            reason="not_a_cycle_a",
-            dim_a=p,
-            dim_b=q,
-            ambient_dim=n,
-            coefficient_ring=coefficient_ring,
-            complex_signature=sig,
-        )
-    if not _is_cycle(K, Kb_simplices, q):
-        raise LinkingComputationError(
-            "K_b is not a cycle (∂K_b ≠ 0)",
-            reason="not_a_cycle_b",
-            dim_a=p,
-            dim_b=q,
-            ambient_dim=n,
-            coefficient_ring=coefficient_ring,
-            complex_signature=sig,
-        )
+    a_vec = _get_cycle_coefficients(K, K_a.n_simplices(p), p)
+    if a_vec is None:
+        raise failure("K_a is not a cycle (∂K_a ≠ 0)", "not_a_cycle_a")
+    b_vec = _get_cycle_coefficients(K, K_b.n_simplices(q), q)
+    if b_vec is None:
+        raise failure("K_b is not a cycle (∂K_b ≠ 0)", "not_a_cycle_b")
 
-    use_f2 = (coefficient_ring == "F2")
+    result: Optional[Tuple[int, np.ndarray]] = None
+    if n == 3 and p == 1 and q == 1:
+        try:
+            result = _linking_in_3manifold(K, a_vec, b_vec, backend, failure)
+        except NotAClosable3ManifoldError:
+            result = None
 
-    # Step 1: encode K_b as vector b in Z^{|C_q(K)|}
-    # We use _get_cycle_coefficients to handle orientations (e.g. circles)
-    b = _get_cycle_coefficients(K, Kb_simplices, q)
-    if b is None:
-        # Should have been caught by cycle check, but safety first
-        raise LinkingComputationError("K_b supports no non-trivial cycle", reason="not_a_cycle_b")
+    if result is None:
+        # A Seifert chain that misses K_a certifies lk = 0.
+        Ka_vertices = {v for s in Ka_all for v in s}
+        Cq, Cqp1 = K.n_simplices(q), K.n_simplices(q + 1)
+        away = [tau for tau in Cqp1 if Ka_vertices.isdisjoint(tau)]
+        G = _solve_boundary_z(Cq, away, b_vec, backend)
+        if G is None:
+            if _solve_boundary_z(Cq, Cqp1, b_vec, backend) is None:
+                raise failure("K_b is not null-homologous in K", "kb_not_null_homologous")
+            raise failure(
+                "Every Seifert chain of K_b meets K_a, and a transverse push-off of K_a "
+                "is only available for 1-cycles in a combinatorial 3-manifold",
+                "no_transverse_pushoff",
+            )
+        result = (0, G)
 
-    Cq = K.n_simplices(q)
-    Cqp1 = K.n_simplices(q + 1)
-
-    if not Cq or not Cqp1:
-        # Trivial case: no chain group means lk = 0
-        return LinkingNumberResult(
-            value=0,
-            coefficient_ring=coefficient_ring,
-            dim_a=p,
-            dim_b=q,
-            ambient_dim=n,
-            seifert_chain_size=0,
-            seifert_chain_norm=0,
-            exact=True,
-            theorem_tag=(SURGERY_LINKING_F2_HEURISTIC if use_f2 else SURGERY_LINKING_RELATIVE_SNF_Z),
-        )
-
-    if use_f2:
-        b = b % 2
-
-    # Step 2: build boundary matrix B_{q+1}: C_{q+1} → C_q
-    B = K.boundary_matrix(q + 1)
-    B_dense = coerce_int_matrix(B.toarray())
-
-    if use_f2:
-        B_dense = B_dense % 2
-
-    # Step 3: solve B · f = b over ℤ (or F₂)
-    m, nc = B_dense.shape
-
-    try:
-        import sympy
-        B_sp = sympy.Matrix(B_dense.tolist())
-        b_sp = sympy.Matrix(b.tolist())
-
-        if use_f2:
-            # Solve over F₂ via Gaussian elimination
-            B_f2 = B_sp.applyfunc(lambda x: x % 2)
-            b_f2 = b_sp.applyfunc(lambda x: x % 2)
-            try:
-                sol, params = B_f2.gauss_jordan_solve(b_f2)
-                # Pick a particular solution (set free variables to 0)
-                sol_vec = sol.subs({p: 0 for p in params})
-                f = np.array([int(x) % 2 for x in sol_vec], dtype=np.int64)
-            except Exception:
-                raise LinkingComputationError(
-                    "K_b is not null-homologous over F₂",
-                    reason="kb_not_null_homologous",
-                    dim_a=p,
-                    dim_b=q,
-                    ambient_dim=n,
-                    coefficient_ring=coefficient_ring,
-                    complex_signature=sig,
-                )
-            
-            residual = (B_dense @ f - b) % 2
-            if not np.all(residual == 0):
-                raise LinkingComputationError(
-                    "K_b is not null-homologous over F₂",
-                    reason="kb_not_null_homologous",
-                    dim_a=p,
-                    dim_b=q,
-                    ambient_dim=n,
-                    coefficient_ring=coefficient_ring,
-                    complex_signature=sig,
-                )
-        else:
-            # Exact ℤ solution via Smith Normal Form
-            try:
-                # Use SNF to find Seifert chain: D = U · B · V => B = U^-1 · D · V^-1
-                # To solve B · f = b:
-                # U^-1 · D · V^-1 · f = b
-                # D · (V^-1 · f) = U · b
-                # Let w = V^-1 · f, then D · w = U · b and f = V · w.
-                U, D_diag, V = _snf_with_transforms_python(B_dense)
-                r = int(np.sum(D_diag != 0))
-
-                # u = U · b
-                u = U @ b
-                
-                # Check image condition: u[r:] must be 0 for solvability
-                if r < len(u) and not np.all(u[r:] == 0):
-                    raise LinkingComputationError(
-                        "K_b is not null-homologous in K (u_{≥r} ≠ 0)",
-                        reason="kb_not_null_homologous",
-                        dim_a=p,
-                        dim_b=q,
-                        ambient_dim=n,
-                        coefficient_ring="Z",
-                        complex_signature=sig,
-                    )
-
-                # Divisibility check and solve D_ii * w_i = u_i
-                w = np.zeros(nc, dtype=np.int64)
-                for i in range(r):
-                    d_ii = int(D_diag[i])
-                    if d_ii == 0:
-                        continue
-                    if u[i] % d_ii != 0:
-                        raise LinkingComputationError(
-                            f"u[{i}] = {u[i]} not divisible by D[{i}] = {d_ii}",
-                            reason="snf_not_solvable",
-                            dim_a=p,
-                            dim_b=q,
-                            ambient_dim=n,
-                            coefficient_ring="Z",
-                            complex_signature=sig,
-                        )
-                    w[i] = u[i] // d_ii
-
-                # f = V · w (the Seifert chain coefficients)
-                f = V @ w
-
-            except (LinkingComputationError, DelinkingImpossibleError):
-                raise
-            except Exception:
-                # Fallback: use sympy for exact integer solve
-                try:
-                    sol_sp, params_sp = B_sp.gauss_jordan_solve(b_sp)
-                    f = np.array([int(x) for x in sol_sp], dtype=np.int64)[:nc]
-                except Exception as e2:
-                    raise LinkingComputationError(
-                        f"Cannot solve B·f = b over ℤ: {e2!r}",
-                        reason="kb_not_null_homologous",
-                        dim_a=p,
-                        dim_b=q,
-                        ambient_dim=n,
-                        coefficient_ring="Z",
-                        complex_signature=sig,
-                    )
-
-    except (LinkingComputationError, DelinkingImpossibleError):
-        raise
-    except Exception as e:
-        raise LinkingComputationError(
-            f"SNF/solve failed: {e!r}",
-            reason="snf_not_solvable",
-            dim_a=p,
-            dim_b=q,
-            ambient_dim=n,
-            coefficient_ring=coefficient_ring,
-            complex_signature=sig,
-        )
-
-    # Step 4: compute simplicial intersection ⟨K_a, F⟩
-    Cp = K.n_simplices(p)
-
-    # Use _get_cycle_coefficients for orientation-aware intersection
-    a = _get_cycle_coefficients(K, Ka_simplices, p)
-    if a is None:
-         raise LinkingComputationError("K_a supports no non-trivial cycle", reason="not_a_cycle_a")
-
-    intersection = 0
-    for i, sigma in enumerate(Cp):
-        if a[i] == 0:
-            continue
-        # Supercofaces of sigma in C_{q+1}(K): find (q+1)-simplices in K containing sigma
-        sigma_set = set(sigma)
-        for tau_idx, tau in enumerate(Cqp1):
-            if f[tau_idx] == 0:
-                continue
-            tau_set = set(tau)
-            if not sigma_set.issubset(tau_set):
-                continue
-            # Compute orientation sign ε(σ, τ)
-            # Find position of the vertex in τ not in σ
-            extra_vertices = [v for v in tau if v not in sigma_set]
-            if len(extra_vertices) != 1:
-                continue
-            v_extra = extra_vertices[0]
-            tau_sorted = sorted(tau)
-            pos = tau_sorted.index(v_extra)
-            eps = (-1) ** pos
-            if use_f2:
-                intersection = (intersection + abs(a[i]) * abs(int(f[tau_idx])) * eps) % 2
-            else:
-                intersection += int(a[i]) * int(f[tau_idx]) * eps
-
-    seifert_size = int(np.count_nonzero(f))
-    seifert_norm = int(np.sum(np.abs(f)))
-
+    value, G = result
+    use_f2 = coefficient_ring == "F2"
     return LinkingNumberResult(
-        value=int(intersection) % 2 if use_f2 else int(intersection),
+        value=value % 2 if use_f2 else value,
         coefficient_ring=coefficient_ring,
         dim_a=p,
         dim_b=q,
         ambient_dim=n,
-        seifert_chain_size=seifert_size,
-        seifert_chain_norm=seifert_norm,
+        seifert_chain_size=int(np.count_nonzero(G)),
+        seifert_chain_norm=int(np.sum(np.abs(G))),
         exact=True,
         theorem_tag=(SURGERY_LINKING_F2_HEURISTIC if use_f2 else SURGERY_LINKING_RELATIVE_SNF_Z),
     )
@@ -1273,91 +1228,6 @@ def _compute_linking_number_gauss(
     )
 
 
-def _compute_linking_number_julia(
-    K: SimplicialComplex,
-    K_a: SimplicialComplex,
-    K_b: SimplicialComplex,
-    coefficient_ring: str = "Z",
-) -> LinkingNumberResult:
-    """Julia-dispatched linking number computation."""
-    n = K.dimension
-    p = K_a.dimension
-    q = K_b.dimension
-    sig = _complex_hash(K)
-
-    Cq = [list(s) for s in K.n_simplices(q)]
-    Cqp1 = [list(s) for s in K.n_simplices(q + 1)]
-    
-    # Orientation-aware cycle for Kb
-    b_vec = _get_cycle_coefficients(K, K_b.n_simplices(q), q)
-    if b_vec is None:
-         raise LinkingComputationError("K_b supports no non-trivial cycle", reason="not_a_cycle_b")
-
-    # To use Julia's sparse boundary helper, we still need indices of Kb simplices in Cq
-    Kb_simplex_indices = []
-    idx_map = {tuple(sorted(s)): i for i, s in enumerate(K.n_simplices(q))}
-    for s in K_b.n_simplices(q):
-        k = tuple(sorted(s))
-        if k in idx_map:
-            Kb_simplex_indices.append(idx_map[k])
-
-    try:
-        B = julia_engine.surgery_relative_boundary_sparse(
-            Cq, Cqp1, Kb_simplex_indices
-        )
-
-        f, success, reason = julia_engine.linking_seifert_solve_z(B, b_vec)
-        if not success:
-            reason_str = str(reason)
-            jl_reason_map = {
-                "not_in_image": "kb_not_null_homologous",
-                "divisibility_fail": "snf_not_solvable",
-            }
-            raise LinkingComputationError(
-                f"Julia linking solve failed: {reason_str}",
-                reason=jl_reason_map.get(reason_str, "snf_not_solvable"),
-                dim_a=p,
-                dim_b=q,
-                ambient_dim=n,
-                coefficient_ring=coefficient_ring,
-                complex_signature=sig,
-            )
-
-        Cp = [list(s) for s in K.n_simplices(p)]
-        # Orientation-aware cycle for Ka
-        a_vec = _get_cycle_coefficients(K, K_a.n_simplices(p), p)
-        if a_vec is None:
-             raise LinkingComputationError("K_a supports no non-trivial cycle", reason="not_a_cycle_a")
-
-        intersection = julia_engine.linking_intersection_pairing(
-            a_vec, f, Cp, Cqp1, n
-        )
-        value = int(intersection)
-        return LinkingNumberResult(
-            value=value,
-            coefficient_ring=coefficient_ring,
-            dim_a=p,
-            dim_b=q,
-            ambient_dim=n,
-            seifert_chain_size=int(np.count_nonzero(f)),
-            seifert_chain_norm=int(np.sum(np.abs(f))),
-            exact=True,
-            theorem_tag=SURGERY_LINKING_RELATIVE_SNF_Z,
-        )
-    except (LinkingComputationError,):
-        raise
-    except Exception as e:
-        raise LinkingComputationError(
-            f"Julia linking computation failed: {e!r}",
-            reason="snf_not_solvable",
-            dim_a=p,
-            dim_b=q,
-            ambient_dim=n,
-            coefficient_ring=coefficient_ring,
-            complex_signature=sig,
-        )
-
-
 # ── Public Functions ───────────────────────────────────────────────────────────
 
 
@@ -1373,27 +1243,38 @@ def compute_linking_number(
     What is Being Computed?:
         The integer linking number of two disjoint oriented cycles K_a (p-cycle)
         and K_b (q-cycle) in an ambient simplicial complex K of dimension n,
-        where p + q = n − 1. Computed via the Seifert chain F ∈ C_{q+1}(K)
-        with ∂F = K_b, and the simplicial intersection ⟨K_a, F⟩.
+        where p + q = n − 1: the intersection number of K_a, pushed off
+        transversally, with a Seifert chain F ∈ C_{q+1}(K), ∂F = K_b.
 
     Algorithm:
-        1. Validate preconditions (dimension, disjointness, cycle condition).
-        2. Encode K_b as integer vector b in Z^{|C_q(K)|}.
-        3. Build boundary matrix B_{q+1}: C_{q+1}(K) → C_q(K).
-        4. Solve B · f = b over ℤ via SNF to obtain Seifert chain f.
-        5. Compute simplicial intersection ⟨K_a, f⟩ via face incidence and orientation signs.
+        1. With vertex coordinates on K and 1-cycles in a 3-complex, evaluate
+           the Gauss linking integral (skipped for backend="python").
+        2. Otherwise validate preconditions (dimension, disjointness, cycle
+           condition) and orient K_a, K_b as in `_get_cycle_coefficients`.
+        3. For 1-cycles in a combinatorial 3-manifold (a 3-ball's boundary
+           sphere is coned off), replace K_a by a dual 1-cycle, a closed path
+           of tetrahedra near K_a; find F with ∂F = K_b by tree–cotree LU; and
+           count the signed triangle crossings of the path, weighted by F.
+        4. In any other ambient, return 0 if K_b bounds a chain that shares
+           no vertex with K_a, and raise LinkingComputationError otherwise.
 
     Preserved Invariants:
         - Result is always exact (exact=True) when no exception is raised.
         - result.value is the signed linking number (convention: lk(K_a, K_b)).
+          It is positive when K_a crosses F along the normal given by the
+          right-hand rule on K_b.  The ambient orientation is that of R^3 when
+          coordinates are attached (so the simplicial value agrees with the
+          Gauss integral) and otherwise the one in which the
+          lexicographically first tetrahedron is positive.
         - dim_a + dim_b == ambient_dim − 1.
 
     Args:
         K: Ambient simplicial complex.
         K_a: First subcomplex (p-cycle, p = dim_a).
         K_b: Second subcomplex (q-cycle, q = dim_b), assumed null-homologous in K.
-        coefficient_ring: "Z" (exact ℤ) or "F2" (mod-2 heuristic).
-        backend: "auto", "python", or "julia".
+        coefficient_ring: "Z" (exact ℤ) or "F2" (the integral value mod 2).
+        backend: "auto", "gauss", "python", or "julia".  "python" skips the
+            Gauss integral; "julia" uses the Julia kernels where they apply.
 
     Returns:
         LinkingNumberResult with value, exact=True, and diagnostic fields.
@@ -1415,8 +1296,7 @@ def compute_linking_number(
             Proceedings of the Koninklijke Akademie van Wetenschappen te Amsterdam.
     """
     # Fast path: use the geometric Gauss linking integral when coordinates are
-    # attached to K. This is the canonical embedding-based linking number and
-    # avoids the expensive simplicial intersection pairing entirely.
+    # attached to K. This is the canonical embedding-based linking number.
     if backend in ("auto", "gauss", "julia"):
         try:
             gauss_res = _compute_linking_number_gauss(K, K_a, K_b, coefficient_ring, backend=backend)
@@ -1427,19 +1307,7 @@ def compute_linking_number(
                 raise
             warnings.warn(f"Gauss linking integral failed; falling back: {e!r}")
 
-    use_julia = (backend == "julia") or (backend == "auto" and julia_engine.available)
-    if use_julia:
-        try:
-            return _compute_linking_number_julia(K, K_a, K_b, coefficient_ring)
-        except (LinkingComputationError, DimensionError):
-            if backend == "julia":
-                raise
-            warnings.warn("Julia linking computation failed; falling back to Python.")
-        except Exception as e:
-            if backend == "julia":
-                raise
-            warnings.warn(f"Julia linking computation failed; falling back to Python: {e!r}")
-    return _compute_linking_number_python(K, K_a, K_b, coefficient_ring)
+    return _compute_linking_number_simplicial(K, K_a, K_b, coefficient_ring, backend)
 
 
 def compute_linking_seifert_chain(
@@ -1451,9 +1319,8 @@ def compute_linking_seifert_chain(
 
     What is Being Computed?:
         Solves B_{q+1} · f = b over ℤ where B_{q+1} is the ambient boundary
-        matrix and b encodes the K_b cycle.  The result f is the Seifert chain
-        that does not depend on K_a, so it can be cached and reused across
-        all unlink passes while K_b is fixed.
+        matrix and b encodes the K_b cycle.  The result f is a Seifert chain
+        for K_b that does not depend on K_a.
 
     Algorithm:
         1. Encode K_b as integer vector b in Z^{|C_q(K)|}.
@@ -1468,8 +1335,8 @@ def compute_linking_seifert_chain(
     Returns:
         (f, Cqp1, Cp_dummy, n) where:
           - f:     Seifert chain as int64 ndarray, or None if unsolvable.
-          - Cqp1:  (q+1)-simplices of K as list-of-lists (for reuse in pairings).
-          - Cp_dummy: p-simplices of K at dim p=n-1-q (needed for pairing calls).
+          - Cqp1:  (q+1)-simplices of K as list-of-lists, indexing f.
+          - Cp_dummy: p-simplices of K at dim p=n-1-q.
           - n:     Ambient dimension.
 
     References:
@@ -1525,87 +1392,6 @@ def compute_linking_seifert_chain(
         return f.astype(np.int64), Cqp1, Cp, n
     except Exception:
         return None, Cqp1, Cp, n
-
-
-def compute_linking_from_chain(
-    K_a: SimplicialComplex,
-    f_cached: np.ndarray,
-    Cqp1: List[List[int]],
-    n: int,
-    backend: str = "auto",
-) -> int:
-    """Compute lk(K_a, K_b) using a precomputed Seifert chain — no SNF needed.
-
-    What is Being Computed?:
-        The intersection pairing ⟨K_a, F⟩ where F is the Seifert chain precomputed
-        by compute_linking_seifert_chain.  This is O(|K_a| × |support(F)|) instead
-        of the O(n³) SNF required by the full compute_linking_number.
-
-    Algorithm:
-        For each p-simplex σ in K_a and each (q+1)-simplex τ in F's support:
-          If σ ⊂ τ, accumulate a[σ] × f[τ] × orientation_sign.
-
-    Args:
-        K_a:      The (potentially modified) K_a subcomplex.
-        f_cached: Precomputed Seifert chain (from compute_linking_seifert_chain).
-        Cqp1:     (q+1)-simplices of K, as returned by compute_linking_seifert_chain.
-        n:        Ambient dimension.
-        backend:  "auto", "python", or "julia".
-
-    Returns:
-        int — the linking number lk(K_a, K_b).
-
-    Use When:
-        - K_b is fixed across multiple iterations.
-        - Only K_a changes between calls (handle surgery on a).
-        - f_cached was computed before those changes and K's (q+1)-cells are unaffected.
-    """
-    from pysurgery.bridge.julia_bridge import julia_engine
-
-    p = K_a.dimension
-    Cp = [list(s) for s in K_a.n_simplices(p)]
-
-    a_vec = _get_cycle_coefficients(K_a, K_a.n_simplices(p), p)
-    if a_vec is None:
-        a_vec = np.zeros(len(Cp), dtype=np.int64)
-
-    use_julia = (backend == "julia") or (backend == "auto" and julia_engine.available)
-    if use_julia:
-        try:
-            results = julia_engine.linking_intersection_batch(
-                [np.asarray(a_vec, dtype=np.int64)],
-                f_cached,
-                Cp,
-                Cqp1,
-                n,
-            )
-            return int(results[0])
-        except Exception as e:
-            if backend == "julia":
-                raise
-            warnings.warn(f"Julia linking_intersection_batch failed, falling back: {e!r}")
-
-    # Python fallback: direct intersection computation
-    f = np.asarray(f_cached, dtype=np.int64)
-    intersection = 0
-    for i, sigma in enumerate(Cp):
-        a_i = int(a_vec[i]) if i < len(a_vec) else 0
-        if a_i == 0:
-            continue
-        sigma_set = set(sigma)
-        for j, tau in enumerate(Cqp1):
-            f_j = int(f[j]) if j < len(f) else 0
-            if f_j == 0:
-                continue
-            if not sigma_set.issubset(set(tau)):
-                continue
-            tau_sorted = sorted(tau)
-            extra = [v for v in tau_sorted if v not in sigma_set]
-            if len(extra) != 1:
-                continue
-            pos = tau_sorted.index(extra[0])
-            intersection += a_i * f_j * ((-1) ** pos)
-    return intersection
 
 
 def _enumerate_candidate_subcomplexes(

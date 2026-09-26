@@ -150,6 +150,7 @@ def test_linking_number_unlinked_circles(two_disjoint_circles):
     K, Ka, Kb = two_disjoint_circles
     result = compute_linking_number(K, Ka, Kb, coefficient_ring="Z", backend="python")
     assert isinstance(result, LinkingNumberResult)
+    assert result.value == 0
     assert result.exact is True
     assert result.coefficient_ring == "Z"
     assert result.theorem_tag == SURGERY_LINKING_RELATIVE_SNF_Z
@@ -532,6 +533,44 @@ def test_linking_number_not_a_cycle():
         compute_linking_number(K, Ka, Kb, coefficient_ring="Z", backend="python")
 
     assert exc_info.value.reason in ("not_a_cycle_a", "dim_mismatch")
+
+
+# ── Test 12b: no silent 0 when K_a cannot be pushed off ───────────────────────
+
+
+def test_linking_number_refuses_non_transverse_ambient():
+    """compute_linking_number raises rather than guessing lk in a non-manifold.
+
+    The Hopf link in S³ = S¹ * S¹ with a triangle glued on along an edge: K is
+    no longer a 3-manifold, so K_a has no dual push-off, and every Seifert
+    chain of K_b meets K_a because the components are linked.
+    """
+    from pysurgery.knots.constructors import hopf_link
+
+    sc, (Ka, Kb) = hopf_link()
+    K = SimplicialComplex.from_simplices(sc.n_simplices(3) + [(0, 3, 6)], close_under_faces=True)
+    with pytest.raises(LinkingComputationError) as exc_info:
+        compute_linking_number(K, Ka, Kb, backend="python")
+    assert exc_info.value.reason == "no_transverse_pushoff"
+
+
+# ── Test 12c: cycle orientation convention ────────────────────────────────────
+
+
+def test_cycle_orientation_is_canonical(circle_s1):
+    """Unoriented circles are oriented so that their largest edge (u, w), u < w, runs u → w.
+
+    This fixes the sign of lk for SimplicialComplex inputs, whatever order the
+    edges are listed in.
+    """
+    from itertools import permutations
+    from pysurgery.manifolds.surgery import _get_cycle_coefficients
+
+    edges = circle_s1.n_simplices(1)
+    expected = {(0, 1): 1, (1, 2): 1, (2, 3): 1, (0, 3): -1}
+    for order in permutations(edges):
+        vec = _get_cycle_coefficients(circle_s1, list(order), 1)
+        assert {e: int(vec[i]) for i, e in enumerate(edges)} == expected
 
 
 # ── Test 13: DelinkingResult contract ─────────────────────────────────────────

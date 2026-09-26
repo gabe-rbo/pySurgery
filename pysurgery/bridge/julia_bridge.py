@@ -888,8 +888,6 @@ class JuliaBridge:
             (
                 "linking_intersection",
                 lambda: (
-                    self.linking_intersection_pairing(np.array([1], dtype=np.int64), np.array([1], dtype=np.int64), [[0, 1]], [[0, 1, 2]], 3),
-                    self.linking_intersection_batch([np.array([1], dtype=np.int64)], np.array([1], dtype=np.int64), [[0, 1]], [[0, 1, 2]], 3),
                     self.linking_intersect_2chains(np.array([1], dtype=np.int64), np.array([1], dtype=np.int64), [[0, 1]], [[0, 1, 2]], [[0, 1, 2, 3]])
                 )
             ),
@@ -3693,56 +3691,6 @@ class JuliaBridge:
             Ka_s, Ka_e, Ka_m, Kb_s, Kb_e, Kb_m, int(n_samples)
         )
         return float(val)
-
-    def linking_intersection_pairing(
-        self,
-        a: np.ndarray,
-        f: np.ndarray,
-        Cp: list[list[int]],
-        Cqp1: list[list[int]],
-        n: int,
-    ) -> int:
-        """Compute simplicial intersection pairing in Julia."""
-        self.require_julia()
-        val = self.backend.linking_intersection_pairing(
-            np.asarray(a, dtype=np.int64),
-            np.asarray(f, dtype=np.int64),
-            Cp,
-            Cqp1,
-            int(n),
-        )
-        return int(val)
-
-    def linking_intersection_batch(
-        self,
-        a_series: list[np.ndarray],
-        f: np.ndarray,
-        Cp: list[list[int]],
-        Cqp1: list[list[int]],
-        n: int,
-    ) -> np.ndarray:
-        """Compute ⟨K_a_i, F⟩ for each a-vector in a_series, reusing precomputed Seifert chain f.
-
-        Args:
-            a_series: List of a-vectors (one per unlink pass). Each is a 1-D int64 array.
-            f:        Precomputed Seifert chain (solution to B·f = b_Kb).
-            Cp:       p-simplices of K (ambient), as list-of-lists.
-            Cqp1:     (q+1)-simplices of K (ambient), as list-of-lists.
-            n:        Ambient complex dimension.
-
-        Returns:
-            np.ndarray of shape (len(a_series),) with dtype int64 — one lk per a-vector.
-        """
-        self.require_julia()
-        a_series_converted = [np.asarray(a, dtype=np.int64) for a in a_series]
-        result = self.backend.linking_intersection_batch(
-            a_series_converted,
-            np.asarray(f, dtype=np.int64),
-            Cp,
-            Cqp1,
-            int(n),
-        )
-        return np.array(result, dtype=np.int64)
 
     def linking_intersect_2chains(
         self,
