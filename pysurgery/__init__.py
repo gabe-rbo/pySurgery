@@ -452,7 +452,7 @@ from .geometry.scale_window import (
 from . import integrations
 from . import gpu  # light: PyTorch is imported only when a GPU routine runs
 
-__version__ = "2.6.1"
+__version__ = "2.7.0"
                                 
 def __getattr__(name):
     if name == "JuliaBridge":
