@@ -3,7 +3,9 @@
 State-of-the-art knot invariants computed from simplicial complexes.
 
 Invariants implemented:
-  - Seifert matrix (via explicit positive push-off in ambient triangulation)
+  - Seifert matrix (minimal-area Seifert surface in the ambient triangulation,
+    with positive push-offs through the tetrahedra on its positive side; see
+    `pysurgery.knots.seifert_surface`)
   - Alexander polynomial (det(tV - V^T))
   - Conway polynomial (Alexander change of variables)
   - Knot signature (sig(V + V^T); Gordon–Litherland on a knot diagram when
@@ -23,16 +25,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from pysurgery.topology.complexes import SimplicialComplex
-from pysurgery.manifolds.surgery import compute_linking_number, compute_linking_seifert_chain
-from pysurgery.algebra.exact_algebra import coerce_int_matrix
-from pysurgery.algebra.math_core import smith_normal_decomp
 from pysurgery.bridge.julia_bridge import julia_engine
-
-
-# ── Internal helpers ──────────────────────────────────────────────────────────
-
-
-_SEIFERT_DENSE_SNF_LIMIT = 2000  # max(rows, cols) for dense-SNF fallback
+from pysurgery.knots.seifert_surface import SeifertSurfaceError, seifert_matrix_of_triangulation
 
 
 # ── Wirtinger / knot-diagram Alexander polynomial ────────────────────────────
@@ -650,166 +644,6 @@ def _signature_via_diagram(
     return _signature_from_diagram(pts, ex, ey, ez)
 
 
-def _extract_seifert_surface(
-    ambient_complex: SimplicialComplex,
-    K: SimplicialComplex,
-    backend: str = "auto",
-) -> Tuple[Optional[np.ndarray], List[Tuple[int, ...]], SimplicialComplex]:
-    """Compute the Seifert 2-chain for K and extract its supporting subcomplex."""
-    # Size guard: dense SNF on huge ambient boundary matrices is impractical.
-    # For trefoil/torus knot tests we accept a (0,0) Seifert matrix as a fallback.
-    n_edges = ambient_complex.count_simplices(K.dimension)
-    n_tris = ambient_complex.count_simplices(K.dimension + 1)
-    if max(n_edges, n_tris) > _SEIFERT_DENSE_SNF_LIMIT:
-        return None, [], SimplicialComplex.from_simplices([])
-
-    f_coeff, Cqp1, _Cp, _n = compute_linking_seifert_chain(ambient_complex, K, backend=backend)
-    if f_coeff is None or not Cqp1:
-        return None, [], SimplicialComplex.from_simplices([])
-
-    seifert_2s = [tuple(Cqp1[i]) for i in range(len(Cqp1)) if f_coeff[i] != 0]
-    if not seifert_2s:
-        return f_coeff, [], SimplicialComplex.from_simplices([])
-
-    F_sc = SimplicialComplex.from_maximal_simplices(seifert_2s)
-    return f_coeff, Cqp1, F_sc
-
-
-def _extract_z_h1_basis(F_sc: SimplicialComplex) -> List[Tuple[np.ndarray, List[Tuple[int, ...]]]]:
-    """Extract a Z-basis for H_1(F_sc; Z) as (coeff_array, edges_list) pairs.
-
-    Returns a list of (alpha_coeff, edges) where alpha_coeff[k] is the integer
-    coefficient of edges[k] in the 1-cycle.
-    """
-    n1 = F_sc.count_simplices(1)
-    n2 = F_sc.count_simplices(2)
-    edges_1 = list(F_sc.n_simplices(1))
-
-    if n1 == 0:
-        return []
-
-    B1 = F_sc.boundary_matrix(1)
-    B2 = F_sc.boundary_matrix(2)
-
-    B1_dense = coerce_int_matrix(B1.toarray()) if B1 is not None else np.zeros((1, n1), dtype=np.int64)
-    B2_dense = (
-        coerce_int_matrix(B2.toarray())
-        if (B2 is not None and n2 > 0)
-        else np.zeros((n1, 0), dtype=np.int64)
-    )
-
-    # ker(B1): columns of V1 with zero in SNF diagonal
-    S1, _U1, V1 = smith_normal_decomp(B1_dense.astype(np.int64), compute_u=True, compute_v=True)
-    r1 = int(np.sum(np.diag(S1) != 0))
-    Z1 = V1[:, r1:].astype(np.int64)
-
-    if Z1.shape[1] == 0:
-        return []
-
-    if B2_dense.shape[1] == 0:
-        return [(Z1[:, j].copy(), edges_1) for j in range(Z1.shape[1])]
-
-    S2, _U2, _V2 = smith_normal_decomp(B2_dense.astype(np.int64), compute_u=False, compute_v=False)
-    r2 = int(np.sum(np.diag(S2) != 0))
-
-    target = Z1.shape[1] - r2
-    if target <= 0:
-        return []
-
-    # Greedily pick Z1 columns independent modulo im(B2)
-    current = B2_dense.copy()
-    generators: List[Tuple[np.ndarray, List]] = []
-
-    for j in range(Z1.shape[1]):
-        if len(generators) >= target:
-            break
-        col = Z1[:, j].reshape(-1, 1)
-        test = np.hstack([current, col])
-        S_t, _, _ = smith_normal_decomp(test.astype(np.int64), compute_u=False, compute_v=False)
-        r_t = int(np.sum(np.diag(S_t) != 0))
-
-        if r_t > r2 + len(generators):
-            generators.append((Z1[:, j].copy(), edges_1))
-            current = test
-
-    return generators
-
-
-def _coeff_to_sc(edges: List[Tuple[int, ...]], coeff: np.ndarray) -> SimplicialComplex:
-    """Build a SimplicialComplex from a 1-chain coefficient array."""
-    active = [edges[k] for k in range(len(edges)) if coeff[k] != 0]
-    if not active:
-        return SimplicialComplex.from_simplices([])
-    return SimplicialComplex.from_simplices(active)
-
-
-def _build_positive_pushoff(
-    ambient_complex: SimplicialComplex,
-    Cqp1: List[Tuple[int, ...]],
-    f_coeff: np.ndarray,
-    alpha_coeff: np.ndarray,
-    edges_1: List[Tuple[int, ...]],
-) -> SimplicialComplex:
-    """Compute the positive push-off α^+ of a 1-cycle α on Seifert surface F.
-
-    For each vertex v of α, the positive side vertex v^+ is the unique vertex of
-    the ambient 3-simplex that lies on the positive (outward) side of F at v.
-    Orientation of F is determined by f_coeff and the ambient triangulation.
-
-    This gives α^+ as a closed 1-cycle in ambient_complex homologous to α in S^3,
-    with lk(α^+, β) = V[α, β] (Seifert matrix entry).
-    """
-    F_coeff_dict: Dict[Tuple[int, ...], int] = {}
-    for i, s in enumerate(Cqp1):
-        c = int(f_coeff[i])
-        if c != 0:
-            F_coeff_dict[tuple(sorted(s))] = c
-
-    # Build map: 2-simplex → list of adjacent 3-simplices
-    face_to_tets: Dict[Tuple[int, ...], List[Tuple[int, ...]]] = {}
-    for tau in ambient_complex.n_simplices(3):
-        tau_s = tuple(sorted(tau))
-        a, b, c, d = tau_s
-        for omit_idx, face in enumerate([(b, c, d), (a, c, d), (a, b, d), (a, b, c)]):
-            key = tuple(sorted(face))
-            face_to_tets.setdefault(key, []).append(tau_s)
-
-    # For each vertex on F: find a "positive side" vertex
-    pos_vertex: Dict[int, int] = {}
-
-    for face_key, c_sigma in F_coeff_dict.items():
-        adj_tets = face_to_tets.get(face_key, [])
-        for tau_s in adj_tets:
-            tau_list = list(tau_s)
-            # Find omitted index (position of the extra vertex in sorted tau)
-            face_set = set(face_key)
-            w = next((v for v in tau_list if v not in face_set), None)
-            if w is None:
-                continue
-            w_pos = tau_list.index(w)
-            induced_sign = (-1) ** w_pos  # orientation of face as boundary of tau
-            # Positive side: induced_sign * c_sigma > 0 means w is on outward side
-            if induced_sign * c_sigma > 0:
-                for v in face_key:
-                    if v not in pos_vertex:
-                        pos_vertex[v] = w
-
-    # Build push-off edges
-    pushoff_edges: List[Tuple[int, int]] = []
-    for k, e in enumerate(edges_1):
-        if alpha_coeff[k] == 0:
-            continue
-        v0, v1 = tuple(sorted(e))
-        v0p = pos_vertex.get(v0, v0)
-        v1p = pos_vertex.get(v1, v1)
-        if v0p != v1p:
-            pushoff_edges.append(tuple(sorted([v0p, v1p])))
-
-    if not pushoff_edges:
-        return SimplicialComplex.from_simplices([])
-    return SimplicialComplex.from_simplices(pushoff_edges)
-
-
 # ── Alexander polynomial helpers ──────────────────────────────────────────────
 
 
@@ -943,121 +777,70 @@ def seifert_matrix(
     K: SimplicialComplex,
     backend: str = "auto",
 ) -> np.ndarray:
-    """Compute the Seifert matrix of knot K in ambient_complex.
+    """Compute a Seifert matrix of knot K in ambient_complex.
 
     What is Being Computed?:
-        The (2g × 2g) integer Seifert matrix V where V[i,j] = lk(α_i^+, α_j).
-        Here {α_i} is a Z-basis for H_1(F; Z) of the Seifert surface F,
-        and α_i^+ is the positive push-off of α_i off F.
+        The integer matrix V with V[i,j] = lk(α_i^+, α_j), where {α_i} is a
+        Z-basis of H_1(F; Z) for a Seifert surface F of K and α_i^+ is the
+        positive push-off of α_i off F.  sig(V + V^T) is the knot signature
+        and det(tV - V^T) the Alexander polynomial.
 
     Algorithm:
-        1. Compute Seifert 2-chain F for K via compute_linking_seifert_chain.
-        2. Extract Seifert surface subcomplex F_sc (support of F).
-        3. Find Z-basis for H_1(F_sc; Z) using Smith normal form.
-        4. For each basis cycle α_i: build the positive push-off α_i^+ using the
-           ambient triangulation's local geometry at each vertex of α_i.
-        5. V[i,j] = compute_linking_number(ambient, α_i^+, α_j).
+        Everything is read off the triangulation; vertex coordinates are not
+        needed (see `pysurgery.knots.seifert_surface`).
+        1. Cone off the boundary 2-sphere of a triangulated 3-ball, giving S^3.
+        2. F is a minimal-area integral 2-chain with ∂F = K, found by linear
+           programming, whose support is checked to be an embedded surface.
+        3. A basis of H_1(F) by tree–cotree decomposition.
+        4. Each push-off α_i^+ is a closed path of tetrahedra on the positive
+           side of F, and lk(α_i^+, α_j) is its intersection number with any
+           2-chain bounded by α_j.
+
+    Orientation:
+        The signature changes sign under mirroring, so it depends on the
+        orientation of the ambient complex.  With vertex coordinates attached
+        this is the orientation of R^3, so positive knots have σ < 0 (e.g.
+        σ = −2 for the right-handed trefoil).  Without coordinates the
+        lexicographically first tetrahedron, with its vertices in increasing
+        order, is taken as positively oriented, and chirality is only
+        determined up to this convention.
 
     Args:
-        ambient_complex: Ambient triangulated 3-manifold (e.g. S^3).
-        K: Knot as a 1-cycle SimplicialComplex.
-        backend: "auto", "julia", or "python".
+        ambient_complex: Triangulated 3-ball or 3-sphere (more generally, a
+            combinatorial 3-manifold that becomes a homology 3-sphere once its
+            boundary 2-spheres are coned off).
+        K: Knot as a simple closed loop of edges of ambient_complex.
+        backend: "auto", "julia", or "python".  The construction is the same
+            for every backend.
 
     Returns:
-        np.ndarray of shape (2g, 2g) with dtype int64. Returns (0,0) array for unknot.
+        np.ndarray of shape (2h, 2h) with dtype int64, where h is the genus of
+        the surface found.  h is at least the Seifert genus of K and often
+        equal to it.  Returns a (0, 0) array when that surface is a disk (so K
+        is the unknot).
+
+    Raises:
+        ValueError: if K is not a simple closed loop, or the ambient complex is
+            not a suitable 3-manifold (see `SeifertSurfaceError`).
     """
     # Fast geometric path: a coplanar simple polygon embedded in R^3 is the
     # unknot (genus 0), so its Seifert matrix is empty.
     if _is_planar_polygon(ambient_complex, K):
         return np.zeros((0, 0), dtype=np.int64)
 
-    use_julia = (backend == "julia") or (backend == "auto" and julia_engine.available)
-    if use_julia:
-        try:
-            return _seifert_matrix_julia(ambient_complex, K)
-        except Exception as e:
-            if backend == "julia":
-                raise
-            import warnings
-            warnings.warn(f"Julia seifert_matrix failed, falling back: {e!r}")
-
-    return _seifert_matrix_python(ambient_complex, K, backend)
-
-
-def _is_closed_1cycle(K_sub: SimplicialComplex) -> bool:
-    """Return True iff K_sub's 1-skeleton is an integral 1-cycle.
-
-    The 1-skeleton is oriented by the sorted-vertex convention and is a Z-cycle
-    when at every vertex v the signed degree (incoming − outgoing) is zero.
-
-    This is the precondition checked by `compute_linking_number`; cycles
-    produced by `_build_positive_pushoff` can fail it when adjacent vertices
-    project to the same push-off vertex (collapsing an edge of the support).
-    """
-    signed_deg: Dict[int, int] = {}
-    for e in K_sub.n_simplices(1):
-        a, b = tuple(sorted(e))
-        if a == b:
-            return False
-        signed_deg[a] = signed_deg.get(a, 0) - 1
-        signed_deg[b] = signed_deg.get(b, 0) + 1
-    return all(d == 0 for d in signed_deg.values())
-
-
-def _seifert_matrix_julia(ambient_complex: SimplicialComplex, K: SimplicialComplex) -> np.ndarray:
-    """Julia-accelerated Seifert matrix computation."""
-    f_coeff, Cqp1, F_sc = _extract_seifert_surface(ambient_complex, K, backend="julia")
-    if f_coeff is None:
-        return np.zeros((0, 0), dtype=np.int64)
-    basis_info = _extract_z_h1_basis(F_sc)
-    if not basis_info:
-        return np.zeros((0, 0), dtype=np.int64)
-    m = len(basis_info)
-    V = np.zeros((m, m), dtype=np.int64)
-
-    for i, (ci, ei) in enumerate(basis_info):
-        alpha_i_plus = _build_positive_pushoff(ambient_complex, Cqp1, f_coeff, ci, ei)
-        if not _is_closed_1cycle(alpha_i_plus):
-            # Simplicial push-off failed to close up — the embedded Seifert
-            # surface lacks the local thickness needed at this basis cycle.
-            return np.zeros((0, 0), dtype=np.int64)
-        for j, (cj, ej) in enumerate(basis_info):
-            alpha_j_sc = _coeff_to_sc(ej, cj)
-            if not _is_closed_1cycle(alpha_j_sc):
-                return np.zeros((0, 0), dtype=np.int64)
-            lk = compute_linking_number(ambient_complex, alpha_i_plus, alpha_j_sc, backend="julia")
-            V[i, j] = lk.value if lk and lk.exact else 0
-    return V
-
-
-def _seifert_matrix_python(
-    ambient_complex: SimplicialComplex,
-    K: SimplicialComplex,
-    backend: str,
-) -> np.ndarray:
-    f_coeff, Cqp1, F_sc = _extract_seifert_surface(ambient_complex, K, backend=backend)
-    if f_coeff is None:
-        return np.zeros((0, 0), dtype=np.int64)
-
-    basis_info = _extract_z_h1_basis(F_sc)
-    if not basis_info:
-        return np.zeros((0, 0), dtype=np.int64)
-
-    m = len(basis_info)
-    V = np.zeros((m, m), dtype=np.int64)
-
-    for i, (ci, ei) in enumerate(basis_info):
-        alpha_i_plus = _build_positive_pushoff(ambient_complex, Cqp1, f_coeff, ci, ei)
-        if not _is_closed_1cycle(alpha_i_plus):
-            return np.zeros((0, 0), dtype=np.int64)
-        for j, (cj, ej) in enumerate(basis_info):
-            alpha_j_sc = _coeff_to_sc(ej, cj)
-            if not _is_closed_1cycle(alpha_j_sc):
-                return np.zeros((0, 0), dtype=np.int64)
-            lk = compute_linking_number(ambient_complex, alpha_i_plus, alpha_j_sc, backend=backend)
-            V[i, j] = lk.value if lk and lk.exact else 0
-
-    return V
+    try:
+        walk = _order_knot_polyline(K)
+    except _DiagramExtractionError as exc:
+        raise SeifertSurfaceError(f"K is not a knot: {exc}") from exc
+    coords = None
+    point_cloud = ambient_complex.simplices_to_point_cloud
+    if point_cloud:
+        coords = {}
+        for (v,) in ambient_complex.n_simplices(0):
+            p = np.asarray(point_cloud.get((v,), [[]])[0], dtype=np.float64)
+            if p.shape == (3,):
+                coords[v] = p
+    return seifert_matrix_of_triangulation(ambient_complex.n_simplices(3), walk, coords)
 
 
 def alexander_polynomial(
@@ -1099,34 +882,23 @@ def alexander_polynomial(
         except _DiagramExtractionError:
             pass
 
+    V = seifert_matrix(ambient_complex, K, backend=backend)
+    if V.shape[0] == 0:
+        return {0: 1}
+
     use_julia = (backend == "julia") or (backend == "auto" and julia_engine.available)
     if use_julia:
         try:
-            return _alexander_polynomial_julia(ambient_complex, K)
+            # The Julia kernel only fixes the sign, so normalise the degree
+            # shift the same way as the Python path.
+            result = julia_engine.alexander_from_seifert(V)
+            if result is not None:
+                return _normalize_alexander(result)
         except Exception as e:
             if backend == "julia":
                 raise
             import warnings
             warnings.warn(f"Julia alexander_polynomial failed, falling back: {e!r}")
-
-    V = seifert_matrix(ambient_complex, K, backend=backend)
-    if V.shape[0] == 0:
-        return {0: 1}
-    return _alexander_from_seifert(V)
-
-
-def _alexander_polynomial_julia(
-    ambient_complex: SimplicialComplex,
-    K: SimplicialComplex,
-) -> Dict[int, int]:
-    V = _seifert_matrix_julia(ambient_complex, K)
-    if V.shape[0] == 0:
-        return {0: 1}
-    # Use Julia for the determinant computation.  The Julia kernel only fixes
-    # the sign, so normalise the degree shift the same way as the Python path.
-    result = julia_engine.alexander_from_seifert(V)
-    if result is not None:
-        return _normalize_alexander(result)
     return _alexander_from_seifert(V)
 
 
@@ -1176,7 +948,9 @@ def knot_signature(
         colouring and μ the correction term from its type II crossings (see
         `_goeritz_from_diagram`).  This is exact, independent of the ambient
         triangulation and used for every `backend`.  Otherwise σ is computed
-        from the Seifert matrix of the triangulation.
+        from the Seifert matrix of the triangulation (see `seifert_matrix`);
+        without vertex coordinates the chirality, and with it the sign of σ,
+        is fixed only by that function's orientation convention.
 
     Surgery relevance:
         σ(K) is a concordance invariant. |σ(K)|/2 is a lower bound for the
@@ -1200,12 +974,13 @@ def knot_signature(
         except _DiagramExtractionError:
             pass
 
+    V = seifert_matrix(ambient_complex, K, backend=backend)
+    if V.shape[0] == 0:
+        return 0
+
     use_julia = (backend == "julia") or (backend == "auto" and julia_engine.available)
     if use_julia:
         try:
-            V = _seifert_matrix_julia(ambient_complex, K)
-            if V.shape[0] == 0:
-                return 0
             return julia_engine.knot_signature(V)
         except Exception as e:
             if backend == "julia":
@@ -1213,9 +988,6 @@ def knot_signature(
             import warnings
             warnings.warn(f"Julia knot_signature failed, falling back: {e!r}")
 
-    V = seifert_matrix(ambient_complex, K, backend=backend)
-    if V.shape[0] == 0:
-        return 0
     S = V + V.T
     eigs = np.linalg.eigvalsh(S.astype(float))
     pos = int(np.sum(eigs > 1e-10))

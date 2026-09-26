@@ -1,4 +1,6 @@
+import itertools
 import math
+from collections import Counter
 import numpy as np
 from typing import Tuple, List, Sequence
 from scipy.spatial import Delaunay
@@ -75,92 +77,46 @@ def _ring_cycle(
     return SimplicialComplex.from_simplices(edges)
 
 def _build_s3_grid(size: int = 4) -> Tuple[SimplicialComplex, np.ndarray]:
-    """Build a triangulation of S^3 by compactifying a grid in R^3.
-    
+    """Build a triangulation of S^3 from a cube grid in R^3.
+
+    The cube [0, size]^3 is cut into unit cubes, each split into the six Kuhn
+    (Freudenthal) tetrahedra along its main diagonal, which fit together
+    across shared faces.  Coning the boundary of the big cube off to vertex 0,
+    the point at infinity, closes this 3-ball up to S^3.
+
     Returns:
         A tuple of (ambient_complex, index_map).
-        index_map is a 3D array mapping (x, y, z) to vertex index.
-        Boundary points are all mapped to vertex 0 (the point at infinity).
+        index_map is a 3D array mapping (x, y, z) to vertex index; vertex 0 is
+        the point at infinity.
     """
-    # Number of vertices per dimension
     N = size + 1
-    
-    idx_map = np.zeros((N, N, N), dtype=int)
-    current_idx = 1
-    
-    # Vertex 0 is infinity
-    for x in range(N):
-        for y in range(N):
-            for z in range(N):
-                if x == 0 or x == N-1 or y == 0 or y == N-1 or z == 0 or z == N-1:
-                    idx_map[x, y, z] = 0
-                else:
-                    idx_map[x, y, z] = current_idx
-                    current_idx += 1
-                    
+    idx_map = np.arange(1, N**3 + 1, dtype=int).reshape(N, N, N)
+
     simplices = []
-    
-    # Triangulate each cube in the grid into 6 tetrahedra
     for x in range(size):
         for y in range(size):
             for z in range(size):
-                # 8 corners of the cube
-                v000 = idx_map[x, y, z]
-                v100 = idx_map[x+1, y, z]
-                v010 = idx_map[x, y+1, z]
-                v110 = idx_map[x+1, y+1, z]
-                v001 = idx_map[x, y, z+1]
-                v101 = idx_map[x+1, y, z+1]
-                v011 = idx_map[x, y+1, z+1]
-                v111 = idx_map[x+1, y+1, z+1]
-                
-                # Standard 6-tetrahedra decomposition of a cube
-                simplices.append((v000, v100, v110, v111))
-                simplices.append((v000, v100, v111, v101))
-                simplices.append((v000, v101, v111, v011))
-                simplices.append((v000, v011, v111, v010))
-                simplices.append((v000, v010, v111, v110))
-                simplices.append((v000, v001, v101, v011))
-                # Wait, the 6-tetrahedra decomposition using a strict vertex ordering
-                # to ensure compatible orientations across cube faces:
-                # To guarantee a manifold, we must use a consistent diagonal direction.
-                # Since this is a simple test fixture, any valid subdivision works
-                # if orientations are consistent. A simpler way is to use Kuhn triangulation.
-                # For each permutation of (dx, dy, dz):
-                for p in [(0,1,2), (0,2,1), (1,0,2), (1,2,0), (2,0,1), (2,1,0)]:
-                    verts = []
+                # One Kuhn tetrahedron per order of the three unit steps from
+                # (x, y, z) to (x+1, y+1, z+1).
+                for p in itertools.permutations(range(3)):
                     curr = [x, y, z]
-                    verts.append(idx_map[curr[0], curr[1], curr[2]])
+                    verts = [idx_map[x, y, z]]
                     for d in p:
                         curr[d] += 1
                         verts.append(idx_map[curr[0], curr[1], curr[2]])
-                    # To maintain orientation, sign of permutation dictates vertex order
-                    # (we just let SimplicialComplex handle it if we only care about Z2,
-                    # but for Z we need proper orientation). We will just add the simplices 
-                    # and let SimplicialComplex orient it.
-                    # Wait, the orientation of a simplex is determined by vertex ordering.
-                    # We just use sorted tuples. SimplicialComplex takes care of boundary matrix
-                    # based on sorted ordering. We just need to make sure the union of simplices
-                    # forms a manifold, which Kuhn triangulation does.
-                    simplices.append(tuple(set(verts))) # set removes duplicates if degenerate
+                    simplices.append(tuple(sorted(int(v) for v in verts)))
 
-    # Filter out degenerate simplices (where multiple vertices map to infinity)
-    # A simplex must have 4 distinct vertices.
-    valid_simplices = [s for s in simplices if len(set(s)) == 4]
+    # The boundary 2-sphere consists of the triangles in only one tetrahedron.
+    face_count = Counter(t[:i] + t[i + 1:] for t in simplices for i in range(4))
+    simplices += [(0,) + f for f, c in face_count.items() if c == 1]
 
-    sc = SimplicialComplex.from_maximal_simplices(valid_simplices)
+    sc = SimplicialComplex.from_maximal_simplices(simplices)
 
     # Attach geometric coordinates so linking-number routines can use them.
-    # vertex 0 = "infinity" — placed far from interior; interior vertices use grid coords.
-    n_verts = current_idx
-    points = np.zeros((n_verts, 3), dtype=np.float64)
+    # vertex 0 = "infinity" — placed far from the grid; grid vertices use grid coords.
+    points = np.zeros((N**3 + 1, 3), dtype=np.float64)
     points[0] = np.array([10.0 * size, 10.0 * size, 10.0 * size])
-    for x in range(N):
-        for y in range(N):
-            for z in range(N):
-                vid = int(idx_map[x, y, z])
-                if vid != 0:
-                    points[vid] = [float(x), float(y), float(z)]
+    points[1:] = np.indices((N, N, N)).reshape(3, -1).T
     sc._generate_point_cloud_mappings(points)
 
     return sc, idx_map
@@ -312,7 +268,7 @@ def _parametric_to_grid(
         ix = int(round(x))
         iy = int(round(y))
         iz = int(round(z))
-        # Clamp to interior (avoid mapping to infinity vertex)
+        # Clamp to the interior, off the boundary that is coned to infinity
         ix = max(1, min(N - 1, ix))
         iy = max(1, min(N - 1, iy))
         iz = max(1, min(N - 1, iz))
