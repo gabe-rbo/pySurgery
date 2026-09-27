@@ -15,6 +15,9 @@ Overview:
                                        Polyak-Viro arrow-diagram formula
         diagram_milnor_mu123(A, B, C)  Milnor's triple linking number of a pairwise
                                        unlinked triple, by the Magnus expansion
+        diagram_milnor_mu(curves, I)   Milnor's mu-bar(I) for any multi-index, by
+                                       Milnor's algorithm (e.g. (0, 0, 1, 1): the
+                                       Sato-Levine invariant, up to sign)
 
     It complements the complex-based knot invariants of ``pysurgery.knots.invariants``
     (Seifert matrices of knots inside a triangulated S^3): here the input is just the
@@ -68,6 +71,7 @@ __all__ = [
     "a2_from_diagram",
     "casson_a2",
     "diagram_milnor_mu123",
+    "diagram_milnor_mu",
 ]
 
 
@@ -564,3 +568,150 @@ def diagram_milnor_mu123(
         total -= eps * (w if j == 1 else -w)
     return int(total)
 
+
+
+# --------------------------------------------------------------------------- #
+# Milnor invariants of any length, by Milnor's algorithm
+# --------------------------------------------------------------------------- #
+
+
+def _magnus_mul(a: dict, b: dict, degree: int) -> dict:
+    """Product in the Magnus algebra Z<<X_0, ..., X_{n-1}>> truncated above ``degree``."""
+    out: dict = {}
+    for wa, ca in a.items():
+        for wb, cb in b.items():
+            if len(wa) + len(wb) <= degree:
+                w = wa + wb
+                out[w] = out.get(w, 0) + ca * cb
+    return {w: c for w, c in out.items() if c}
+
+
+def _magnus_power(a: dict, e: int, degree: int) -> dict:
+    """``a^e`` for a series ``a = 1 + A`` (A without constant term), e any integer."""
+    one = {(): 1}
+    if e < 0:
+        A = {w: c for w, c in a.items() if w}
+        term, inv = one, dict(one)
+        for _ in range(degree):          # (1 + A)^-1 = sum_j (-A)^j
+            term = _magnus_mul(term, {w: -c for w, c in A.items()}, degree)
+            for w, c in term.items():
+                inv[w] = inv.get(w, 0) + c
+        a, e = {w: c for w, c in inv.items() if c}, -e
+    out = one
+    for _ in range(e):
+        out = _magnus_mul(out, a, degree)
+    return out
+
+
+def _longitude_expansions(D: KnotDiagram, degree: int) -> List[dict]:
+    """Magnus expansions of the 0-framed longitudes of every component, mod degree + 1.
+
+    Wirtinger generators: one meridian per arc (an arc of component c runs between
+    consecutive passages of c UNDER something). Reading c from its basepoint, the
+    partial longitude w_{c,a} is the product, left to right, of the meridians of the
+    over-arcs at its first a under-passages, each to the power of the crossing sign;
+    the meridian of arc a of c is ``w_{c,a}^-1 x_c w_{c,a}`` (Milnor, *Isotopy of
+    links*, 1957), the convention of ``diagram_milnor_mu123``. Starting from
+    ``x_{c,a} = x_c`` and substituting ``degree`` times fixes the expansions of all
+    meridians modulo degree + 1, since each substitution is correct one degree
+    further. The longitude is the full product times ``x_c^-writhe_c``, which makes
+    the exponent sum of x_c zero (the preferred longitude).
+    """
+    n = D.n_components
+    unders: List[List[Crossing]] = [
+        sorted((c for c in D.crossings if c.under == j), key=lambda c: c.under_pos) for j in range(n)
+    ]
+    positions = [[c.under_pos for c in unders[j]] for j in range(n)]
+
+    def arc(j: int, pos: float) -> int:
+        m = len(positions[j])
+        return sum(1 for p in positions[j] if p < pos) % m if m else 0
+
+    letters = [[(c.over, arc(c.over, c.over_pos), c.sign) for c in unders[j]] for j in range(n)]
+    x = [{(): 1, (j,): 1} for j in range(n)]
+    meridian = [[x[j]] * max(len(unders[j]), 1) for j in range(n)]
+
+    def partial_longitudes(j: int) -> List[dict]:
+        W = [{(): 1}]
+        for o, a, s in letters[j]:
+            W.append(_magnus_mul(W[-1], _magnus_power(meridian[o][a], s, degree), degree))
+        return W
+
+    for _ in range(degree):
+        meridian = [
+            [
+                _magnus_mul(_magnus_mul(_magnus_power(W, -1, degree), x[j], degree), W, degree)
+                for W in partial_longitudes(j)[: max(len(unders[j]), 1)]
+            ]
+            for j in range(n)
+        ]
+    out = []
+    for j in range(n):
+        writhe_j = sum(c.sign for c in D.self_crossings(j))
+        out.append(_magnus_mul(partial_longitudes(j)[-1], _magnus_power(x[j], -writhe_j, degree), degree))
+    return out
+
+
+def diagram_milnor_mu(
+    curves: Sequence[np.ndarray],
+    multi_index: Sequence[int],
+    D: Optional[KnotDiagram] = None,
+    backend: str = "auto",
+) -> int:
+    r"""Milnor's invariant mu-bar(i_1 ... i_k) of disjoint closed polygons, exactly.
+
+    What is Being Computed?:
+        The coefficient of ``X_{i_1} ... X_{i_{k-1}}`` in the Magnus expansion
+        (``x_j -> 1 + X_j``) of the 0-framed longitude of component ``i_k``, computed
+        by Milnor's algorithm from one certified diagram (``_longitude_expansions``).
+        It is an isotopy invariant of the link modulo Delta, the gcd of mu-bar of every
+        sequence obtained by deleting at least one index and permuting cyclically
+        (Milnor 1957); this function returns it only when Delta = 0 and raises
+        otherwise. Length 2 gives the linking number, (i, j, k) the triple linking
+        number of ``diagram_milnor_mu123``, and (i, i, j, j) the first invariant beyond
+        lk of a two-component link, ``-beta`` for the Sato-Levine invariant beta
+        (Cochran, *Derivatives of links*, Mem. AMS 427, 1990): +-1 on the Whitehead
+        link. Repeated indices are allowed; the invariants of length >= 3 change sign
+        under mirror image exactly when the length is even.
+
+    Args:
+        curves: ``(n_i, 3)`` polygons, the link components.
+        multi_index: Component indices ``(i_1, ..., i_k)``, 0-based, ``k >= 2``.
+        D: A diagram of ``curves`` (computed when omitted).
+        backend: 'auto', 'julia' or 'python' (for the diagram).
+
+    Returns:
+        mu-bar(i_1 ... i_k).
+
+    Raises:
+        UndefinedInvariantError: If Delta != 0, i.e. an invariant obtained by deleting
+            indices (and permuting cyclically) is nonzero.
+        ValueError: If the multi-index is too short or names a missing component.
+    """
+    from itertools import combinations
+    from math import gcd
+
+    index = tuple(int(i) for i in multi_index)
+    if len(index) < 2:
+        raise ValueError("a Milnor invariant needs a multi-index of length >= 2")
+    if any(i < 0 or i >= len(curves) for i in index):
+        raise ValueError(f"multi-index {index} names a component outside 0..{len(curves) - 1}")
+    curves = [np.asarray(c, float) for c in curves]
+    D = knot_diagram(curves, backend=backend) if D is None else D
+    longitudes = _longitude_expansions(D, len(index) - 1)
+
+    def mu(seq: Tuple[int, ...]) -> int:
+        return int(longitudes[seq[-1]].get(seq[:-1], 0))
+
+    delta = 0
+    for size in range(2, len(index)):
+        for kept in combinations(range(len(index)), size):
+            seq = tuple(index[i] for i in kept)
+            for r in range(size):
+                delta = gcd(delta, mu(seq[r:] + seq[:r]))
+    if delta:
+        raise UndefinedInvariantError(
+            f"mu-bar{index} is defined only modulo Delta = {delta}: an invariant obtained by "
+            "deleting indices is nonzero"
+        )
+    return mu(index)

@@ -886,12 +886,6 @@ class JuliaBridge:
                 ),
             ),
             (
-                "linking_intersection",
-                lambda: (
-                    self.linking_intersect_2chains(np.array([1], dtype=np.int64), np.array([1], dtype=np.int64), [[0, 1]], [[0, 1, 2]], [[0, 1, 2, 3]])
-                )
-            ),
-            (
                 "linking_gauss_riemann",
                 # Compile the embedding-based Gauss linking integral against a
                 # small Hopf-link-style workload so test runs hit a hot kernel.
@@ -3691,36 +3685,6 @@ class JuliaBridge:
             Ka_s, Ka_e, Ka_m, Kb_s, Kb_e, Kb_m, int(n_samples)
         )
         return float(val)
-
-    def linking_intersect_2chains(
-        self,
-        F_a: np.ndarray,
-        F_b: np.ndarray,
-        simplices_1: list[list[int]],
-        simplices_2: list[list[int]],
-        simplices_3: list[list[int]],
-    ) -> np.ndarray:
-        """Compute the intersection number of two 2-chains via the Julia backend.
-
-        Args:
-            F_a: First 2-chain coefficient vector as int64 ndarray.
-            F_b: Second 2-chain coefficient vector as int64 ndarray.
-            simplices_1: 1-simplices of the underlying complex.
-            simplices_2: 2-simplices of the underlying complex.
-            simplices_3: 3-simplices of the underlying complex.
-
-        Returns:
-            np.ndarray with dtype int64 holding the intersection result.
-        """
-        self.require_julia()
-        result = self.backend.linking_intersect_2chains(
-            np.asarray(F_a, dtype=np.int64),
-            np.asarray(F_b, dtype=np.int64),
-            simplices_1,
-            simplices_2,
-            simplices_3,
-        )
-        return np.array(result, dtype=np.int64)
 
     def alexander_from_seifert(self, V: np.ndarray) -> dict | None:
         """Compute Alexander polynomial det(tV - V^T) via Julia's AbstractAlgebra.

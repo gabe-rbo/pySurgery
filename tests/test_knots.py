@@ -9,7 +9,7 @@ from pysurgery.core.exceptions import NotAManifoldError, UndefinedInvariantError
 from pysurgery.topology.complexes import SimplicialComplex
 from pysurgery.knots.linking import (
     linking_matrix, milnor_triple_invariant, milnor_invariants,
-    are_linked, link_type, LinkType,
+    are_linked, link_type, LinkType, sato_levine_invariant,
 )
 from pysurgery.knots.constructors import (
     hopf_link, borromean_rings,
@@ -17,12 +17,13 @@ from pysurgery.knots.constructors import (
     _build_s3_grid, _extract_cycle,
     _delaunay_s3_from_points, _ring_cycle, _subdivided_polyline,
 )
-from pysurgery.knots.diagrams import diagram_linking_number, diagram_milnor_mu123
+from pysurgery.knots.diagrams import diagram_linking_number, diagram_milnor_mu123, diagram_milnor_mu
+from pysurgery.knots.link_complement import certify_splitness
+import synthetic_curves
 from pysurgery.knots.triangulated_linking import (
     component_vertex_cycle, triangulated_linking_number,
 )
 from pysurgery.manifolds.surgery import compute_linking_number
-from pysurgery.topology.complexes import SimplicialComplex
 from pysurgery.bridge.julia_bridge import julia_engine
 from pysurgery.knots.invariants import (
     seifert_matrix, alexander_polynomial, conway_polynomial,
@@ -35,7 +36,6 @@ from pysurgery.knots.invariants import (
 )
 from pysurgery.knots import seifert_surface
 from pysurgery.knots.analysis import find_knots_between_components, KnotAnalysisResult
-from pysurgery.topology.complexes import SimplicialComplex
 
 
 # ── Linking number tests ──────────────────────────────────────────────────────
@@ -249,6 +249,62 @@ def test_milnor_triple_invariant_refuses_what_it_cannot_define():
         milnor_triple_invariant(sc, comps[0], comps[1], comps[0])
 
 
+# ── The Sato-Levine invariant in a triangulation ─────────────────────────────
+#
+# beta = lk(C, C+) for C = F_1 cap G_2 (embedded Seifert surfaces, primal and dual),
+# checked against -mu-bar(1122) from Milnor's algorithm on the same polygons.
+
+# K_1 of the Whitehead link run twice around the figure-eight (two laps, joined below
+# the plane away from K_2): beta is quadratic in K_1, so it becomes 4.
+_WHITEHEAD_K1_TWICE = [(4, -4, -2), (4, -4, 2), (4, 4, 2), (4, 4, -2), (-4, 4, -2), (-4, 4, 2),
+                       (-4, -4, 2), (-4, -4, -2), (2, -4, -2), (2, -4, -4), (2, -5, -4), (5, -5, -4),
+                       (5, -5, -3), (5, -5, 3), (5, 5, 3), (5, 5, -3), (-5, 5, -3), (-5, 5, 3),
+                       (-5, -5, 3), (-5, -5, -3), (1, -5, -3), (1, -3, -3), (4, -3, -3), (4, -4, -3)]
+
+
+def test_sato_levine_invariant_of_the_whitehead_link():
+    sc, comps = whitehead_link()
+    beta = sato_levine_invariant(sc, *comps)
+    assert abs(beta) == 1
+    assert beta == -diagram_milnor_mu(_polygons(sc, comps), (0, 0, 1, 1), backend="python")
+    assert sato_levine_invariant(sc, comps[1], comps[0]) == beta
+    assert milnor_invariants(sc, comps, (0, 0, 1, 1)) == -beta
+    assert milnor_invariants(sc, comps, (1, 0, 0, 1)) == -beta
+    assert milnor_invariants(sc, comps, (0, 1, 0, 1)) == 2 * beta
+    assert milnor_invariants(sc, comps, (0, 0, 0, 1)) is None
+    # Relabelling reverses components (beta does not care), mirroring negates it.
+    signs = set()
+    for seed, mirror in itertools.product(range(2), (False, True)):
+        new, cs = _relabelled(sc, comps, seed, mirror=mirror)
+        b = sato_levine_invariant(new, *cs)
+        assert b == -diagram_milnor_mu(_polygons(new, cs), (0, 0, 1, 1), backend="python")
+        signs.add(b)
+    assert signs == {-1, 1}
+    new, cs = _relabelled(sc, comps, seed=5, coordinates=False)
+    assert abs(sato_levine_invariant(new, *cs)) == 1
+
+
+def test_sato_levine_invariant_counts_with_multiplicity():
+    # The Delaunay ball of the rings leaves no room between them for the Seifert
+    # surfaces, so this also exercises the refinement fallback.
+    sc, comps = _grid_link([_WHITEHEAD_K1_TWICE, synthetic_curves.WHITEHEAD_CORNERS[1]], extent=20.0)
+    beta = sato_levine_invariant(sc, *comps)
+    assert abs(beta) == 4
+    assert beta == -diagram_milnor_mu(_polygons(sc, comps), (0, 0, 1, 1), backend="python")
+
+
+def test_sato_levine_invariant_vanishes_and_refuses():
+    for corners in ([_R1, _R2], [_R1, _shifted(_R3, 12)]):   # unlinked, interleaved or apart
+        sc, comps = _grid_link(corners, extent=20.0)
+        assert sato_levine_invariant(sc, *comps) == 0
+    ring = [(-1, -2, 0), (1, -2, 0), (1, 2, 0), (-1, 2, 0)]
+    through = [(0, 0, -1), (2, 0, -1), (2, 0, 1), (0, 0, 1)]
+    sc, comps = _grid_link([ring, through])
+    with pytest.raises(UndefinedInvariantError, match="lk = -?1"):
+        sato_levine_invariant(sc, *comps)
+    assert milnor_invariants(sc, comps, (0, 0, 1, 1)) is None
+
+
 def test_triangulated_linking_number_agrees_with_the_diagram():
     ring = [(-1, -2, 0), (1, -2, 0), (1, 2, 0), (-1, 2, 0)]
     through = [(0, 0, -1), (2, 0, -1), (2, 0, 1), (0, 0, 1)]
@@ -415,6 +471,11 @@ def test_whitehead_link_constructor():
     # Verify the linking number is 0 (key property of Whitehead link)
     L = linking_matrix(sc, components)
     assert L[0, 1] == 0
+    # ... and that it is linked all the same: a proof, from Hom counts to S_3, and the
+    # classification by the Sato-Levine invariant.
+    assert certify_splitness(_polygons(sc, components)).verdict == "non-split"
+    assert are_linked(sc, components) is True
+    assert link_type(sc, components) == LinkType.WHITEHEAD
 
 
 # ── Invariant tests ───────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ from .linking import (
     simplices_to_chain,
     linking_matrix,
     milnor_triple_invariant,
+    sato_levine_invariant,
     milnor_invariants,
     are_linked,
     link_type,
@@ -12,6 +13,7 @@ from .triangulated_linking import (
     component_vertex_cycle,
     triangulated_linking_number,
     triangulated_milnor_mu123,
+    triangulated_sato_levine,
 )
 
 from .constructors import (
@@ -69,6 +71,7 @@ from .diagrams import (
     a2_from_diagram,
     casson_a2,
     diagram_milnor_mu123,
+    diagram_milnor_mu,
 )
 
 from .link_complement import (
@@ -89,6 +92,7 @@ __all__ = [
     "simplices_to_chain",
     "linking_matrix",
     "milnor_triple_invariant",
+    "sato_levine_invariant",
     "milnor_invariants",
     "are_linked",
     "link_type",
@@ -97,6 +101,7 @@ __all__ = [
     "component_vertex_cycle",
     "triangulated_linking_number",
     "triangulated_milnor_mu123",
+    "triangulated_sato_levine",
     # Constructors
     "hopf_link",
     "borromean_rings",
@@ -143,6 +148,7 @@ __all__ = [
     "a2_from_diagram",
     "casson_a2",
     "diagram_milnor_mu123",
+    "diagram_milnor_mu",
     "wirtinger_presentation",
     "link_group",
     "alexander_check",

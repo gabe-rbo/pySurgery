@@ -430,28 +430,27 @@ def torus_knot(p: int, q: int) -> Tuple[SimplicialComplex, SimplicialComplex]:
 def whitehead_link() -> Tuple[SimplicialComplex, List[SimplicialComplex]]:
     """Construct the Whitehead link in S^3 as a minimal Delaunay triangulation.
 
-    Component 1 is a planar square in the xy-plane.  Component 2 is a
-    rectangular loop in the xz-plane whose two vertical sides pierce C1's
-    interior at (1, 0, 0) and (−1, 0, 0) with opposite z-orientations, so the
-    signed intersection number (and hence the linking number) vanishes — the
-    defining "lk = 0" property of the Whitehead-type clasp.
+    Component 2 is a figure-eight curve in the plane z = 0: two square lobes, in the
+    quadrants x, y > 0 and x, y < 0, whose strands cross once at the origin (the
+    horizontal strand at z = 2 over the vertical one at z = -2). Component 1 is the
+    square of half-side 4 around the origin; it crosses each lobe twice, passing over
+    the lobes on its sides x = +-4 (z = 2) and under them on its sides y = +-4
+    (z = -2). Read along component 2 the five crossings alternate over and under, so
+    this is the alternating 5-crossing diagram of the Whitehead link 5^2_1: lk = 0,
+    Sato-Levine invariant beta = -mu-bar(1122) = +-1, and the link is not split.
 
-    Subdividing every polyline edge to unit length guarantees that scipy's
-    Delaunay 3-ball over the union (≈ 45 vertices total) realises both polylines
-    as exact 1-cycles of the ambient triangulation.
+    Subdividing every polyline edge to unit length lets scipy's Delaunay 3-ball over
+    the union (plus a pole) realise both polylines as 1-cycles of the triangulation.
 
     Returns:
         (ambient_complex, [component1, component2])
     """
-    # Component 1: square in xy-plane at z=0, large enough to contain (±1, 0, 0).
-    C1 = _subdivided_polyline([(-3, -3, 0), (3, -3, 0), (3, 3, 0), (-3, 3, 0)])
-
-    # Component 2: rectangle in xz-plane (y=0).  The two vertical edges sit at
-    # x = +1 and x = −1, both inside C1's xy-disk, and traverse z in opposite
-    # directions — giving two cancelling signed crossings of C1's disk.
-    C2 = _subdivided_polyline([(1, 0, 4), (1, 0, -4), (-1, 0, -4), (-1, 0, 4)])
-
-    sc, idx_map = _delaunay_s3_from_points(C1 + C2, bbox_extent=12.0)
+    C1 = _subdivided_polyline([(4, -4, 2), (4, 4, 2), (4, 4, -2), (-4, 4, -2), (-4, 4, 2),
+                               (-4, -4, 2), (-4, -4, -2), (4, -4, -2)])
+    C2 = _subdivided_polyline([(-2, 0, 2), (2, 0, 2), (2, 0, 0), (8, 0, 0), (8, 6, 0), (0, 6, 0),
+                               (0, 2, 0), (0, 2, -2), (0, -2, -2), (0, -2, 0), (0, -6, 0),
+                               (-8, -6, 0), (-8, 0, 0), (-2, 0, 0)])
+    sc, idx_map = _delaunay_s3_from_points(C1 + C2, bbox_extent=16.0)
     c1 = _ring_cycle(C1, idx_map)
     c2 = _ring_cycle(C2, idx_map)
     return sc, [c1, c2]

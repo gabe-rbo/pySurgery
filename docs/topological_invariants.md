@@ -137,7 +137,11 @@ sign: positive when `cross2d(t_over, t_under) > 0`. From one certified diagram:
 `writhe`, `casson_a2` (Polyak-Viro; the z^2 coefficient of the Conway polynomial: 1 on
 the trefoil, -1 on the figure-eight, (p^2-1)(q^2-1)/24 on T(p, q)), and
 `diagram_milnor_mu123` (defined only when all pairwise linking numbers vanish;
-|mu| = 1 on the Borromean rings).
+|mu| = 1 on the Borromean rings). `diagram_milnor_mu(curves, I)` computes Milnor's
+mu-bar(I) for any multi-index by Milnor's algorithm (meridians of arcs substituted into
+the Magnus expansion until it is exact to degree |I| - 1, read off the 0-framed
+longitude), refusing unless every invariant obtained by deleting indices vanishes; e.g.
+mu-bar(1122) = -beta, the Sato-Levine invariant, is +-1 on the Whitehead link.
 
 The Wirtinger presentation (one generator per arc, one relator per crossing, one
 redundant relator dropped) is returned as a `FundamentalGroup` and must pass the

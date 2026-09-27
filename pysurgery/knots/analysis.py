@@ -13,7 +13,10 @@ import numpy as np
 
 from pysurgery.core.exceptions import UndefinedInvariantError
 from pysurgery.topology.complexes import SimplicialComplex
-from pysurgery.knots.linking import linking_matrix, link_type, LinkType, milnor_triple_invariant
+from pysurgery.knots.linking import (
+    linking_matrix, link_type, LinkType, milnor_triple_invariant, sato_levine_invariant,
+)
+from pysurgery.knots.seifert_surface import SeifertSurfaceError
 from pysurgery.knots.invariants import (
     alexander_polynomial,
     knot_signature,
@@ -60,6 +63,8 @@ class KnotAnalysisResult:
         link_classification: Overall link type (HOPF, BORROMEAN, UNLINKED, etc.).
         are_linked: True if any linking (pairwise or higher-order) is detected.
         milnor_triple: Milnor μ̄(123) invariant if there are exactly 3 pairwise-unlinked components.
+        sato_levine: Sato–Levine invariant β = −μ̄(1122) if there are exactly 2 components
+            with lk = 0 (None when it could not be computed).
         component_invariants: Per-component knot invariants (Alexander polynomial, signature, etc.).
         linked_pairs: List of (i, j) index pairs where lk(K_i, K_j) ≠ 0.
         undetected_warning: Non-empty string if higher-order linking may be present but undetected.
@@ -70,6 +75,7 @@ class KnotAnalysisResult:
     link_classification: LinkType = LinkType.UNLINKED
     are_linked: bool = False
     milnor_triple: Optional[int] = None
+    sato_levine: Optional[int] = None
     component_invariants: List[ComponentKnotInfo] = field(default_factory=list)
     linked_pairs: List[Tuple[int, int]] = field(default_factory=list)
     undetected_warning: str = ""
@@ -83,6 +89,8 @@ class KnotAnalysisResult:
         ]
         if self.milnor_triple is not None:
             lines.append(f"  Milnor μ̄(123) = {self.milnor_triple}")
+        if self.sato_levine is not None:
+            lines.append(f"  Sato–Levine β = −μ̄(1122) = {self.sato_levine}")
         if self.linked_pairs:
             lines.append(f"  Linked pairs: {self.linked_pairs}")
         lines.append(f"  Linking matrix:\n{self.linking_matrix}")
@@ -152,8 +160,9 @@ def find_knots_between_components(
         Given a simplicial complex sc (or explicit components), this function:
         1. Extracts the connected 1-cycle components (if not provided).
         2. Computes the full linking matrix (pairwise linking numbers).
-        3. For three pairwise unlinked components, computes Milnor's μ̄(123)
-           (Borromean-type linking).
+        3. For two unlinked components, computes the Sato–Levine invariant
+           β = −μ̄(1122) (Whitehead-type linking); for three pairwise unlinked
+           components, Milnor's μ̄(123) (Borromean-type linking).
         4. Computes per-component knot invariants (Alexander polynomial, signature, Arf).
         5. Classifies each pair and the overall link type.
 
@@ -198,6 +207,16 @@ def find_knots_between_components(
     result.are_linked = len(linked_pairs) > 0
 
     # ── Step 3: Higher-order Milnor invariants ────────────────────────────────
+    if not result.are_linked and n == 2:
+        # lk = 0 → check the Sato–Levine invariant (Whitehead-type linking)
+        try:
+            beta = sato_levine_invariant(ambient_complex, components[0], components[1], backend=backend)
+            result.sato_levine = beta
+            if beta != 0:
+                result.are_linked = True
+        except (UndefinedInvariantError, SeifertSurfaceError):
+            pass
+
     if not result.are_linked and n == 3:
         # All pairwise linking numbers are 0 → check Milnor triple invariant
         try:
