@@ -214,15 +214,17 @@ def test_component_info_cache_is_output_neutral(monkeypatch):
 
 def test_component_info_cache_reduces_manifold_checks(monkeypatch):
     """Stable components across thresholds should skip the per-component check."""
+    import pysurgery.topology.incremental_manifold as incremental_manifold
+
     pts = _two_circles_points()
     calls = {"n": 0}
-    orig = SimplicialComplex.is_homology_manifold
+    orig = incremental_manifold.manifold_verdict
 
-    def counting(self, *args, **kwargs):
+    def counting(*args, **kwargs):
         calls["n"] += 1
-        return orig(self, *args, **kwargs)
+        return orig(*args, **kwargs)
 
-    monkeypatch.setattr(SimplicialComplex, "is_homology_manifold", counting)
+    monkeypatch.setattr(incremental_manifold, "manifold_verdict", counting)
 
     # Cache active.
     FiltrationReport(pts, epsilons=_EPS, track_connected_components=True)

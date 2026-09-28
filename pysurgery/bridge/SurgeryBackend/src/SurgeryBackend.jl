@@ -6908,22 +6908,6 @@ function _get_reduced_homology_jl(lk_simplices, lk_max_dim)
     return rh, d_max
 end
 
-function check_closed_manifold_jl(active_cliques, dim::Int)
-    if dim < 1
-        return true
-    end
-    face_counts = Dict{Tuple{Vararg{Int}}, Int}()
-    for c in active_cliques
-        if length(c) == dim + 1
-            for i in 1:(dim + 1)
-                t = ntuple(j -> j < i ? c[j] : c[j+1], dim)
-                face_counts[t] = get(face_counts, t, 0) + 1
-            end
-        end
-    end
-    return all(count == 2 for count in values(face_counts))
-end
-
 """
     _get_bettis_at_jl(bar_dim, bar_birth, bar_death, eps)
 
@@ -6944,108 +6928,394 @@ function _get_bettis_at_jl(bar_dim::Vector{Int}, bar_birth::Vector{Float64}, bar
 end
 
 """
-    _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n_pts, verify_manifold_only_at_betti_change, bar_dim, bar_birth, bar_death)
+    _MfEngine
 
-Performs high-performance manifold verification over a sequence of filtration thresholds.
+Exact homology-manifold verdicts of a growing simplicial complex (the Julia twin of
+`pysurgery/topology/incremental_manifold.py`; both give the verdict of
+`certify_homology_manifold`).
 
-**Incremental Update Algorithm:**
-Instead of re-evaluating the local link-homology for all `V` vertices at every threshold (an `O(V)` operation per step), this function uses an **incremental tracking strategy**:
-1. It maintains a global `v_state` array representing the local manifold dimension of each vertex, alongside global aggregation counters (`dim_counts` and `n_fail`).
-2. At each threshold `eps`, it only identifies the newly added cliques (simplices).
-3. A vertex is marked as "changed" if and only if it belongs to one of these newly active cliques.
-4. Local link-homology is evaluated **strictly for the changed vertices**, making the update step proportional only to the number of local structural changes `O(k)`.
-5. The `v_state` and global counters are updated incrementally, allowing instantaneous `O(1)` validation of the global manifold condition.
+A simplex σ of dimension k is *regular* relative to a dimension d when lk σ has the
+homology of S^(d-k-1) with that dimension, or is acyclic and pure of that dimension.
+K is a homology d-manifold (closed or with boundary) iff every simplex is regular iff
+no inclusion-maximal singular simplex exists, so σ is decided only when all its strict
+cofaces are regular (then lk σ is itself a homology manifold):
 
-**Betti Skipping:**
-If `verify_manifold_only_at_betti_change=true`, the function additionally bypasses updates entirely for thresholds where the Betti numbers have not changed from the last evaluated threshold. The incremental logic natively catches up on skipped cliques at the next active evaluation.
+- codim 0: regular (empty link = S^-1);
+- codim 1: the link is c1 points: regular iff c1 ∈ {1, 2};
+- codim 2: the link is a graph: regular iff connected, E ≥ 1 and V - E ∈ {0, 1};
+- codim 3: the link is a combinatorial surface: regular iff connected and χ = 2 (S²),
+  or χ = 1 with a boundary edge (the disk; χ = 1 closed is RP²);
+- codim ≥ 4: exact integer reduced homology of the link.
+
+A new simplex changes only the links of its faces, so only its faces are re-decided;
+G(σ) ("σ and every coface regular") flows down through a count of immediate cofaces
+with G false. The reference dimension is dim K (global mode) or the dimension of σ's
+connected component (`per_component = true`); when it grows, the simplices it covers
+are re-decided.
 """
-function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64, n_samples::Union{Nothing, Int}, n_pts::Int = 0, verify_manifold_only_at_betti_change::Bool = false, track_connected_components::Bool = false, bar_dim::Vector{Int} = Int[], bar_birth::Vector{Float64} = Float64[], bar_death::Vector{Float64} = Float64[])
-    p = sortperm(vals)
-    sorted_cliques = cliques[p]
-    sorted_vals = vals[p]
-    
-    grid_epsilons = _grid_from_values_jl(sorted_vals, epsilon, n_samples)
-    
-    if n_pts <= 0
-        for c in sorted_cliques
-            for v in c
-                if v > n_pts
-                    n_pts = v
-                end
+mutable struct _MfEngine
+    id::Dict{Vector{Int}, Int}
+    simplex::Vector{Vector{Int}}
+    dim::Vector{Int}
+    c1::Vector{Int}
+    c2::Vector{Int}
+    c3::Vector{Int}
+    be::Vector{Int}                       # (k+2)-cofaces ρ with c1(ρ) == 1
+    lk_parent::Vector{Union{Nothing, Dict{Int, Int}}}
+    lk_unions::Vector{Int}
+    cof::Vector{Vector{Int}}              # immediate cofaces
+    nbad::Vector{Int}                     # immediate cofaces with G false
+    G::Vector{Bool}
+    witness::Vector{Bool}
+    is_dirty::Vector{Bool}
+    dirty::Vector{Vector{Int}}            # dirty[k + 1]: ids of dimension k
+    full_recheck::Bool
+    dimension::Int
+    n_witness::Int
+    n_free::Vector{Int}                   # n_free[k + 1]: k-simplices in exactly one (k+1)-simplex
+    per_component::Bool
+    vparent::Vector{Int}                  # vertex union-find (components)
+    cdim::Vector{Int}
+    cwit::Vector{Int}
+    cfree::Matrix{Int}                    # cfree[k + 1, root]
+    cmembers::Vector{Vector{Int}}
+end
+
+function _MfEngine(max_dim::Int, n_pts::Int, per_component::Bool)
+    L = max(max_dim, 0) + 2
+    return _MfEngine(Dict{Vector{Int}, Int}(), Vector{Int}[], Int[], Int[], Int[], Int[], Int[],
+                     Union{Nothing, Dict{Int, Int}}[], Int[], Vector{Int}[], Int[], Bool[], Bool[],
+                     Bool[], [Int[] for _ in 1:L], false, -1, 0, zeros(Int, L), per_component,
+                     zeros(Int, n_pts), zeros(Int, n_pts), zeros(Int, n_pts),
+                     zeros(Int, per_component ? L : 0, per_component ? n_pts : 0),
+                     [Int[] for _ in 1:(per_component ? n_pts : 0)])
+end
+
+@inline function _mf_mark!(E::_MfEngine, j::Int)
+    if !E.is_dirty[j]
+        E.is_dirty[j] = true
+        push!(E.dirty[E.dim[j] + 1], j)
+    end
+    return nothing
+end
+
+function _mf_vfind(E::_MfEngine, v::Int)
+    r = v
+    while E.vparent[r] != r
+        r = E.vparent[r]
+    end
+    while E.vparent[v] != r
+        nxt = E.vparent[v]
+        E.vparent[v] = r
+        v = nxt
+    end
+    return r
+end
+
+@inline _mf_ref_dim(E::_MfEngine, j::Int) =
+    E.per_component ? E.cdim[_mf_vfind(E, E.simplex[j][1])] : E.dimension
+
+@inline _mf_sub(s::Vector{Int}, mask::Int, keep::Bool) =
+    [s[t] for t in 1:length(s) if (((mask >> (t - 1)) & 1) == 1) == keep]
+
+function _mf_grow!(E::_MfEngine, m::Int)
+    while length(E.dirty) < m + 2
+        push!(E.dirty, Int[])
+        push!(E.n_free, 0)
+    end
+    if E.per_component && size(E.cfree, 1) < m + 2
+        extra = zeros(Int, m + 2 - size(E.cfree, 1), size(E.cfree, 2))
+        E.cfree = vcat(E.cfree, extra)
+    end
+    return nothing
+end
+
+"""Add a simplex (vertex labels in `1:n_pts`), adding any missing face first."""
+function _mf_add!(E::_MfEngine, s::Vector{Int})
+    haskey(E.id, s) && return nothing
+    if length(s) > 1
+        for t in 1:length(s)
+            f = deleteat!(copy(s), t)
+            haskey(E.id, f) || _mf_add!(E, f)
+        end
+    end
+    _mf_insert!(E, s)
+    return nothing
+end
+
+function _mf_insert!(E::_MfEngine, s::Vector{Int})
+    i = length(E.simplex) + 1
+    m = length(s) - 1
+    _mf_grow!(E, m)
+    E.id[s] = i
+    push!(E.simplex, s); push!(E.dim, m)
+    push!(E.c1, 0); push!(E.c2, 0); push!(E.c3, 0); push!(E.be, 0)
+    push!(E.lk_parent, nothing); push!(E.lk_unions, 0); push!(E.cof, Int[])
+    push!(E.nbad, 0); push!(E.G, true); push!(E.witness, false); push!(E.is_dirty, false)
+    if m > E.dimension
+        E.dimension = m
+        E.per_component || (E.full_recheck = true)
+    end
+    E.per_component && _mf_component_insert!(E, i, s, m)
+    _mf_mark!(E, i)
+    m == 0 && return nothing
+    n = m + 1
+    for mask in 1:((1 << n) - 2)
+        codim = n - count_ones(mask)
+        face = _mf_sub(s, mask, true)
+        j = E.id[face]
+        _mf_mark!(E, j)
+        if codim == 1
+            x = _mf_sub(s, mask, false)[1]
+            push!(E.cof[j], i)
+            _mf_bump_c1!(E, j, face)
+            par = E.lk_parent[j]
+            if par === nothing
+                par = Dict{Int, Int}()
+                E.lk_parent[j] = par
+            end
+            par[x] = x
+        elseif codim == 2
+            E.c2[j] += 1
+            xy = _mf_sub(s, mask, false)
+            _mf_lk_union!(E, j, xy[1], xy[2])
+        elseif codim == 3
+            E.c3[j] += 1
+        end
+    end
+    return nothing
+end
+
+function _mf_bump_c1!(E::_MfEngine, j::Int, face::Vector{Int})
+    old = E.c1[j]
+    new = old + 1
+    E.c1[j] = new
+    if old == 1 || new == 1
+        k = E.dim[j]
+        delta = new == 1 ? 1 : -1
+        E.n_free[k + 1] += delta
+        E.per_component && (E.cfree[k + 1, _mf_vfind(E, face[1])] += delta)
+        if k >= 2   # face is a boundary edge of lk(σ) for its codim-2 faces σ
+            for mask in 1:((1 << (k + 1)) - 2)
+                count_ones(mask) == k - 1 || continue
+                E.be[E.id[_mf_sub(face, mask, true)]] += delta
             end
         end
     end
-    
-    link_simplices_faces = [Vector{Vector{Int}}() for _ in 1:n_pts]
-    link_simplices_vals = [Vector{Float64}() for _ in 1:n_pts]
-    for (c, val) in zip(sorted_cliques, sorted_vals)
-        len = length(c)
-        if len > 1
-            for i in 1:len
-                v = c[i]
-                face = Vector{Int}(undef, len - 1)
-                idx_f = 1
-                for j in 1:len
-                    if j != i
-                        @inbounds face[idx_f] = c[j]
-                        idx_f += 1
+    return nothing
+end
+
+function _mf_lk_union!(E::_MfEngine, j::Int, x::Int, y::Int)
+    par = E.lk_parent[j]::Dict{Int, Int}
+    function find(a)
+        r = a
+        while par[r] != r
+            r = par[r]
+        end
+        while par[a] != r
+            nxt = par[a]
+            par[a] = r
+            a = nxt
+        end
+        return r
+    end
+    rx, ry = find(x), find(y)
+    if rx != ry
+        par[rx] = ry
+        E.lk_unions[j] += 1
+    end
+    return nothing
+end
+
+function _mf_component_insert!(E::_MfEngine, i::Int, s::Vector{Int}, m::Int)
+    if m == 0
+        v = s[1]
+        E.vparent[v] = v
+        E.cdim[v] = 0
+        E.cwit[v] = 0
+        E.cfree[:, v] .= 0
+        E.cmembers[v] = [i]
+        return nothing
+    end
+    if m == 1
+        ra, rb = _mf_vfind(E, s[1]), _mf_vfind(E, s[2])
+        if ra != rb
+            if length(E.cmembers[ra]) < length(E.cmembers[rb])
+                ra, rb = rb, ra
+            end
+            newd = max(E.cdim[ra], E.cdim[rb])
+            for r in (ra, rb)
+                if E.cdim[r] < newd
+                    for j in E.cmembers[r]
+                        _mf_mark!(E, j)
                     end
                 end
-                push!(link_simplices_faces[v], face)
-                push!(link_simplices_vals[v], val)
+            end
+            append!(E.cmembers[ra], E.cmembers[rb])
+            E.cmembers[rb] = Int[]
+            E.cwit[ra] += E.cwit[rb]
+            E.cwit[rb] = 0
+            for k in axes(E.cfree, 1)
+                E.cfree[k, ra] += E.cfree[k, rb]
+                E.cfree[k, rb] = 0
+            end
+            E.vparent[rb] = ra
+            E.cdim[ra] = newd
+        end
+    end
+    r = _mf_vfind(E, s[1])
+    push!(E.cmembers[r], i)
+    if m > E.cdim[r]
+        E.cdim[r] = m
+        for j in E.cmembers[r]
+            _mf_mark!(E, j)
+        end
+    end
+    return nothing
+end
+
+function _mf_regular(E::_MfEngine, j::Int, codim::Int)
+    codim == 0 && return true
+    c1 = E.c1[j]
+    codim == 1 && return c1 == 1 || c1 == 2
+    comps = c1 - E.lk_unions[j]
+    c2 = E.c2[j]
+    codim == 2 && return comps == 1 && c2 >= 1 && 0 <= c1 - c2 <= 1
+    if codim == 3
+        chi = c1 - c2 + E.c3[j]
+        return comps == 1 && (chi == 2 || (chi == 1 && E.be[j] > 0))
+    end
+    return _mf_regular_by_homology(E, j, codim)
+end
+
+function _mf_regular_by_homology(E::_MfEngine, j::Int, codim::Int)
+    sigma = E.simplex[j]
+    seen = Set{Int}()
+    stack = copy(E.cof[j])
+    link = Vector{Vector{Int}}()
+    ldim = -1
+    while !isempty(stack)
+        t = pop!(stack)
+        t in seen && continue
+        push!(seen, t)
+        l = [v for v in E.simplex[t] if !(v in sigma)]
+        push!(link, l)
+        ldim = max(ldim, length(l) - 1)
+        append!(stack, E.cof[t])
+    end
+    want = codim - 1
+    ldim == want || return false
+    rh, _ = _get_reduced_homology_jl(link, ldim)
+    isempty(rh) && return true
+    return length(rh) == 1 && haskey(rh, want) && rh[want][1] == 1 && isempty(rh[want][2])
+end
+
+function _mf_settle!(E::_MfEngine)
+    if E.full_recheck
+        for j in 1:length(E.simplex)
+            _mf_mark!(E, j)
+        end
+        E.full_recheck = false
+    end
+    for k in (length(E.dirty) - 1):-1:0
+        bucket = E.dirty[k + 1]
+        isempty(bucket) && continue
+        E.dirty[k + 1] = Int[]
+        for j in bucket
+            E.is_dirty[j] = false
+            A = E.nbad[j] == 0
+            good = A && _mf_regular(E, j, _mf_ref_dim(E, j) - k)
+            wit = A && !good
+            if wit != E.witness[j]
+                E.witness[j] = wit
+                delta = wit ? 1 : -1
+                E.n_witness += delta
+                E.per_component && (E.cwit[_mf_vfind(E, E.simplex[j][1])] += delta)
+            end
+            if good != E.G[j]
+                E.G[j] = good
+                if k > 0
+                    delta = good ? -1 : 1
+                    s = E.simplex[j]
+                    for t in 1:(k + 1)
+                        f = E.id[deleteat!(copy(s), t)]
+                        E.nbad[f] += delta
+                        _mf_mark!(E, f)
+                    end
+                end
             end
         end
     end
-    
-    # Precompute running maximum dimension
-    running_max_dim = Vector{Int}(undef, length(sorted_cliques))
-    curr_max = -1
-    for i in 1:length(sorted_cliques)
-        d_c = length(sorted_cliques[i]) - 1
-        if d_c > curr_max
-            curr_max = d_c
-        end
-        @inbounds running_max_dim[i] = curr_max
+    return nothing
+end
+
+"""`(is_manifold, dimension, defects, is_closed)` of the whole current complex."""
+function _mf_verdict!(E::_MfEngine)
+    _mf_settle!(E)
+    d = E.dimension
+    ok = E.n_witness == 0
+    closed = ok && (d <= 0 || E.n_free[d] == 0)
+    return ok, d, E.n_witness, closed
+end
+
+"""Verdict of the component containing vertex `v` (per-component engine, after settling)."""
+function _mf_component_verdict(E::_MfEngine, v::Int)
+    r = _mf_vfind(E, v)
+    d = E.cdim[r]
+    w = E.cwit[r]
+    ok = w == 0
+    closed = ok && (d <= 0 || E.cfree[d, r] == 0)
+    return ok, d, w, closed
+end
+
+"""
+    _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n_pts, verify_manifold_only_at_betti_change, track_connected_components, bar_dim, bar_birth, bar_death)
+
+Homology-manifold verdict of the sub-complex at every threshold of the grid, exactly: the
+verdict of `certify_homology_manifold(K_eps, dim K_eps)` (see `_MfEngine`), its
+dimension, the number of inclusion-maximal singular simplices (`failures`) and whether
+the boundary is empty. Simplices are consumed once, in `(value, dimension)` order, and
+only the faces of each new simplex are re-decided.
+
+With `track_connected_components=true`, each component is also judged relative to its
+own dimension (a second engine in per-component mode).
+
+**Betti Skipping:** if `verify_manifold_only_at_betti_change=true`, a threshold whose
+Betti numbers equal those of the previous one reuses its verdict; the skipped simplices
+are consumed at the next evaluated threshold.
+"""
+function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64, n_samples::Union{Nothing, Int}, n_pts::Int = 0, verify_manifold_only_at_betti_change::Bool = false, track_connected_components::Bool = false, bar_dim::Vector{Int} = Int[], bar_birth::Vector{Float64} = Float64[], bar_death::Vector{Float64} = Float64[])
+    # Faces precede cofaces at equal values, so every prefix is a complex.
+    p = sortperm(collect(zip(vals, length.(cliques))))
+    sorted_cliques = [sort!(collect(Int, c)) for c in cliques[p]]
+    sorted_vals = vals[p]
+
+    grid_epsilons = _grid_from_values_jl(sorted_vals, epsilon, n_samples)
+
+    top_dim = max_dim
+    for c in sorted_cliques
+        n_pts = max(n_pts, maximum(c; init = 0))
+        top_dim = max(top_dim, length(c) - 1)
     end
-    
+
+    engine = _MfEngine(top_dim, n_pts, false)
+    comp_engine = track_connected_components ? _MfEngine(top_dim, n_pts, true) : nothing
+
     m_epsilons = Float64[]
     m_is_manifold = Bool[]
     m_dimensions = Int[]
     m_is_closed = Bool[]
     m_failures = Int[]
-    
-    # Pre-allocate v_map_arr to avoid vertex Dict allocations inside the loop
-    v_map_arr = zeros(Int, n_pts)
-    
-    prev_bettis = nothing
-    last_is_mani = false
-    last_detected_dim = -1
-    last_is_closed = false
-    last_n_fail = 0
-
-    # Incremental update state
-    v_state = fill(0, n_pts)  # 0-dim initially
-    dim_counts = zeros(Int, max_dim + 2)
-    dim_counts[1] = n_pts
-    n_fail = 0
-    prev_eval_idx = 0
-    prev_d_active = -1
-    
-    # Component tracking state
     m_comp_info_keys = Vector{Vector{Int}}()
     m_comp_info_vals = Vector{Vector{String}}()
-    
+
+    # Report rows: one per vertex when it appears; on a merge the smaller row survives.
     parent = collect(1:n_pts)
     row_id = fill(-1, n_pts)
     next_row_id = 0
-    comp_dim_counts = zeros(Int, max_dim + 2, n_pts)
-    for i in 1:n_pts
-        comp_dim_counts[1, i] = 1 # v_state is 0
-    end
-    comp_n_fail = zeros(Int, n_pts)
     active_roots = BitSet()
     merged_rows_history = BitSet()
-    
+
     function find_root(i::Int)
         root = i
         while parent[root] != root
@@ -7059,10 +7329,14 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
         end
         return root
     end
-    
+
+    prev_bettis = nothing
+    prev_eval_idx = 0
+    last = (true, -1, 0, true)
+
     for eps in grid_epsilons
         idx = searchsortedlast(sorted_vals, eps)
-        
+
         betti_changed = true
         if verify_manifold_only_at_betti_change
             curr_bettis = _get_bettis_at_jl(bar_dim, bar_birth, bar_death, eps)
@@ -7071,390 +7345,94 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
             end
             prev_bettis = curr_bettis
         end
-        
-        if idx == 0
+
+        if !betti_changed && idx > 0
             push!(m_epsilons, eps)
-            push!(m_is_manifold, true)
-            push!(m_dimensions, -1)
-            push!(m_is_closed, true)
-            push!(m_failures, 0)
+            push!(m_is_manifold, last[1])
+            push!(m_dimensions, last[2])
+            push!(m_failures, last[3])
+            push!(m_is_closed, last[4])
             if track_connected_components
-                push!(m_comp_info_keys, Int[])
-                push!(m_comp_info_vals, String[])
-            end
-            last_is_mani = true
-            last_detected_dim = -1
-            last_is_closed = true
-            last_n_fail = 0
-            continue
-        end
-        
-        if !betti_changed
-            push!(m_epsilons, eps)
-            push!(m_is_manifold, last_is_mani)
-            push!(m_dimensions, last_detected_dim)
-            push!(m_is_closed, last_is_closed)
-            push!(m_failures, last_n_fail)
-            if track_connected_components
-                # Push the last component info to keep lengths synchronized
                 push!(m_comp_info_keys, isempty(m_comp_info_keys) ? Int[] : copy(m_comp_info_keys[end]))
                 push!(m_comp_info_vals, isempty(m_comp_info_vals) ? String[] : copy(m_comp_info_vals[end]))
             end
             continue
         end
-        
-        active_cliques = view(sorted_cliques, 1:idx)
-        d_active = running_max_dim[idx]
-        
-        if d_active <= 0
-            push!(m_epsilons, eps)
-            push!(m_is_manifold, true)
-            push!(m_dimensions, d_active)
-            push!(m_is_closed, true)
-            push!(m_failures, 0)
-            if track_connected_components
-                # Update components for 0-simplices
-                keys_now = Int[]
-                vals_now = String[]
-                for i in (prev_eval_idx + 1):idx
-                    c = sorted_cliques[i]
-                    if length(c) == 1
-                        v = c[1]
-                        if row_id[v] == -1
-                            row_id[v] = next_row_id
-                            next_row_id += 1
-                            push!(active_roots, v)
-                        end
-                    end
+
+        for i in (prev_eval_idx + 1):idx
+            c = sorted_cliques[i]
+            _mf_add!(engine, c)
+            track_connected_components || continue
+            _mf_add!(comp_engine, c)
+            if length(c) == 1
+                v = c[1]
+                if row_id[v] == -1
+                    row_id[v] = next_row_id
+                    next_row_id += 1
+                    push!(active_roots, v)
                 end
-                for rt in active_roots
-                    r_idx = row_id[rt]
-                    if !(r_idx in merged_rows_history)
-                        push!(keys_now, r_idx)
-                        push!(vals_now, "M(D:0, Closed)") # 0-dim is closed point
-                    end
-                end
-                for r_idx in merged_rows_history
-                    push!(keys_now, r_idx)
-                    push!(vals_now, "-")
-                end
-                push!(m_comp_info_keys, keys_now)
-                push!(m_comp_info_vals, vals_now)
-            end
-            
-            last_is_mani = true
-            last_detected_dim = d_active
-            last_is_closed = true
-            last_n_fail = 0
-            prev_eval_idx = idx
-            prev_d_active = d_active
-            continue
-        end
-        
-        changed_vertices = Int[]
-        changed_mask = zeros(Bool, n_pts)
-        
-        if track_connected_components
-            for i in (prev_eval_idx + 1):idx
-                c = sorted_cliques[i]
-                if length(c) == 1
-                    v = c[1]
-                    if row_id[v] == -1
-                        row_id[v] = next_row_id
-                        next_row_id += 1
-                        push!(active_roots, v)
-                    end
-                elseif length(c) == 2
-                    u, w = c[1], c[2]
-                    ru = find_root(u)
-                    rw = find_root(w)
-                    if ru != rw
-                        if row_id[ru] < row_id[rw]
-                            parent[rw] = ru
-                            comp_n_fail[ru] += comp_n_fail[rw]
-                            comp_n_fail[rw] = 0
-                            for d in 1:(max_dim+2)
-                                comp_dim_counts[d, ru] += comp_dim_counts[d, rw]
-                                comp_dim_counts[d, rw] = 0
-                            end
-                            delete!(active_roots, rw)
-                            # Will record merge event later
-                        else
-                            parent[ru] = rw
-                            comp_n_fail[rw] += comp_n_fail[ru]
-                            comp_n_fail[ru] = 0
-                            for d in 1:(max_dim+2)
-                                comp_dim_counts[d, rw] += comp_dim_counts[d, ru]
-                                comp_dim_counts[d, ru] = 0
-                            end
-                            delete!(active_roots, ru)
-                        end
-                    end
-                end
-            end
-        end
-        
-        if d_active != prev_d_active
-            for v in 1:n_pts
-                changed_mask[v] = true
-                push!(changed_vertices, v)
-            end
-        else
-            for i in (prev_eval_idx + 1):idx
-                for v in sorted_cliques[i]
-                    if !changed_mask[v]
-                        changed_mask[v] = true
-                        push!(changed_vertices, v)
-                    end
-                end
-            end
-        end
-        
-        for v in changed_vertices
-            old_state = v_state[v]
-            new_state = -1
-            
-            idx_lk = searchsortedlast(link_simplices_vals[v], eps)
-            if idx_lk == 0
-                new_state = 0
-            else
-                lk = view(link_simplices_faces[v], 1:idx_lk)
-                
-                c_dims = zeros(Int, max_dim + 1)
-                for face in lk
-                    fd = length(face) - 1
-                    if 0 <= fd <= max_dim
-                        @inbounds c_dims[fd + 1] += 1
-                    end
-                end
-                
-                chi = 0
-                for fd in 0:max_dim
-                    @inbounds chi += (-1)^fd * c_dims[fd + 1]
-                end
-                
-                exp_sph = 1 + (-1)^(d_active - 1)
-                exp_dsk = 1
-                
-                if chi == exp_sph || chi == exp_dsk
-                    if d_active == 1
-                        n_v = c_dims[1]
-                        if n_v == 1 || n_v == 2
-                            new_state = n_v == 2 ? 1 : 0
-                        end
-                    elseif d_active == 2
-                        n_v = c_dims[1]
-                        n_e = c_dims[2]
-                        
-                        v_set = BitSet()
-                        for face in lk
-                            if length(face) == 1
-                                push!(v_set, face[1])
-                            end
-                        end
-                        v_list = collect(v_set)
-                        curr_nv = length(v_list)
-                        
-                        for i in 1:curr_nv
-                            @inbounds v_map_arr[v_list[i]] = i
-                        end
-                        
-                        adj = [Vector{Int}() for _ in 1:curr_nv]
-                        for face in lk
-                            if length(face) == 2
-                                u = @inbounds v_map_arr[face[1]]
-                                w = @inbounds v_map_arr[face[2]]
-                                if u > 0 && w > 0
-                                    push!(adj[u], w)
-                                    push!(adj[w], u)
-                                end
-                            end
-                        end
-                        
-                        for i in 1:curr_nv
-                            @inbounds v_map_arr[v_list[i]] = 0
-                        end
-                        
-                        is_connected = true
-                        if curr_nv > 0
-                            q = Vector{Int}(undef, curr_nv)
-                            q[1] = 1
-                            visited = zeros(Bool, curr_nv)
-                            visited[1] = true
-                            head = 1
-                            tail = 1
-                            while head <= tail
-                                curr = q[head]
-                                head += 1
-                                for neighbor in adj[curr]
-                                    if !visited[neighbor]
-                                        visited[neighbor] = true
-                                        tail += 1
-                                        q[tail] = neighbor
-                                    end
-                                end
-                            end
-                            is_connected = (tail == curr_nv)
-                        end
-                        
-                        if is_connected
-                            if n_v - n_e == 0
-                                new_state = 2
-                            elseif n_v - n_e == 1
-                                new_state = 1
-                            end
-                        end
+            elseif length(c) == 2
+                ru = find_root(c[1])
+                rw = find_root(c[2])
+                if ru != rw
+                    if row_id[ru] < row_id[rw]
+                        parent[rw] = ru
+                        delete!(active_roots, rw)
                     else
-                        rh, lk_d_max = _get_reduced_homology_jl(lk, d_active - 1)
-                        if isempty(rh)
-                            new_state = d_active - 1
-                        elseif length(rh) == 1
-                            deg = first(keys(rh))
-                            betti, torsion = rh[deg]
-                            if betti == 1 && isempty(torsion) && deg == d_active - 1
-                                new_state = d_active
-                            end
-                        end
+                        parent[ru] = rw
+                        delete!(active_roots, ru)
                     end
                 end
             end
-            
-            if old_state != new_state
-                if old_state == -1
-                    n_fail -= 1
-                else
-                    dim_counts[old_state + 1] -= 1
-                end
-                
-                if new_state == -1
-                    n_fail += 1
-                else
-                    dim_counts[new_state + 1] += 1
-                end
-                
-                if track_connected_components
-                    rt = find_root(v)
-                    if old_state == -1
-                        comp_n_fail[rt] -= 1
-                    else
-                        comp_dim_counts[old_state + 1, rt] -= 1
-                    end
-                    if new_state == -1
-                        comp_n_fail[rt] += 1
-                    else
-                        comp_dim_counts[new_state + 1, rt] += 1
-                    end
-                end
-                
-                v_state[v] = new_state
-            end
         end
-        
-        active_dims = Int[]
-        for d in 0:max_dim
-            if dim_counts[d + 1] > 0
-                push!(active_dims, d)
-            end
-        end
-        
-        is_mani = (n_fail == 0) && (length(active_dims) <= 1)
-        if !is_mani && n_fail == 0
-            n_fail = n_pts
-        end
-        
-        detected_dim = if is_mani
-            isempty(active_dims) ? d_active : first(active_dims)
-        else
-            d_active
-        end
-        
-        prev_eval_idx = idx
-        prev_d_active = d_active
-        
-        is_closed = false
-        if is_mani
-            is_closed = check_closed_manifold_jl(active_cliques, detected_dim)
-        end
-        
+        prev_eval_idx = max(prev_eval_idx, idx)
+
+        last = _mf_verdict!(engine)
         push!(m_epsilons, eps)
-        push!(m_is_manifold, is_mani)
-        push!(m_dimensions, detected_dim)
-        push!(m_is_closed, is_closed)
-        push!(m_failures, n_fail)
-        
+        push!(m_is_manifold, last[1])
+        push!(m_dimensions, last[2])
+        push!(m_failures, last[3])
+        push!(m_is_closed, last[4])
+
         if track_connected_components
+            _mf_settle!(comp_engine)
             keys_now = Int[]
             vals_now = String[]
-            
-            # Map every vertex to its root to find merges from previous active roots
             new_merges_this_step = Dict{Int, Int}()
-            
-            # Note: We track components that merged by checking if any row_id is no longer in active_roots but was previously active.
-            # Actually, `active_roots` contains exactly the current roots.
-            # For any row_id that is valid (0 to next_row_id - 1) and not in active_roots, it is merged.
             for i in 1:n_pts
                 r = row_id[i]
                 if r != -1 && i ∉ active_roots
-                    rt = find_root(i)
-                    target_r = row_id[rt]
+                    target_r = row_id[find_root(i)]
                     if r != target_r
                         new_merges_this_step[r] = target_r
                     end
                 end
             end
-            
             for rt in active_roots
-                r_idx = row_id[rt]
-                
-                c_fail = comp_n_fail[rt]
-                c_active_dims = Int[]
-                for d in 0:max_dim
-                    if comp_dim_counts[d + 1, rt] > 0
-                        push!(c_active_dims, d)
-                    end
-                end
-                
-                c_is_mani = (c_fail == 0) && (length(c_active_dims) <= 1)
-                
-                if c_is_mani
-                    c_det_dim = isempty(c_active_dims) ? d_active : first(c_active_dims)
-                    # For a component, it's closed if there are no boundary vertices (local dim == c_det_dim - 1)
-                    c_closed = true
-                    if c_det_dim > 0 && comp_dim_counts[c_det_dim, rt] > 0
-                        c_closed = false
-                    end
-                    c_str = c_closed ? "Closed" : "Bound"
-                    push!(keys_now, r_idx)
-                    push!(vals_now, "M(D:$(c_det_dim), $(c_str))")
+                c_ok, c_dim, c_fail, c_closed = _mf_component_verdict(comp_engine, rt)
+                push!(keys_now, row_id[rt])
+                if c_ok
+                    push!(vals_now, "M(D:$(c_dim), $(c_closed ? "Closed" : "Bound"))")
                 else
-                    push!(keys_now, r_idx)
                     push!(vals_now, "Non-M ($(c_fail) dft)")
                 end
             end
-            
             for (r_idx, target_r) in new_merges_this_step
                 push!(keys_now, r_idx)
                 push!(vals_now, "Merged (C_$(target_r + 1))")
                 push!(merged_rows_history, r_idx)
             end
-            
             for r_idx in merged_rows_history
                 if !haskey(new_merges_this_step, r_idx)
                     push!(keys_now, r_idx)
                     push!(vals_now, "-")
                 end
             end
-            
             push!(m_comp_info_keys, keys_now)
             push!(m_comp_info_vals, vals_now)
         end
-        
-        last_is_mani = is_mani
-        last_detected_dim = detected_dim
-        last_is_closed = is_closed
-        last_n_fail = n_fail
     end
-    
+
     return m_epsilons, m_is_manifold, m_dimensions, m_is_closed, m_failures, m_comp_info_keys, m_comp_info_vals
 end
 
