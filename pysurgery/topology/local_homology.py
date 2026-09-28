@@ -2,9 +2,11 @@ r"""Local homology at every simplex, and the homology-manifold certificate.
 
 Overview:
     Everything here is computed on the COMPLEX, exactly, at every simplex: no point is
-    sampled, no scale is swept, nothing is estimated. It complements
-    ``SimplicialComplex.is_homology_manifold`` (which reads vertex links only) with the
-    full, simplex-by-simplex certificate of the definition.
+    sampled, no scale is swept, nothing is estimated. It is the full, simplex-by-simplex
+    certificate of the definition: the local type of every simplex, the singular set and
+    the boundary. ``SimplicialComplex.is_homology_manifold`` returns the same verdict (for
+    n = dim K) through the incremental checker of
+    :mod:`pysurgery.topology.incremental_manifold`.
 
 Key Concepts:
     - **Local homology from links.** For x in the open simplex sigma of dimension k,
@@ -538,8 +540,8 @@ def certify_homology_manifold(
         A ``HomologyManifoldCertificate``.
 
     Use When:
-        - ``is_homology_manifold`` (vertex links only) is not enough: in dimension >= 3
-          a vertex link can have sphere homology without being a homology manifold.
+        - The local homology type of every simplex is wanted, not only the verdict
+          (``is_homology_manifold`` gives the same verdict for n = dim K).
         - Locating the singular set of a reconstructed complex.
 
     Example:

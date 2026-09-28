@@ -132,7 +132,7 @@ class _ForceFusedRips(RipsFiltrationReport):
     """Force the implicit fused path even on tiny clouds (for test coverage)."""
 
     _RIPS_FUSED_MIN_POINTS = 0
-    _MANIFOLD_MAX_SIMPLICES = 0
+    _EXPLICIT_MAX_SIMPLICES = 0
 
 
 @pytest.mark.skipif(not _julia_available(), reason="Julia backend unavailable")
@@ -297,7 +297,7 @@ def test_filtration_report_plot():
 
 class _ForceFusedAlpha(AlphaFiltrationReport):
     _ALPHA_FUSED_MIN_POINTS = 0
-    _MANIFOLD_MAX_SIMPLICES = 0
+    _EXPLICIT_MAX_SIMPLICES = 0
 
 
 @pytest.mark.skipif(not _julia_available(), reason="Julia backend unavailable")

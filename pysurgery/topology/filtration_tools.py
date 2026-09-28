@@ -88,9 +88,12 @@ class _BaseFiltrationReport:
     #: Extra kwargs passed when constructing the tiny warmup instance.
     _warmup_kwargs: dict = {}
 
-    # Above this simplex count the per-threshold homology-manifold check is
-    # auto-skipped (per-vertex link homology is the slowest step).
-    _MANIFOLD_MAX_SIMPLICES = 50_000
+    # The fused Julia paths keep the maximal complex implicit only above this many
+    # simplices; below it the staged build is cheap and keeps ``max_sc`` explicit.
+    _EXPLICIT_MAX_SIMPLICES = 50_000
+    # compute_torsion warns above this many simplices (one Smith normal form per
+    # reported threshold).
+    _TORSION_WARN_SIMPLICES = 50_000
 
     def __init__(
         self,
@@ -126,8 +129,10 @@ class _BaseFiltrationReport:
                 appearance values are used.
             eps_max: Cap for the parameter range. Method-dependent meaning; if None
                 each method picks a sensible default.
-            analyze_manifolds: Run the per-threshold homology-manifold check
-                (auto-skipped above _MANIFOLD_MAX_SIMPLICES simplices).
+            analyze_manifolds: Run the per-threshold homology-manifold check: the
+                exact verdict of ``certify_homology_manifold`` at every threshold, kept
+                incrementally in one pass over the simplices (see
+                :mod:`pysurgery.topology.incremental_manifold`), at any complex size.
             compute_torsion: If True, additionally compute exact *integer*
                 homology (free rank + torsion coefficients) of the sub-complex at
                 every reported threshold and surface the torsion in the report.
@@ -703,167 +708,54 @@ class _BaseFiltrationReport:
         return max_sc, filt, barcode, dim_first_appear, total, filt.values()
 
     def _precompute_manifold_analysis_python(self, all_bettis):
-        """Precomputes manifold analysis using a fast incremental algorithm in Python."""
-        from pysurgery.topology.complexes import SimplicialComplex
-        from collections import Counter
-        
-        if not self.max_sc:
+        """Exact homology-manifold verdict of the sub-complex at every threshold.
+
+        What is Being Computed?:
+            For each threshold eps, whether ``K_eps`` is a homology manifold (closed or
+            with boundary) of dimension ``dim K_eps`` -- the verdict of
+            ``certify_homology_manifold(K_eps)`` -- together with its dimension, the
+            number of inclusion-maximal singular simplices (``failures``) and whether
+            the boundary is empty.
+
+        Algorithm:
+            One incremental pass over the simplices in filtration order
+            (:mod:`pysurgery.topology.incremental_manifold`): the local homology of every
+            simplex is decided from its link, combinatorially in codimension <= 3 and by
+            exact link homology above, re-deciding only the faces of each new simplex.
+
+        Args:
+            all_bettis: Betti numbers per threshold (read only when
+                ``verify_manifold_only_at_betti_change`` is set, in which case a
+                threshold whose Betti numbers equal those of the previous one reuses
+                its verdict).
+
+        Returns:
+            ``{"epsilons", "is_manifold", "dimensions", "failures", "is_closed"}``, one
+            entry per threshold, or ``None`` when there is no explicit complex.
+        """
+        from pysurgery.topology.incremental_manifold import filtration_manifold_verdicts
+
+        if self.max_sc is None or self._filt is None:
             return None
-            
-        n_pts = len(self.max_sc.n_simplices(0))
-        vertices = [v[0] for v in self.max_sc.n_simplices(0)]
-        v_state = {v: 0 for v in vertices}
-        dim_counts = Counter({0: n_pts})
-        n_fail = 0
-        
-        m_epsilons = []
-        m_is_manifold = []
-        m_dimensions = []
-        m_is_closed = []
-        m_failures = []
-        
-        sorted_simplices = sorted(self._filt.items(), key=lambda x: x[1])
-        
-        running_max_dim = []
-        curr_max = -1
-        for s, val in sorted_simplices:
-            d = len(s) - 1
-            if d > curr_max:
-                curr_max = d
-            running_max_dim.append(curr_max)
-            
-        simp_idx = 0
-        n_simps = len(sorted_simplices)
-        
-        last_is_mani = True
-        last_detected_dim = -1
-        last_is_closed = True
-        last_n_fail = 0
-        prev_bettis = None
-        prev_d_active = -1
-        
-        for idx, eps in enumerate(self.epsilons):
-            betti_changed = True
-            if self.verify_manifold_only_at_betti_change:
-                curr_bettis = all_bettis[idx]
-                if prev_bettis is not None and curr_bettis == prev_bettis:
-                    betti_changed = False
-                prev_bettis = curr_bettis
-                
-            new_simplices = []
-            while simp_idx < n_simps and sorted_simplices[simp_idx][1] <= eps + 1e-12:
-                new_simplices.append(sorted_simplices[simp_idx][0])
-                simp_idx += 1
-                
-            if simp_idx == 0:
-                d_active = -1
-            else:
-                d_active = running_max_dim[simp_idx - 1]
-                
-            if d_active <= 0:
-                m_epsilons.append(eps)
-                m_is_manifold.append(True)
-                m_dimensions.append(d_active)
-                m_is_closed.append(True)
-                m_failures.append(0)
-                last_is_mani = True
-                last_detected_dim = d_active
-                last_is_closed = True
-                last_n_fail = 0
-                prev_d_active = d_active
-                continue
-                
-            if not betti_changed:
-                m_epsilons.append(eps)
-                m_is_manifold.append(last_is_mani)
-                m_dimensions.append(last_detected_dim)
-                m_is_closed.append(last_is_closed)
-                m_failures.append(last_n_fail)
-                continue
-                
-            changed_vertices = set()
-            if d_active != prev_d_active:
-                changed_vertices = set(vertices)
-            else:
-                for s in new_simplices:
-                    changed_vertices.update(s)
-                    
-            for v in changed_vertices:
-                old_state = v_state[v]
-                new_state = -1
-                
-                max_lk = self.max_sc.link((v,))
-                active_lk_simplices = []
-                for s in max_lk.all_simplices():
-                    orig_s = tuple(sorted(s + (v,)))
-                    if self._filt.get(orig_s, float('inf')) <= eps + 1e-12:
-                        active_lk_simplices.append(s)
-                
-                if not active_lk_simplices:
-                    new_state = 0
-                else:
-                    lk = SimplicialComplex(coefficient_ring=self.max_sc.coefficient_ring)
-                    for s in active_lk_simplices:
-                        lk.add_simplex(s)
-                        
-                    rh = lk.reduced_homology(backend="python")
-                    non_zero = {k: val for k, val in rh.items() if val[0] > 0 or val[1]}
-                    
-                    if not non_zero:
-                        new_state = d_active - 1
-                    elif len(non_zero) == 1:
-                        k = list(non_zero.keys())[0]
-                        rank, torsion = non_zero[k]
-                        if rank == 1 and not torsion and k == d_active - 1:
-                            new_state = d_active
-                            
-                if old_state != new_state:
-                    if old_state == -1:
-                        n_fail -= 1
-                    else:
-                        dim_counts[old_state] -= 1
-                        
-                    if new_state == -1:
-                        n_fail += 1
-                    else:
-                        dim_counts[new_state] += 1
-                        
-                    v_state[v] = new_state
-            
-            active_dims = [d for d, count in dim_counts.items() if count > 0]
-            is_mani = (n_fail == 0) and (len(active_dims) <= 1)
-            
-            if not is_mani and n_fail == 0:
-                n_fail = n_pts
-                
-            if is_mani:
-                detected_dim = active_dims[0] if active_dims else d_active
-            else:
-                detected_dim = d_active
-                
-            is_closed = False
-            if is_mani:
-                if dim_counts.get(detected_dim - 1, 0) == 0:
-                    is_closed = True
-            
-            m_epsilons.append(eps)
-            m_is_manifold.append(is_mani)
-            m_dimensions.append(detected_dim)
-            m_is_closed.append(is_closed)
-            m_failures.append(n_fail)
-            
-            last_is_mani = is_mani
-            last_detected_dim = detected_dim
-            last_is_closed = is_closed
-            last_n_fail = n_fail
-            prev_d_active = d_active
-            
+        eps = list(self.epsilons)
+        order = sorted(range(len(eps)), key=lambda t: eps[t])
+        evaluate = None
+        if self.verify_manifold_only_at_betti_change:
+            evaluate = [True] * len(eps)
+            for prev, cur in zip(order, order[1:]):
+                evaluate[cur] = all_bettis[cur] != all_bettis[prev]
+        verdicts = filtration_manifold_verdicts(self._filt, eps, evaluate=evaluate)
+        last = None
+        for t in order:
+            if verdicts[t] is None:
+                verdicts[t] = last
+            last = verdicts[t]
         return {
-            "epsilons": m_epsilons,
-            "is_manifold": m_is_manifold,
-            "dimensions": m_dimensions,
-            "failures": m_failures,
-            "is_closed": m_is_closed
+            "epsilons": eps,
+            "is_manifold": [v.is_manifold for v in verdicts],
+            "dimensions": [v.dimension for v in verdicts],
+            "failures": [v.defects for v in verdicts],
+            "is_closed": [v.is_closed for v in verdicts],
         }
 
     def _compute(self):
@@ -876,6 +768,7 @@ class _BaseFiltrationReport:
         connected-component invariants.
         """
         from pysurgery.topology.complexes import SimplicialComplex
+        from pysurgery.topology.incremental_manifold import manifold_verdict
         SC = SimplicialComplex
 
         max_sc, filt, barcode, dim_first_appear, total, grid_values = self._assemble()
@@ -890,24 +783,7 @@ class _BaseFiltrationReport:
 
         self.barcode = barcode
 
-        is_julia_available = False
-        try:
-            from pysurgery.bridge.julia_bridge import julia_engine
-            is_julia_available = julia_engine.available
-        except Exception:
-            pass
-
-        if self.analyze_manifolds and total > self._MANIFOLD_MAX_SIMPLICES:
-            if not is_julia_available or self.backend == "python":
-                warnings.warn(
-                    f"Skipping per-threshold manifold analysis: maximal complex has "
-                    f"{total:,} simplices (> {self._MANIFOLD_MAX_SIMPLICES:,}). Betti "
-                    "curves are still computed; pass a smaller eps_max to force it.",
-                    stacklevel=2,
-                )
-                self.analyze_manifolds = False
-
-        if self.compute_torsion and total > self._MANIFOLD_MAX_SIMPLICES:
+        if self.compute_torsion and total > self._TORSION_WARN_SIMPLICES:
             warnings.warn(
                 f"compute_torsion=True on a large complex ({total:,} simplices): exact "
                 "integer homology runs a Smith-normal-form solve at every reported "
@@ -1000,13 +876,10 @@ class _BaseFiltrationReport:
                         closed = "Yes" if is_closed else "No"
                         dim_repr = str(dim) if dim is not None and dim >= 0 else "N/A"
                     else:
-                        sc = self._whole_complex_from_table(SC, full_table, coords)
-                        is_manifold, dim, diag = sc.is_homology_manifold(backend=self.backend)
-                        manifold_str = "Yes" if is_manifold else f"No ({len(diag)} dft)"
-                        closed = "N/A"
-                        if is_manifold:
-                            closed = "Yes" if sc.is_closed_manifold else "No"
-                        dim_repr = str(dim) if dim is not None else "N/A"
+                        v = manifold_verdict(s for ss in full_table.values() for s in ss)
+                        manifold_str = "Yes" if v.is_manifold else f"No ({v.defects} dft)"
+                        closed = "Yes" if v.is_closed else "No"
+                        dim_repr = str(v.dimension) if v.dimension >= 0 else "N/A"
                     
                     last_manifold_str = manifold_str
                     last_closed_str = closed
@@ -1051,15 +924,15 @@ class _BaseFiltrationReport:
                         key = self._component_content_key(table)
                         info = component_info_cache.get(key)
                         if info is None:
-                            # Build the component only on a miss — stable components
-                            # reuse the cached info without re-materializing.
-                            sub_sc = self._build_component_complex(SC, table, coords)
-                            c_is_mani, c_dim, c_diag = sub_sc.is_homology_manifold(backend=self.backend)
-                            if c_is_mani:
-                                c_closed = "Closed" if sub_sc.is_closed_manifold else "Bound"
-                                info = f"M(D:{c_dim}, {c_closed})"
+                            # Decide the component only on a miss — stable components
+                            # reuse the cached info. Exact: every simplex's link,
+                            # relative to the component's own dimension.
+                            v = manifold_verdict(s for ss in table.values() for s in ss)
+                            if v.is_manifold:
+                                c_closed = "Closed" if v.is_closed else "Bound"
+                                info = f"M(D:{v.dimension}, {c_closed})"
                             else:
-                                info = f"Non-M ({len(c_diag)} dft)"
+                                info = f"Non-M ({v.defects} dft)"
                             component_info_cache[key] = info
     
                         for r_idx, vs in next_active_rows.items():
@@ -1556,11 +1429,11 @@ class RipsFiltrationReport(_BaseFiltrationReport):
 
         For large clouds this runs the entire hot path in a single Julia call and
         keeps the maximal complex *implicit* (``max_sc = None``): the per-threshold
-        loop needs only the barcode and per-dimension stats when no manifold /
-        torsion / component analysis is requested (manifold analysis is itself
-        auto-skipped above ``_MANIFOLD_MAX_SIMPLICES``). When the complex is small
-        enough to be wanted -- or any path needs it explicitly -- we defer to the
-        staged base build, so small-complex behaviour is byte-identical to before.
+        loop needs only the barcode and per-dimension stats, and the manifold /
+        component analysis comes back from Julia with it. When the complex has at
+        most ``_EXPLICIT_MAX_SIMPLICES`` simplices -- or a path needs it explicitly
+        (torsion) -- we defer to the staged base build, so small-complex behaviour
+        is byte-identical to before.
 
         The reduction runs in one of two exact engines (see :meth:`_select_rips_engine`):
         the clique homology engine or the implicit-cohomology engine; both return
@@ -1597,9 +1470,9 @@ class RipsFiltrationReport(_BaseFiltrationReport):
                 "staged build.", stacklevel=2)
             return super()._assemble()
 
-        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
-            # Small enough that manifold analysis / introspection wants the explicit
-            # complex; the staged build is cheap at this size and keeps full fidelity.
+        if payload["total"] <= self._EXPLICIT_MAX_SIMPLICES:
+            # Small enough to keep the explicit complex for introspection; the staged
+            # build is cheap at this size and keeps full fidelity.
             return super()._assemble()
 
         # Large: keep the complex implicit -- this is the whole point of the fusion.
@@ -1710,7 +1583,7 @@ class AlphaFiltrationReport(_BaseFiltrationReport):
                 "staged build.", stacklevel=2)
             return super()._assemble()
 
-        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
+        if payload["total"] <= self._EXPLICIT_MAX_SIMPLICES:
             return super()._assemble()
 
         if "manifold_data" in payload and payload["manifold_data"] is not None:
@@ -1875,7 +1748,7 @@ class DelaunayRipsFiltrationReport(_BaseFiltrationReport):
                 "staged build.", stacklevel=2)
             return super()._assemble()
 
-        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
+        if payload["total"] <= self._EXPLICIT_MAX_SIMPLICES:
             return super()._assemble()
 
         if "manifold_data" in payload and payload["manifold_data"] is not None:
@@ -1954,7 +1827,7 @@ class DelaunayCechFiltrationReport(_BaseFiltrationReport):
                 "staged build.", stacklevel=2)
             return super()._assemble()
 
-        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
+        if payload["total"] <= self._EXPLICIT_MAX_SIMPLICES:
             return super()._assemble()
 
         if "manifold_data" in payload and payload["manifold_data"] is not None:

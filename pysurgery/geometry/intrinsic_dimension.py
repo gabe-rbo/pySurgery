@@ -896,10 +896,10 @@ def exact_intrinsic_dimension(
         extracts its exact topological dimension.
 
     Algorithm:
-        1. Iterate over all vertices (0-simplices).
-        2. For each vertex, compute the homology of its link.
-        3. Verify if the links are homology spheres of the same dimension.
-        4. Return the unique dimension n such that the complex is locally like R^n.
+        1. ``SimplicialComplex.is_homology_manifold``: the link of every simplex must
+           have the homology of a sphere, or be acyclic, of dimension n - k - 1 with
+           n = dim K (local homology of R^n or of a half-space at every point).
+        2. If so, return n; otherwise report the singular simplices as diagnostics.
 
     Preserved Invariants:
         - **Topological Dimension**: The exact dimension of the manifold.
