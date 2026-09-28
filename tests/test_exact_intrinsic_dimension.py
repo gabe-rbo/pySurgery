@@ -68,7 +68,8 @@ def test_non_manifold_bowtie():
     
     res = exact_intrinsic_dimension(bowtie)
     assert res.status == "inconclusive"
-    assert any("Detected manifold dimension" in d or "multiple non-zero" in d or "non-sphere" in d for d in res.diagnostics)
+    # The pinch vertex 0 is the (only) singular simplex: its link is disconnected.
+    assert any(d.startswith("0: singular 0-simplex 0") for d in res.diagnostics)
 
 def test_0_manifold():
     # Points 0, 1, 2

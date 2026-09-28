@@ -4531,176 +4531,28 @@ end
 """
     is_homology_manifold_jl(simplex_entries, max_dim)
 
-Accelerated check for homology manifolds by computing links and reduced homology
-in Julia. Returns (is_manifold::Bool, dimension::Int, diagnostics::Dict{Int, String}).
+Exact homology-manifold check: every simplex link must have the homology of a sphere,
+or be acyclic, of the right dimension (the verdict of `certify_homology_manifold` for
+n = dim K), decided by `_MfEngine`. Returns `(is_manifold, dimension, diagnostics)` where
+`diagnostics::Dict{Int, String}` maps every vertex of an inclusion-maximal singular simplex
+to its reason (identical to the Python checker's `diagnostics()`).
 """
 function is_homology_manifold_jl(simplex_entries, max_dim::Int)
-    # 1. Build full skeleton once
-    # simplex_entries can be a list of lists or similar from Python
-    boundaries, cells, sorted_dim_simplices, simplex_to_idx = _compute_boundary_data_internal(simplex_entries, max_dim)
-
-    # Vertices are in sorted_dim_simplices[0]
-    vertices = if get(cells, 0, 0) == 0
-        Int64[]
-    else
-        [s[1] for s in sorted_dim_simplices[0]]
+    simplices = Vector{Vector{Int}}()
+    for s in simplex_entries
+        vs = _to_vertices_simplex(s)
+        isempty(vs) && continue
+        push!(simplices, sort!(collect(Int, vs)))
     end
-
-    if isempty(vertices)
-        return true, -1, Dict{Int, String}()
+    sort!(simplices, by = length)
+    E = _MfEngine(max_dim, 0, false)
+    for s in simplices
+        _mf_add!(E, s)
     end
+    ok, d, _, _ = _mf_verdict!(E)
+    return ok, d, (ok ? Dict{Int, String}() : _mf_diagnostics(E))
+end
 
-    local_dims = Dict{Int, Union{Nothing, Int}}()
-    diagnostics = Dict{Int, String}()
-
-    # Helper for reduced homology in Julia
-    function get_reduced_homology(lk_simplices, lk_max_dim)
-        lk_b, lk_c = compute_boundary_payload_from_simplices(lk_simplices, lk_max_dim, false)
-        rh = Dict{Int, Tuple{Int, Vector{Int}}}()
-
-        # Max dimension of link
-        d_max = -1
-        for d in 0:lk_max_dim
-            if get(lk_c, d, 0) > 0
-                d_max = d
-            end
-        end
-
-        for d in 0:d_max
-            # H_d = ker(d_d) / im(d_{d+1})
-            n_rows_d = get(lk_c, d-1, 0)
-            n_cols_d = get(lk_c, d, 0)
-
-            # ker(d_d)
-            rank_ker_d = if n_cols_d == 0
-                0
-            elseif n_rows_d == 0
-                n_cols_d
-            else
-                b_d = lk_b[d]
-                # rank over Q for ker dimension
-                n_cols_d - rank_q_sparse(b_d["rows"], b_d["cols"], b_d["data"], b_d["n_rows"], b_d["n_cols"])
-            end
-
-            # im(d_{d+1})
-            factors_dp1 = if haskey(lk_b, d+1)
-                b_dp1 = lk_b[d+1]
-                exact_snf_sparse(b_dp1["rows"], b_dp1["cols"], b_dp1["data"], b_dp1["n_rows"], b_dp1["n_cols"])
-            else
-                Int[]
-            end
-
-            rank_im_dp1 = 0
-            torsion = Int[]
-            for f in factors_dp1
-                if f != 0
-                    rank_im_dp1 += 1
-                    if f > 1
-                        push!(torsion, f)
-                    end
-                end
-            end
-
-            betti = max(0, rank_ker_d - rank_im_dp1)
-
-            # Reduced homology adjustment
-            if d == 0
-                betti = max(0, betti - 1)
-            end
-
-            if betti > 0 || !isempty(torsion)
-                rh[d] = (Int(betti), Int.(torsion))
-            end
-        end
-        return rh, d_max
-    end
-
-    coface_map = Dict{Int, Vector{Vector{Int64}}}()
-    for v in vertices
-        coface_map[v] = Vector{Vector{Int64}}()
-    end
-    for d in 1:max_dim
-        for s in sorted_dim_simplices[d]
-            for v in s
-                if haskey(coface_map, v)
-                    push!(coface_map[v], [x for x in s if x != v])
-                end
-            end
-        end
-    end
-
-    local_dims_arr = Vector{Union{Nothing, Int}}(undef, length(vertices))
-    diagnostics_arr = Vector{String}(undef, length(vertices))
-    fill!(diagnostics_arr, "")
-
-    Threads.@threads for i in 1:length(vertices)
-        v = vertices[i]
-        lk_max_simplices = coface_map[v]
-
-        if isempty(lk_max_simplices)
-            local_dims_arr[i] = 0
-            continue
-        end
-
-        rh, lk_d_max = get_reduced_homology(lk_max_simplices, max_dim - 1)
-
-        if isempty(rh)
-            local_dims_arr[i] = nothing # Acyclic link
-        elseif length(rh) == 1
-            deg = first(keys(rh))
-            betti, torsion = rh[deg]
-            if betti == 1 && isempty(torsion)
-                local_dims_arr[i] = deg + 1
-            else
-                diagnostics_arr[i] = "Link has non-sphere homology at degree $deg: rank=$betti, torsion=$torsion"
-            end
-        else
-            diagnostics_arr[i] = "Link has multiple non-zero homology groups: $(collect(keys(rh)))"
-        end
-    end
-
-    for i in 1:length(vertices)
-        v = vertices[i]
-        local_dims[v] = local_dims_arr[i]
-        if diagnostics_arr[i] != ""
-            diagnostics[v] = diagnostics_arr[i]
-        end
-    end
-
-    detected_dims = Set{Int}([d for d in values(local_dims) if d !== nothing])
-
-    # max dimension of the complex
-    max_d_complex = 0
-    for d in 0:max_dim
-        if get(cells, d, 0) > 0; max_d_complex = d; end
-    end
-
-    if !isempty(diagnostics)
-        d_out = isempty(detected_dims) ? max_d_complex : first(detected_dims)
-        return false, d_out, diagnostics
-    end
-
-    if isempty(detected_dims)
-        # All links were acyclic. This is consistent with a manifold if the complex is "disk-like"
-        return true, max_d_complex, Dict{Int, String}()
-    end
-
-    if length(detected_dims) > 1
-        return false, -1, Dict(-1 => "Inconsistent local dimensions: $detected_dims")
-    end
-
-    d_global = first(detected_dims)
-
-    if d_global != max_d_complex
-         return false, d_global, Dict(-1 => "Detected manifold dimension $d_global does not match complex dimension $max_d_complex")
-    end
-
-    if !isempty(diagnostics)
-        return false, d_global, diagnostics
-    end
-
-    return true, d_global, Dict{Int, String}()
-    end
 
     function compute_alpha_threshold_emst_jl(
 points::AbstractMatrix{Float64}, simplices::AbstractMatrix{Int64})
@@ -6979,6 +6831,9 @@ mutable struct _MfEngine
     cwit::Vector{Int}
     cfree::Matrix{Int}                    # cfree[k + 1, root]
     cmembers::Vector{Vector{Int}}
+    cnv::Vector{Int}                      # vertices in the component (at its root)
+    cminv::Vector{Int}                    # smallest vertex of the component
+    croots::BitSet                        # live component roots
 end
 
 function _MfEngine(max_dim::Int, n_pts::Int, per_component::Bool)
@@ -6988,7 +6843,9 @@ function _MfEngine(max_dim::Int, n_pts::Int, per_component::Bool)
                      Bool[], [Int[] for _ in 1:L], false, -1, 0, zeros(Int, L), per_component,
                      zeros(Int, n_pts), zeros(Int, n_pts), zeros(Int, n_pts),
                      zeros(Int, per_component ? L : 0, per_component ? n_pts : 0),
-                     [Int[] for _ in 1:(per_component ? n_pts : 0)])
+                     [Int[] for _ in 1:(per_component ? n_pts : 0)],
+                     zeros(Int, per_component ? n_pts : 0), zeros(Int, per_component ? n_pts : 0),
+                     BitSet())
 end
 
 @inline function _mf_mark!(E::_MfEngine, j::Int)
@@ -7135,6 +6992,9 @@ function _mf_component_insert!(E::_MfEngine, i::Int, s::Vector{Int}, m::Int)
         E.cwit[v] = 0
         E.cfree[:, v] .= 0
         E.cmembers[v] = [i]
+        E.cnv[v] = 1
+        E.cminv[v] = v
+        push!(E.croots, v)
         return nothing
     end
     if m == 1
@@ -7159,6 +7019,9 @@ function _mf_component_insert!(E::_MfEngine, i::Int, s::Vector{Int}, m::Int)
                 E.cfree[k, ra] += E.cfree[k, rb]
                 E.cfree[k, rb] = 0
             end
+            E.cnv[ra] += E.cnv[rb]
+            E.cminv[ra] = min(E.cminv[ra], E.cminv[rb])
+            delete!(E.croots, rb)
             E.vparent[rb] = ra
             E.cdim[ra] = newd
         end
@@ -7268,6 +7131,23 @@ function _mf_component_verdict(E::_MfEngine, v::Int)
     return ok, d, w, closed
 end
 
+"""Reasons keyed by vertex for every vertex of an inclusion-maximal singular simplex."""
+function _mf_diagnostics(E::_MfEngine)
+    _mf_settle!(E)
+    n = E.dimension
+    wit = sort([E.simplex[j] for j in 1:length(E.simplex) if E.witness[j]], by = s -> (length(s), s))
+    diag = Dict{Int, String}()
+    for s in wit
+        k = length(s) - 1
+        m = n - k - 1
+        reason = "singular $(k)-simplex $(join(s, "-")): its link is neither a homology $(m)-sphere nor acyclic of dimension $(m)"
+        for v in s
+            haskey(diag, v) || (diag[v] = reason)
+        end
+    end
+    return diag
+end
+
 """
     _run_manifold_analysis_jl(cliques, vals, max_dim, epsilon, n_samples, n_pts, verify_manifold_only_at_betti_change, track_connected_components, bar_dim, bar_birth, bar_death)
 
@@ -7278,11 +7158,15 @@ the boundary is empty. Simplices are consumed once, in `(value, dimension)` orde
 only the faces of each new simplex are re-decided.
 
 With `track_connected_components=true`, each component is also judged relative to its
-own dimension (a second engine in per-component mode).
+own dimension (a second engine in per-component mode), and reported in rows numbered
+exactly as the Python report numbers them: a component that appears gets the next row,
+in order of decreasing vertex count then smallest vertex; when components merge, the
+smallest of their rows survives and the others read `Merged (C_k)` at that threshold and
+`-` afterwards.
 
 **Betti Skipping:** if `verify_manifold_only_at_betti_change=true`, a threshold whose
-Betti numbers equal those of the previous one reuses its verdict; the skipped simplices
-are consumed at the next evaluated threshold.
+Betti numbers equal those of the previous one reuses the previous whole-complex verdict
+(component rows are always computed).
 """
 function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64, n_samples::Union{Nothing, Int}, n_pts::Int = 0, verify_manifold_only_at_betti_change::Bool = false, track_connected_components::Bool = false, bar_dim::Vector{Int} = Int[], bar_birth::Vector{Float64} = Float64[], bar_death::Vector{Float64} = Float64[])
     # Faces precede cofaces at equal values, so every prefix is a complex.
@@ -7309,29 +7193,12 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
     m_comp_info_keys = Vector{Vector{Int}}()
     m_comp_info_vals = Vector{Vector{String}}()
 
-    # Report rows: one per vertex when it appears; on a merge the smaller row survives.
-    parent = collect(1:n_pts)
-    row_id = fill(-1, n_pts)
-    next_row_id = 0
-    active_roots = BitSet()
+    active_rows = Dict{Int, Int}()        # row -> a vertex of its component
     merged_rows_history = BitSet()
-
-    function find_root(i::Int)
-        root = i
-        while parent[root] != root
-            root = parent[root]
-        end
-        curr = i
-        while curr != root
-            nxt = parent[curr]
-            parent[curr] = root
-            curr = nxt
-        end
-        return root
-    end
+    next_row_id = 0
 
     prev_bettis = nothing
-    prev_eval_idx = 0
+    prev_idx = 0
     last = (true, -1, 0, true)
 
     for eps in grid_epsilons
@@ -7346,91 +7213,60 @@ function _run_manifold_analysis_jl(cliques, vals, max_dim::Int, epsilon::Float64
             prev_bettis = curr_bettis
         end
 
-        if !betti_changed && idx > 0
-            push!(m_epsilons, eps)
-            push!(m_is_manifold, last[1])
-            push!(m_dimensions, last[2])
-            push!(m_failures, last[3])
-            push!(m_is_closed, last[4])
-            if track_connected_components
-                push!(m_comp_info_keys, isempty(m_comp_info_keys) ? Int[] : copy(m_comp_info_keys[end]))
-                push!(m_comp_info_vals, isempty(m_comp_info_vals) ? String[] : copy(m_comp_info_vals[end]))
-            end
-            continue
+        for i in (prev_idx + 1):idx
+            _mf_add!(engine, sorted_cliques[i])
+            track_connected_components && _mf_add!(comp_engine, sorted_cliques[i])
         end
+        prev_idx = max(prev_idx, idx)
 
-        for i in (prev_eval_idx + 1):idx
-            c = sorted_cliques[i]
-            _mf_add!(engine, c)
-            track_connected_components || continue
-            _mf_add!(comp_engine, c)
-            if length(c) == 1
-                v = c[1]
-                if row_id[v] == -1
-                    row_id[v] = next_row_id
-                    next_row_id += 1
-                    push!(active_roots, v)
-                end
-            elseif length(c) == 2
-                ru = find_root(c[1])
-                rw = find_root(c[2])
-                if ru != rw
-                    if row_id[ru] < row_id[rw]
-                        parent[rw] = ru
-                        delete!(active_roots, rw)
-                    else
-                        parent[ru] = rw
-                        delete!(active_roots, ru)
-                    end
-                end
-            end
-        end
-        prev_eval_idx = max(prev_eval_idx, idx)
-
-        last = _mf_verdict!(engine)
+        betti_changed && (last = _mf_verdict!(engine))
         push!(m_epsilons, eps)
         push!(m_is_manifold, last[1])
         push!(m_dimensions, last[2])
         push!(m_failures, last[3])
         push!(m_is_closed, last[4])
 
-        if track_connected_components
-            _mf_settle!(comp_engine)
-            keys_now = Int[]
-            vals_now = String[]
-            new_merges_this_step = Dict{Int, Int}()
-            for i in 1:n_pts
-                r = row_id[i]
-                if r != -1 && i ∉ active_roots
-                    target_r = row_id[find_root(i)]
-                    if r != target_r
-                        new_merges_this_step[r] = target_r
-                    end
-                end
-            end
-            for rt in active_roots
-                c_ok, c_dim, c_fail, c_closed = _mf_component_verdict(comp_engine, rt)
-                push!(keys_now, row_id[rt])
-                if c_ok
-                    push!(vals_now, "M(D:$(c_dim), $(c_closed ? "Closed" : "Bound"))")
-                else
-                    push!(vals_now, "Non-M ($(c_fail) dft)")
-                end
-            end
-            for (r_idx, target_r) in new_merges_this_step
-                push!(keys_now, r_idx)
-                push!(vals_now, "Merged (C_$(target_r + 1))")
-                push!(merged_rows_history, r_idx)
-            end
-            for r_idx in merged_rows_history
-                if !haskey(new_merges_this_step, r_idx)
-                    push!(keys_now, r_idx)
-                    push!(vals_now, "-")
-                end
-            end
-            push!(m_comp_info_keys, keys_now)
-            push!(m_comp_info_vals, vals_now)
+        track_connected_components || continue
+        C = comp_engine
+        _mf_settle!(C)
+        roots = sort!(collect(C.croots), by = r -> (-C.cnv[r], C.cminv[r]))
+        rows_at = Dict{Int, Vector{Int}}()
+        for (row, v) in active_rows
+            push!(get!(rows_at, _mf_vfind(C, v), Int[]), row)
         end
+        next_active = Dict{Int, Int}()
+        new_merges = Dict{Int, Int}()
+        keys_now = Int[]
+        vals_now = String[]
+        for r in roots
+            absorbed = get(rows_at, r, Int[])
+            if isempty(absorbed)
+                row = next_row_id
+                next_row_id += 1
+            else
+                row = minimum(absorbed)
+                for a in absorbed
+                    a != row && (new_merges[a] = row)
+                end
+            end
+            next_active[row] = C.cminv[r]
+            c_ok, c_dim, c_fail, c_closed = _mf_component_verdict(C, r)
+            push!(keys_now, row)
+            push!(vals_now, c_ok ? "M(D:$(c_dim), $(c_closed ? "Closed" : "Bound"))" : "Non-M ($(c_fail) dft)")
+        end
+        for a in sort!(collect(keys(new_merges)))
+            push!(keys_now, a)
+            push!(vals_now, "Merged (C_$(new_merges[a] + 1))")
+            push!(merged_rows_history, a)
+        end
+        for a in merged_rows_history
+            haskey(new_merges, a) && continue
+            push!(keys_now, a)
+            push!(vals_now, "-")
+        end
+        active_rows = next_active
+        push!(m_comp_info_keys, keys_now)
+        push!(m_comp_info_vals, vals_now)
     end
 
     return m_epsilons, m_is_manifold, m_dimensions, m_is_closed, m_failures, m_comp_info_keys, m_comp_info_vals

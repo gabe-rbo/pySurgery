@@ -217,12 +217,12 @@ def _julia_available():
 
 class _ForceFusedRips(RipsFiltrationReport):
     _RIPS_FUSED_MIN_POINTS = 0
-    _MANIFOLD_MAX_SIMPLICES = 0
+    _EXPLICIT_MAX_SIMPLICES = 0
 
 
 class _ForceFusedAlpha(AlphaFiltrationReport):
     _ALPHA_FUSED_MIN_POINTS = 0
-    _MANIFOLD_MAX_SIMPLICES = 0
+    _EXPLICIT_MAX_SIMPLICES = 0
 
 
 def _component_strings(values, eps, tol=1e-9):
@@ -272,3 +272,26 @@ def test_julia_engine_matches_python_engine(fused_cls, staged_cls):
         assert row["is_closed"] == ("Yes" if v.is_closed else "No")
         got = Counter(s for s in row["comp_info_map"].values() if s.startswith(("M(", "Non-M")))
         assert got == _component_strings(staged._filt, row["epsilon"])
+
+
+@pytest.mark.skipif(not _julia_available(), reason="Julia backend unavailable")
+@pytest.mark.parametrize("fused_cls, staged_cls", [(_ForceFusedRips, RipsFiltrationReport),
+                                                   (_ForceFusedAlpha, AlphaFiltrationReport)])
+def test_julia_component_rows_match_python_rows(fused_cls, staged_cls):
+    """Row numbering, merges ('Merged (C_k)' then '-') and verdicts agree across paths."""
+    rng = np.random.default_rng(5)
+    pts = np.vstack([rng.random((12, 2)), rng.random((9, 2)) + [2.5, 0.0],
+                     rng.random((6, 2)) + [0.0, 2.5]])
+    fused = fused_cls(pts, max_dimension=2, analyze_manifolds=True,
+                      track_connected_components=True)
+    eps = list(fused.epsilons)
+    staged = staged_cls(pts, epsilons=eps, max_dimension=2, analyze_manifolds=True,
+                        track_connected_components=True, backend="python")
+    assert fused.max_sc is None and staged.max_sc is not None
+    md = fused._precomputed_manifolds
+    assert len(staged.results) == len(eps) == len(fused._precomputed_components)
+    for i, row in enumerate(staged.results):
+        assert row["comp_info_map"] == fused._precomputed_components[i]
+        assert row["is_manifold"] == ("Yes" if md["is_manifold"][i]
+                                      else f"No ({md['failures'][i]} dft)")
+    assert any(v.startswith("Merged") for c in fused._precomputed_components for v in c.values())

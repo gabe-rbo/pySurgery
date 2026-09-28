@@ -2470,8 +2470,9 @@ class PLManifoldCertificate(NamedTuple):
         dimension (int | None): The complex's own top-level dimension.
         diagnostics (dict): Mapping vertex ID to failure reason (empty if certified).
         exact (bool): True if the certificate is a proof, not merely evidence -- always
-            True at dimension <= 3; False at dimension >= 4, where ruling out exotic
-            homology spheres among vertex links is undecidable in general.
+            True at dimension <= 3 and for a negative verdict; False for a positive
+            verdict at dimension >= 4, where a vertex link can be a homology sphere that
+            is not a sphere.
     """
 
     is_pl_manifold: bool
@@ -5261,36 +5262,32 @@ class SimplicialComplex(ChainComplex):
 
 
     def is_homology_manifold(self, backend: str = "auto") -> tuple[bool, int | None, dict[int, str]]:
-        r"""Check if the simplicial complex is a homology manifold (potentially with boundary).
+        r"""Check if the simplicial complex is a homology manifold (possibly with boundary).
 
-        A complex is a d-dimensional homology manifold if for every vertex v:
-        - \tilde{H}_*(Lk(v)) \cong \tilde{H}_*(S^{d-1}) (interior vertex)
-        - \tilde{H}_*(Lk(v)) \cong \tilde{H}_*(D^{d-1}) \cong 0 (boundary vertex)
+        What is Being Computed?:
+            The definition, at every simplex: K is a homology d-manifold (d = dim K) iff
+            the link of every k-simplex has the reduced homology of S^(d-k-1) and that
+            dimension (interior), or is acyclic and pure of dimension d-k-1 (boundary).
+            By ``H_j(|K|, |K| - x) = H~_{j-k-1}(lk sigma)`` this is the local-homology
+            condition at every point of |K|. The verdict equals
+            ``certify_homology_manifold(K, d)`` (closed or with boundary).
 
-        This method performs a fast combinatorial incidence check (Step 1) to rule
-        out branched complexes before running expensive vertex-link homology checks (Step 2).
+            Vertex links alone do not suffice: a vertex link can have the homology of a
+            sphere without being a homology manifold (S^2 wedged with a disk at a point),
+            and a lower-dimensional piece can have only acyclic vertex links (a disk and a
+            disjoint edge). Both are caught here.
 
-        Exactness by dimension: at ``dimension <= 2`` this check is already a genuine PL-
-        manifold certificate, not merely a homology-manifold one -- no gap, no extra work
-        needed. Step 1, at d=2, is exactly "every edge lies in <= 2 triangles," which is the
-        same statement as "every link-graph vertex has degree <= 2"; combined with Step 2
-        requiring the link to have rank-1, torsion-free H_1 at one degree (or be acyclic, for
-        a boundary vertex), a connected, degree-<=2 graph is forced to be a literal simple
-        cycle (or path) -- a path has trivial H_1, so a nonzero rank-1 result can only come
-        from an actual cycle. Starting at dimension 3, a link can have "the right homology"
-        (e.g. genuine S^2 homology) while still not be a genuine 2-manifold combinatorially --
-        two disjoint 2-spheres wedged at a single point, deeper inside a link, are homotopy-
-        equivalent to a single S^2 (trivial reduced homology otherwise) but are not one. Use
-        ``certify_pl_manifold`` at dimension 3 (recursing one level into each vertex's own
-        link, since the classification of closed surfaces makes the d<=2 case above apply
-        there too) for a certificate that closes this gap; dimension >= 4 remains
-        fundamentally undecidable in general (ruling out exotic homology spheres such as the
-        Poincare sphere needs more than homology, matching Novikov/Adian-Rabin).
+        Exactness by dimension: at ``d <= 3`` a homology d-manifold is a PL d-manifold
+        (links of simplices are homology spheres / balls of dimension <= 2, hence spheres
+        / disks by the classification of surfaces). At ``d >= 4`` it need not be: a vertex
+        link can be a homology 3-sphere that is not S^3 (see ``certify_pl_manifold``).
 
-        See Also:
-            ``certify_homology_manifold`` checks the local homology of EVERY simplex (not
-            only vertex links) and the consistency of the boundary -- the definition of a
-            homology manifold, exactly, in every dimension.
+        Algorithm:
+            1. Fast fail: a (d-1)-face in more than two d-simplices (branching).
+            2. :class:`~pysurgery.topology.incremental_manifold.IncrementalManifoldChecker`
+               (Python) or its Julia twin: a simplex is decided only when all its strict
+               cofaces are regular, combinatorially in codimension <= 3 and by exact
+               integer link homology above.
 
         Args:
             backend: 'auto', 'julia', or 'python'.
@@ -5298,13 +5295,15 @@ class SimplicialComplex(ChainComplex):
         Returns:
             tuple: A tuple containing:
                 - is_manifold (bool): True if it's a homology manifold.
-                - dimension (int | None): The detected intrinsic dimension.
-                - diagnostics (dict[int, str]): Mapping vertex ID to failure reason.
+                - dimension (int | None): ``dim K``.
+                - diagnostics (dict): ``{"global": reason}`` for branching (d-1)-faces;
+                  otherwise ``{vertex: reason}`` for every vertex of an
+                  inclusion-maximal singular simplex. Empty iff manifold.
         """
         d = self.dimension
         if d < 0:
             return True, d, {}
-            
+
         # Step 1: Fast Fail - Codimension-1 Incidence Check
         # A d-manifold must have every (d-1)-face incident to 1 or 2 d-simplices.
         if d >= 1:
@@ -5312,124 +5311,55 @@ class SimplicialComplex(ChainComplex):
             for simplex in self.n_simplices(d):
                 for face in itertools.combinations(sorted(simplex), d):
                     face_counts[face] += 1
-            
+
             branching_faces = [f for f, count in face_counts.items() if count > 2]
             if branching_faces:
                 return False, d, {"global": f"Branching singularity: {len(branching_faces)} (d-1)-faces have > 2 incidences."}
 
-        # Normalize backend
+        all_simplices = [s for k in sorted(self.dimensions) for s in self.n_simplices(k)]
+
         backend_norm = str(backend).lower().strip()
         use_julia = (backend_norm == "julia") or (backend_norm == "auto" and julia_engine.available)
-
         if use_julia:
             try:
-                # Accelerate heavy vertex link homology loop in Julia
-                all_simplices = []
-                for d in self.dimensions:
-                    all_simplices.extend(self.n_simplices(d))
-                return julia_engine.is_homology_manifold_jl(all_simplices, self.dimension)
+                return julia_engine.is_homology_manifold_jl(all_simplices, d)
             except Exception as e:
                 if backend_norm == "julia":
                     raise e
-                import warnings
                 warnings.warn(f"Julia is_homology_manifold failed ({e!r}). Falling back to pure Python.")
-        vertices = [v[0] for v in self.n_simplices(0)]
-        if not vertices:
-            return True, -1, {}
-            
-        local_dims = {}
-        diagnostics = {}
-        
-        def _check_vertex(v):
-            lk = self.link((v,))
-            rh = lk.reduced_homology(backend="python")
-            # Filter non-zero reduced homology groups
-            non_zero = {k: val for k, val in rh.items() if val[0] > 0 or val[1]}
-            
-            if not non_zero:
-                return v, None, None
-            elif len(non_zero) == 1:
-                k = list(non_zero.keys())[0]
-                rank, torsion = non_zero[k]
-                if rank == 1 and not torsion:
-                    return v, k + 1, None
-                else:
-                    return v, None, f"Link has non-sphere homology at degree {k}: rank={rank}, torsion={torsion}"
-            else:
-                return v, None, f"Link has multiple non-zero homology groups: {list(non_zero.keys())}"
 
-        with ThreadPoolExecutor() as executor:
-            for v, dim_val, diag in executor.map(_check_vertex, vertices):
-                if diag:
-                    diagnostics[v] = diag
-                local_dims[v] = dim_val
-                
-        # Determine global dimension from non-None local estimates
-        detected_dims = {d for d in local_dims.values() if d is not None}
-        
-        if diagnostics:
-            # If any vertex failed the manifold check, it's not a manifold.
-            # We still try to return a dimension if possible for context.
-            d = list(detected_dims)[0] if detected_dims else self.dimension
-            return False, d, diagnostics
+        from .incremental_manifold import IncrementalManifoldChecker
 
-        if not detected_dims:
-            # All links were acyclic but non-empty? 
-            # This happens for contractible manifolds (like a disk).
-            d = self.dimension
+        chk = IncrementalManifoldChecker()
+        chk.add_many(all_simplices)
+        if chk.verdict().is_manifold:
             return True, d, {}
-            
-        if len(detected_dims) > 1:
-            return False, None, {"global": f"Inconsistent local dimensions: {detected_dims}"}
-            
-        d = list(detected_dims)[0]
-        
-        # Pure manifold condition: detected dimension must match top-level simplex dimension
-        if d != self.dimension:
-            return False, d, {"global": f"Detected manifold dimension {d} does not match complex dimension {self.dimension}"}
-
-        # Check if all acyclic links are consistent with this dimension
-        # (Actually, a d-manifold vertex link can be acyclic if it's on the boundary)
-        if diagnostics:
-            return False, d, diagnostics
-
-        return True, d, {}
+        return False, d, chk.diagnostics()
 
     def certify_pl_manifold(self, backend: str = "auto") -> PLManifoldCertificate:
         r"""Certify whether the complex is a genuine PL (combinatorial) manifold.
 
         What is Being Computed?:
-            A strictly stronger certificate than ``is_homology_manifold`` wherever that
-            strengthening is actually decidable. At ``dimension <= 2`` the two checks
-            coincide exactly (see ``is_homology_manifold``'s docstring for why -- no
-            code path here does anything beyond deferring to it, since there is nothing to
-            add). At ``dimension == 3``, ``is_homology_manifold`` alone can be fooled: a
-            vertex's link can have the right *aggregate* homology (e.g. genuine S^2
-            homology) while not actually being a topological S^2 -- two 2-spheres wedged at
-            a single point inside the link, for instance, are homotopy-equivalent to one
-            S^2 (so ``is_homology_manifold`` sees nothing wrong) but are not one. Recursing
-            one level in -- checking that every vertex's *own* link is itself a genuine
-            homology 2-manifold, not just homology-S^2-equivalent -- closes this gap
-            completely, because the classification of closed surfaces makes
-            ``is_homology_manifold`` exact at dimension <= 2 (connected + trivial or
-            rank-1-torsion-free H_1 forces an actual sphere or disk, no surface analogue of
-            a homology sphere exists). At ``dimension >= 4`` no such recursive trick
-            terminates the problem: ruling out exotic homology spheres (the Poincare
-            homology sphere and its kin) among vertex links needs more than homology, and is
-            undecidable in general (Novikov/Adian-Rabin) -- this method returns the
-            underlying ``is_homology_manifold`` verdict there, marked ``exact=False``.
+            Whether |K| is a PL d-manifold (possibly with boundary), d = dim K, i.e. every
+            simplex link is a PL sphere or ball of the right dimension.
+
+            ``is_homology_manifold`` checks every simplex link for sphere / acyclic
+            homology. At ``d <= 3`` that is already a PL certificate: the links of a
+            homology d-manifold are homology manifolds of dimension <= 2 with the homology
+            of a sphere or a point, hence spheres and disks (classification of surfaces),
+            so the two verdicts coincide. In any dimension a negative verdict is exact too,
+            since a PL manifold is a homology manifold.
+
+            A positive verdict at ``d >= 4`` is not a proof: a vertex link can be a
+            homology sphere that is not a sphere (the Poincare homology sphere). Deciding
+            it needs sphere recognition for the links -- decidable for 3-spheres
+            (Rubinstein-Thompson) but not implemented here, open for 4-spheres, and
+            undecidable from dimension 5 on (Novikov).
 
         Algorithm:
-            1. ``dimension <= 2``: return ``is_homology_manifold``'s own result, ``exact=True``.
-            2. ``dimension == 3``: if ``is_homology_manifold`` already fails, return that
-               (``exact=True`` -- a link that fails even aggregate homology certainly is not
-               a genuine sphere either). Otherwise, call
-               ``self.link((v,)).is_homology_manifold(backend=backend)`` for every vertex
-               ``v``; any vertex whose own link is not itself a genuine homology 2-manifold
-               is a certified defect, even though the top-level check passed. ``exact=True``
-               either way.
-            3. ``dimension >= 4``: warn and return the underlying ``is_homology_manifold``
-               verdict with ``exact=False``.
+            1. ``is_homology_manifold(backend)``.
+            2. ``d <= 3`` or a negative verdict: return it with ``exact=True``.
+            3. Otherwise warn and return it with ``exact=False``.
 
         Args:
             backend: 'auto', 'julia', or 'python'.
@@ -5439,37 +5369,22 @@ class SimplicialComplex(ChainComplex):
 
         Use When:
             - Certifying a reconstructed or hand-built complex is a genuine combinatorial
-              manifold at dimension 3, where ``is_homology_manifold`` alone is not enough.
-            - Dimension <= 2, where this is equivalent to (and no more expensive than)
-              calling ``is_homology_manifold`` directly.
+              manifold (exact at dimension <= 3).
         """
         d = self.dimension
-        is_mani, detected_dim, diag = self.is_homology_manifold(backend=backend)
+        is_mani, dim, diag = self.is_homology_manifold(backend=backend)
 
-        if d <= 2:
-            return PLManifoldCertificate(is_mani, detected_dim, diag, True)
+        if d <= 3 or not is_mani:
+            return PLManifoldCertificate(is_mani, dim, diag, True)
 
-        if d == 3:
-            if not is_mani:
-                return PLManifoldCertificate(False, detected_dim, diag, True)
-            combined_diag: dict = {}
-            for simplex in self.n_simplices(0):
-                v = simplex[0]
-                lk_is_mani, _lk_dim, lk_diag = self.link((v,)).is_homology_manifold(backend=backend)
-                if not lk_is_mani:
-                    combined_diag[v] = f"Vertex link is not a genuine 2-manifold: {lk_diag}"
-            if combined_diag:
-                return PLManifoldCertificate(False, d, combined_diag, True)
-            return PLManifoldCertificate(True, d, {}, True)
-
-        import warnings
         warnings.warn(
-            f"certify_pl_manifold cannot exactly certify dimension {d}: ruling out exotic "
-            "homology spheres (e.g. the Poincare homology sphere) among vertex links needs "
-            "more than homology, and is undecidable in general (Novikov/Adian-Rabin). "
-            "Returning the underlying is_homology_manifold verdict with exact=False."
+            f"certify_pl_manifold cannot exactly certify dimension {d}: a vertex link can be "
+            "a homology sphere that is not a sphere (e.g. the Poincare homology sphere), and "
+            "sphere recognition for the links is not implemented (undecidable from "
+            "dimension 5 on, Novikov). Returning the is_homology_manifold verdict with "
+            "exact=False."
         )
-        return PLManifoldCertificate(is_mani, detected_dim, diag, False)
+        return PLManifoldCertificate(is_mani, dim, diag, False)
 
     def local_homology(self, simplex: Iterable[int], backend: str = "auto") -> Dict[int, Tuple[int, List[int]]]:
         r"""Local homology :math:`H_j(|K|, |K| - x)` for x in the open simplex, exactly.
@@ -5497,9 +5412,9 @@ class SimplicialComplex(ChainComplex):
             The definition, checked everywhere: the link of every k-simplex must have the
             reduced homology of S^(n-k-1) (interior) or be acyclic of dimension n-k-1
             (boundary), and the boundary simplices must form a closed homology
-            (n-1)-manifold. Strictly stronger than :meth:`is_homology_manifold`, which
-            reads vertex links only: in dimension >= 3 a vertex link can have sphere
-            homology without being a homology manifold. See
+            (n-1)-manifold. For ``n = dim K`` it gives the verdict of
+            :meth:`is_homology_manifold`, together with the local type of every simplex,
+            the singular simplices and the boundary. See
             :mod:`pysurgery.topology.local_homology`.
 
         Args:

@@ -88,9 +88,12 @@ class _BaseFiltrationReport:
     #: Extra kwargs passed when constructing the tiny warmup instance.
     _warmup_kwargs: dict = {}
 
-    # Above this simplex count the per-threshold homology-manifold check is
-    # auto-skipped (per-vertex link homology is the slowest step).
-    _MANIFOLD_MAX_SIMPLICES = 50_000
+    # The fused Julia paths keep the maximal complex implicit only above this many
+    # simplices; below it the staged build is cheap and keeps ``max_sc`` explicit.
+    _EXPLICIT_MAX_SIMPLICES = 50_000
+    # compute_torsion warns above this many simplices (one Smith normal form per
+    # reported threshold).
+    _TORSION_WARN_SIMPLICES = 50_000
 
     def __init__(
         self,
@@ -126,8 +129,10 @@ class _BaseFiltrationReport:
                 appearance values are used.
             eps_max: Cap for the parameter range. Method-dependent meaning; if None
                 each method picks a sensible default.
-            analyze_manifolds: Run the per-threshold homology-manifold check
-                (auto-skipped above _MANIFOLD_MAX_SIMPLICES simplices).
+            analyze_manifolds: Run the per-threshold homology-manifold check: the
+                exact verdict of ``certify_homology_manifold`` at every threshold, kept
+                incrementally in one pass over the simplices (see
+                :mod:`pysurgery.topology.incremental_manifold`), at any complex size.
             compute_torsion: If True, additionally compute exact *integer*
                 homology (free rank + torsion coefficients) of the sub-complex at
                 every reported threshold and surface the torsion in the report.
@@ -778,24 +783,7 @@ class _BaseFiltrationReport:
 
         self.barcode = barcode
 
-        is_julia_available = False
-        try:
-            from pysurgery.bridge.julia_bridge import julia_engine
-            is_julia_available = julia_engine.available
-        except Exception:
-            pass
-
-        if self.analyze_manifolds and total > self._MANIFOLD_MAX_SIMPLICES:
-            if not is_julia_available or self.backend == "python":
-                warnings.warn(
-                    f"Skipping per-threshold manifold analysis: maximal complex has "
-                    f"{total:,} simplices (> {self._MANIFOLD_MAX_SIMPLICES:,}). Betti "
-                    "curves are still computed; pass a smaller eps_max to force it.",
-                    stacklevel=2,
-                )
-                self.analyze_manifolds = False
-
-        if self.compute_torsion and total > self._MANIFOLD_MAX_SIMPLICES:
+        if self.compute_torsion and total > self._TORSION_WARN_SIMPLICES:
             warnings.warn(
                 f"compute_torsion=True on a large complex ({total:,} simplices): exact "
                 "integer homology runs a Smith-normal-form solve at every reported "
@@ -1441,11 +1429,11 @@ class RipsFiltrationReport(_BaseFiltrationReport):
 
         For large clouds this runs the entire hot path in a single Julia call and
         keeps the maximal complex *implicit* (``max_sc = None``): the per-threshold
-        loop needs only the barcode and per-dimension stats when no manifold /
-        torsion / component analysis is requested (manifold analysis is itself
-        auto-skipped above ``_MANIFOLD_MAX_SIMPLICES``). When the complex is small
-        enough to be wanted -- or any path needs it explicitly -- we defer to the
-        staged base build, so small-complex behaviour is byte-identical to before.
+        loop needs only the barcode and per-dimension stats, and the manifold /
+        component analysis comes back from Julia with it. When the complex has at
+        most ``_EXPLICIT_MAX_SIMPLICES`` simplices -- or a path needs it explicitly
+        (torsion) -- we defer to the staged base build, so small-complex behaviour
+        is byte-identical to before.
 
         The reduction runs in one of two exact engines (see :meth:`_select_rips_engine`):
         the clique homology engine or the implicit-cohomology engine; both return
@@ -1482,9 +1470,9 @@ class RipsFiltrationReport(_BaseFiltrationReport):
                 "staged build.", stacklevel=2)
             return super()._assemble()
 
-        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
-            # Small enough that manifold analysis / introspection wants the explicit
-            # complex; the staged build is cheap at this size and keeps full fidelity.
+        if payload["total"] <= self._EXPLICIT_MAX_SIMPLICES:
+            # Small enough to keep the explicit complex for introspection; the staged
+            # build is cheap at this size and keeps full fidelity.
             return super()._assemble()
 
         # Large: keep the complex implicit -- this is the whole point of the fusion.
@@ -1595,7 +1583,7 @@ class AlphaFiltrationReport(_BaseFiltrationReport):
                 "staged build.", stacklevel=2)
             return super()._assemble()
 
-        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
+        if payload["total"] <= self._EXPLICIT_MAX_SIMPLICES:
             return super()._assemble()
 
         if "manifold_data" in payload and payload["manifold_data"] is not None:
@@ -1760,7 +1748,7 @@ class DelaunayRipsFiltrationReport(_BaseFiltrationReport):
                 "staged build.", stacklevel=2)
             return super()._assemble()
 
-        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
+        if payload["total"] <= self._EXPLICIT_MAX_SIMPLICES:
             return super()._assemble()
 
         if "manifold_data" in payload and payload["manifold_data"] is not None:
@@ -1839,7 +1827,7 @@ class DelaunayCechFiltrationReport(_BaseFiltrationReport):
                 "staged build.", stacklevel=2)
             return super()._assemble()
 
-        if payload["total"] <= self._MANIFOLD_MAX_SIMPLICES:
+        if payload["total"] <= self._EXPLICIT_MAX_SIMPLICES:
             return super()._assemble()
 
         if "manifold_data" in payload and payload["manifold_data"] is not None:
